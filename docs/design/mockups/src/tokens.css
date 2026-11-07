@@ -152,6 +152,7 @@
   --two-size-control-lg: 56px;
   --two-size-control-nav: 40px;
   --two-size-target-min: 24px;
+  --two-size-target-handle: 24px;
   --two-size-icon-sm: 16px;
   --two-size-icon-md: 20px;
   --two-size-icon-grid: 24px;
@@ -174,7 +175,6 @@
   --two-size-box-stroke: 2px;
   --two-size-box-halo: 1px;
   --two-size-box-handle: 8px;
-  --two-size-box-handle-target: 24px;
   --two-size-box-tab: 22px;
   --two-size-crop-tile: 112px;
   --two-size-toolbar: 52px;

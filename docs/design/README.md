@@ -2,7 +2,7 @@
 
 These are the specs the M3 web UI is built from (plan §13.1, §15 M3 and M5). Build only what is here. If something you need is missing, ask the UX Designer on your card rather than inventing it.
 
-**Design system:** [TogetherWeOwn/two-design-kit](https://github.com/TogetherWeOwn/two-design-kit), Ember Hours theme, **v0.3.0 or later**. That release adds the workbench tokens (label provenance, image well, box overlay sizes), components **J1–J22**, layout patterns **P6/P7** and the tool-copy rules in voice.md §7. Until v0.3.0 is tagged, the additions are in kit PR [#7](https://github.com/TogetherWeOwn/two-design-kit/pull/7). Vendor `dist/css/tokens.css` and `dist/ts/tokens.ts` as the kit README describes. Use tokens only: no raw colours, sizes or durations. Component ids (A1, J4, …) refer to the kit's `docs/components.md`.
+**Design system:** [TogetherWeOwn/two-design-kit](https://github.com/TogetherWeOwn/two-design-kit), Ember Hours theme, **v0.3.0 or later**. That release adds the workbench tokens (label provenance, image well, box overlay sizes), components **J1–J22**, layout patterns **P6/P7** and the tool-copy rules in voice.md §7. Until v0.3.0 is tagged, the additions are in kit PR [#7](https://github.com/TogetherWeOwn/two-design-kit/pull/7), stacked on [#8](https://github.com/TogetherWeOwn/two-design-kit/pull/8) (the 24 px box-handle target exception, accessibility.md §4). Vendor `dist/css/tokens.css` and `dist/ts/tokens.ts` as the kit README describes. Use tokens only: no raw colours, sizes or durations. Component ids (A1, J4, …) refer to the kit's `docs/components.md`.
 
 ## Screens
 
