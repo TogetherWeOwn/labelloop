@@ -1,0 +1,23 @@
+/* Latin subsets of the kit's three OFL families. Run fetch-fonts.sh to populate fonts/ (not committed). */
+@font-face {
+  font-family: "Mona Sans";
+  font-style: normal;
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  src: url(fonts/o-0IIpQmx24alC5A4PNr5TRA.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/jizHRFtNs2ka5fXjeivQ4LroWlx-6zAjjH7M.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Fragment Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/4iCr6K5wfMRRjxp0DA6-2CLnB4NHhg.woff2) format("woff2");
+}
