@@ -58,11 +58,26 @@ policy identity, per-class support/quality and incumbent non-regression on the
 same frozen evaluation release. Rollback swaps the complete previous release;
 it cannot cross project or recipe boundaries.
 
-These transitions **do not yet provide durable atomic persistence**. The database
-adapter must lock the recipe row, verify the expected revision, persist the
-release/event and advance the champion in one transaction. No HTTP promotion
-endpoint is exposed by this increment; authenticated principal enforcement stays
-at the service boundary.
+`labelloop_api.model_store` persists completed training runs, per-epoch evaluation
+reports, model release payloads and export evidence in PostgreSQL. It verifies the
+frozen variant's project, recipe, class map, manifest and split lineage before
+inserting evidence. A model release must match its persisted selected checkpoint,
+recipe digest, class mapping, versions and static-export verification.
+
+Registry changes create/lock one project/recipe row, check the expected revision,
+qualify against persisted reports, and advance the complete champion/rollback
+pointers together with an append-only principal-attributed event. Each operation
+uses a savepoint inside the caller's outer transaction; even a caught event-write
+failure cannot leave an advanced pointer. Concurrent first promotions use an
+insert-on-conflict followed by row locking. Other recipes are never locked or
+advanced by that transition. Migration 0002 keeps model metadata separate from
+the initial canonical migration and adds immutable-evidence and registry-scope
+guards. No HTTP promotion endpoint is exposed; authentication and admin
+authorization remain required at the future service boundary. The internal
+store's actor ID is provenance, not an authorization capability.
+
+These persistence and race assertions await corrected exact-head Actions evidence;
+they are implementation claims, not a successful database smoke result.
 
 ## Controlled CPU backend
 
@@ -96,18 +111,39 @@ claim that pretrained weights were exercised. Linux Torch and torchvision use
 the CPU index. Audit records are uploaded as an Actions artifact. Execution and
 exact-head success remain to be verified in Actions.
 
+## Static export and persistent registry smoke
+
+`export_and_compare` exports a static float32 ONNX graph, validates its actual
+CPU Runtime signature, then compares native and exported detections on identical
+observed tensors from recipe samples. Tolerances are 0.01 input pixels and 1e-5
+confidence, with exact class/count agreement. Wrong shapes, nonfinite output and
+geometry/score/class drift fail closed. The smoke asserts nonempty predictions
+rather than accepting vacuous empty-output agreement. This sample check is not a
+universal equivalence guarantee.
+
+The real-loader boundary cases exercise the strict two-pixel cutoff, a greater-
+than-two-pixel target, four/six-pixel targets, edge boxes and verified negatives
+at both sizes. On the prior Actions head those cases passed; training/export
+smokes failed on an incorrect exporter-argument audit. Pinned Ultralytics keeps
+`args.imgsz` as an integer and its normalized size in `exporter.imgsz`; the audit
+now checks both without rewriting or relaxing requested arguments.
+
+The extended Actions smoke uses a disposable pinned PostgreSQL service, runs
+Alembic, persists real training/evaluation/export lineage, promotes competing
+candidates using two independent database connections, rolls back, reloads the
+whole release on fresh connections and verifies the other recipe is unchanged.
+It injects an event-write failure to check transactional rollback, rejects stale
+revisions and duplicate evaluation identities, and checks append-only guards.
+The fixture's zero mAP target exercises wiring only; it is not a production
+quality threshold. Registry snapshots join the existing Actions audit artifacts.
+
 ## Remaining before milestone acceptance
 
-- Verify and repair the real CPU backend and retention/shape evidence in Actions.
-- Add real-loader small-target and negative-image boundary cases beyond the
-  fixture training run and synthetic transform-loss regression.
-- Export static ONNX, assert its runtime signature and compare native/exported
-  outputs within a declared tolerance.
-- Persist training/evaluation lineage and atomic per-recipe registry transitions.
-- Extend the Actions CPU smoke through native/ONNX equivalence and persistent,
-  independent promotion and rollback for both recipes.
-- Record exact-head Actions run/job conclusions and complete independent review
-  before marking the draft PR ready. Existing required checks remain mandatory.
+- Verify and repair the corrected CPU export and PostgreSQL smoke in Actions.
+- Record exact-head Actions run/job conclusions and disposition the one
+  fresh-context review before marking the draft PR ready.
+- Complete the existing independent native review, security and merge gates.
+  No milestone acceptance is claimed while the draft remains unmerged.
 
 No paid Platform or LLM calls are needed. Full suites and CI gates run only on
 GitHub Actions. No local training or test execution is claimed by this checkpoint.

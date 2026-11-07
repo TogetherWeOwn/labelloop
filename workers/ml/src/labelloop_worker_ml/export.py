@@ -81,12 +81,10 @@ def export_and_compare(
 
     def audit_export(exporter: Any) -> None:
         resolved.update(vars(exporter.args))
-        normalized = resolved | {"imgsz": policy.imgsz}
         if tuple(exporter.im.shape) != (1, 3, policy.imgsz, policy.imgsz):
             raise ValueError("actual export tensor shape violates the recipe")
-        if resolved["imgsz"] != [policy.imgsz, policy.imgsz] or argument_diff(
-            requested, normalized
-        ):
+        # Pinned Exporter keeps args.imgsz unchanged; its checked raster is exporter.imgsz.
+        if exporter.imgsz != [policy.imgsz, policy.imgsz] or argument_diff(requested, resolved):
             raise ValueError("export args_mismatch")
 
     model = YOLO(str(weights))

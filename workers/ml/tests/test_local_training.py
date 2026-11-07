@@ -247,6 +247,9 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
                 )
             },
         )
+    from registry_smoke import exercise_registry
+
+    exercise_registry(result, exported, manifest, output)
     # Fail closed before creating any run directory when a frozen input changes.
     initialization.write_bytes(b"modified checkpoint")
     with pytest.raises(ValueError, match="checkpoint digest mismatch"):
