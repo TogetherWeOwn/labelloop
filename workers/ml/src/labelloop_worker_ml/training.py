@@ -223,6 +223,8 @@ class LocalUltralyticsBackend:
         ):
             raise ValueError("class mapping must be contiguous and match the manifest")
         class_ids = tuple(sorted(class_map, key=class_map.__getitem__))
+        if request.augmentation.fliplr and set(dict(request.class_mirror_safety)) != set(class_ids):
+            raise ValueError("mirror safety must cover the complete dataset class catalog")
         entries = tuple(self.dataset.rglob("*"))
         if any(path.is_symlink() for path in entries) or {
             path.relative_to(self.dataset).as_posix() for path in entries if path.is_file()

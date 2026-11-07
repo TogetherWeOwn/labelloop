@@ -54,6 +54,44 @@ class InferencePolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class AugmentationProfile:
+    """Explicit alternatives; scene composition and implicit libraries remain disabled."""
+
+    profile_id: str = "no-scene-composition-v1"
+    fliplr: float = 0.0
+    scale: float = 0.0
+    translate: float = 0.0
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+
+    def __post_init__(self) -> None:
+        if not self.profile_id:
+            raise ValueError("augmentation profile requires identity")
+        if not all(math.isfinite(value) and 0 <= value <= 1 for value in self.arguments().values()):
+            raise ValueError("augmentation strengths must be finite probabilities")
+        if self.profile_id == "no-scene-composition-v1" and self.arguments() != {
+            "fliplr": 0.0,
+            "scale": 0.0,
+            "translate": 0.0,
+            "hsv_h": 0.015,
+            "hsv_s": 0.7,
+            "hsv_v": 0.4,
+        }:
+            raise ValueError("baseline augmentation drift")
+
+    def arguments(self) -> dict[str, float]:
+        return {
+            "fliplr": self.fliplr,
+            "scale": self.scale,
+            "translate": self.translate,
+            "hsv_h": self.hsv_h,
+            "hsv_s": self.hsv_s,
+            "hsv_v": self.hsv_v,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingRequest:
     run_id: str
     project_id: str
@@ -68,6 +106,8 @@ class TrainingRequest:
     batch: int = 2
     seed: int = 0
     validation_role: EvaluationRole = "development"
+    augmentation: AugmentationProfile = AugmentationProfile()
+    class_mirror_safety: tuple[tuple[str, bool], ...] = ()
 
     def __post_init__(self) -> None:
         if not all(
@@ -88,6 +128,12 @@ class TrainingRequest:
             require_digest(value)
         if self.epochs < 1 or self.batch < 1:
             raise ValueError("epochs and batch must be positive")
+        if self.augmentation.fliplr and (
+            not self.class_mirror_safety
+            or len(dict(self.class_mirror_safety)) != len(self.class_mirror_safety)
+            or not all(safe is True for _, safe in self.class_mirror_safety)
+        ):
+            raise ValueError("horizontal flip requires every class to be mirror_safe")
         if self.validation_role != "development":
             raise ValueError(
                 "checkpoint selection requires development validation, never final test"
@@ -123,6 +169,7 @@ class TrainingRequest:
             "save": True,
             "save_period": 1,
             "plots": False,
+            **self.augmentation.arguments(),
         }
 
 
