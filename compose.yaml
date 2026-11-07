@@ -108,7 +108,9 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       API_PROXY_TARGET: http://api:8000
+      CI: "true"
     # Refresh the persistent dependency volume before serving a lockfile change.
+    # CI=true makes pnpm reconcile changed modules noninteractively in containers.
     command: ["sh", "-c", "pnpm install --frozen-lockfile --filter @labelloop/web... && pnpm --dir apps/web dev"]
     ports:
       - "127.0.0.1:${WEB_PORT:-5173}:5173"
