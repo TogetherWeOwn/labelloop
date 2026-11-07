@@ -1,6 +1,7 @@
 title = "Labelloop secret scanning"
 
-# The checked-in example intentionally contains public, local-only development
-# values. This path narrow exemption does not suppress any other file or secret.
-[allowlist]
-paths = ['''^\.env\.example$|^.env.example$''']
+[extend]
+useDefault = true
+
+# No path allowlist: the example's public local-only values must not create an
+# exemption for a future high-entropy provider credential in the same file.

@@ -1,0 +1,218 @@
+{
+  "domain": "commons-office-keyboards",
+  "source": "Wikimedia Commons file pages and licence metadata checked 2026-11-07",
+  "licence": "CC BY 4.0 for every image; creator and exact source page recorded per image",
+  "annotation_licence": "CC0-1.0; proposed object labels are metadata only",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "description": "Photographs of distinct office keyboards, not game screenshots.",
+  "images": [
+    {
+      "file": "keyboard-01.jpg",
+      "title": "Apple Magic Keyboard - US.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=87840061",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/b3/Apple_Magic_Keyboard_-_US.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b3/Apple_Magic_Keyboard_-_US.jpg/250px-Apple_Magic_Keyboard_-_US.jpg",
+      "original_creator": "Fletcher",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "44a2517b4a3d9255b7fb93853f131a472c51e1f001e9fc41e1d4189e05776b1f"
+    },
+    {
+      "file": "keyboard-02.jpg",
+      "title": "101 US JP Keyboard.png",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=154507464",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/7b/101_US_JP_Keyboard.png",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7b/101_US_JP_Keyboard.png/250px-101_US_JP_Keyboard.png",
+      "original_creator": "Bekyoot Inc.",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "2cb581535e07779300cd47e2715fa14d7dcfd4f34e2893c71a798a3e6a66b6c6"
+    },
+    {
+      "file": "keyboard-03.jpg",
+      "title": "Dell Inspiron 15 3000 (3505) Keyboard.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=146894631",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/f7/Dell_Inspiron_15_3000_%283505%29_Keyboard.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f7/Dell_Inspiron_15_3000_%283505%29_Keyboard.jpg/250px-Dell_Inspiron_15_3000_%283505%29_Keyboard.jpg",
+      "original_creator": "ADecentPlayer",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "f962f3ccc54c3a3b296584aff416b0771e8e84943890ffb30a38a0480af2456b"
+    },
+    {
+      "file": "keyboard-04.jpg",
+      "title": "Macbook Pro Keyboard (US Layout).jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=76153019",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/f4/Macbook_Pro_Keyboard_%28US_Layout%29.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f4/Macbook_Pro_Keyboard_%28US_Layout%29.jpg/250px-Macbook_Pro_Keyboard_%28US_Layout%29.jpg",
+      "original_creator": "Fletcher",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "645de1c8c90b029701accf3198d0abed82f77dda79d7ea3e00461526ec858f26"
+    },
+    {
+      "file": "keyboard-05.jpg",
+      "title": "Das keyboard ohne Keycaps, Katzenhaare.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=193626045",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/1/16/Das_keyboard_ohne_Keycaps%2C_Katzenhaare.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/16/Das_keyboard_ohne_Keycaps%2C_Katzenhaare.jpg/250px-Das_keyboard_ohne_Keycaps%2C_Katzenhaare.jpg",
+      "original_creator": "Korrupt",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "228018c7fd707e234eaf48837c47945f801c50f24fc08b168a1443c1b6c4f3cc"
+    },
+    {
+      "file": "keyboard-06.jpg",
+      "title": "Diode Parade (54707012813).jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=172147516",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/9/9b/Diode_Parade_%2854707012813%29.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9b/Diode_Parade_%2854707012813%29.jpg/250px-Diode_Parade_%2854707012813%29.jpg",
+      "original_creator": "Dave Ruske",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "d546d2ca3f2f263b337a87cf8b31334735e03ec08b8579f14a61a1ea5c971171"
+    },
+    {
+      "file": "keyboard-07.jpg",
+      "title": "Key Tronic foam-and-foil pads in Compaq Portable keyboard assembly underside.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=109879766",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d6/Key_Tronic_foam-and-foil_pads_in_Compaq_Portable_keyboard_assembly_underside.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d6/Key_Tronic_foam-and-foil_pads_in_Compaq_Portable_keyboard_assembly_underside.jpg/250px-Key_Tronic_foam-and-foil_pads_in_Compaq_Portable_keyboard_assembly_underside.jpg",
+      "original_creator": "DigitalIceAge",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "c4d89a7f3d4732a781932dda5e5cf5e567d591b9a415fa0be5eeccbdbe5b3727"
+    },
+    {
+      "file": "keyboard-08.jpg",
+      "title": "Logitech G710+ keyboard PCB (USB port).jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=64664658",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/0f/Logitech_G710%2B_keyboard_PCB_%28USB_port%29.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0f/Logitech_G710%2B_keyboard_PCB_%28USB_port%29.jpg/250px-Logitech_G710%2B_keyboard_PCB_%28USB_port%29.jpg",
+      "original_creator": "Trougnouf",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "72c41e2e2b34f83686553a5a3002058278a8a838b13ab2d929e323055b6c8562"
+    },
+    {
+      "file": "keyboard-09.jpg",
+      "title": "NIND parking-keyboard ISO200.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=75092326",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/b8/NIND_parking-keyboard_ISO200.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b8/NIND_parking-keyboard_ISO200.jpg/250px-NIND_parking-keyboard_ISO200.jpg",
+      "original_creator": "Trougnouf",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "9a7ef4f14c8aefe72d0e087ef0549479b9449ac3664b5bf7a0a4b1c7bc300163"
+    },
+    {
+      "file": "keyboard-10.jpg",
+      "title": "Sharp PC-7000 keyboard out powered on.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=109883566",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/53/Sharp_PC-7000_keyboard_out_powered_on.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/53/Sharp_PC-7000_keyboard_out_powered_on.jpg/250px-Sharp_PC-7000_keyboard_out_powered_on.jpg",
+      "original_creator": "DigitalIceAge",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "80fa42d4213333741eff4e974368e7f477bf14662e85efb5417f1b01c8130080"
+    },
+    {
+      "file": "keyboard-11.jpg",
+      "title": "Side view of keyboard step sculpture design.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=75843932",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/3/33/Side_view_of_keyboard_step_sculpture_design.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/33/Side_view_of_keyboard_step_sculpture_design.jpg/250px-Side_view_of_keyboard_step_sculpture_design.jpg",
+      "original_creator": "Darklanlan",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "49cdf03990467e49633e56fcb5a33b6644dc93e13f6cd268c4394428ad8f027a"
+    },
+    {
+      "file": "keyboard-12.jpg",
+      "title": "Toshiba J-3100 laptop keyboard.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=69916834",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/5a/Toshiba_J-3100_laptop_keyboard.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5a/Toshiba_J-3100_laptop_keyboard.jpg/250px-Toshiba_J-3100_laptop_keyboard.jpg",
+      "original_creator": "Darklanlan",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "756abd06feab04ba29755b113a6d84d8d1928f50b6e4c20dbe54cbb7a4390572"
+    },
+    {
+      "file": "keyboard-13.jpg",
+      "title": "Zeus Z-920 Keyboard.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=165191044",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/3/3e/Zeus_Z-920_Keyboard.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3e/Zeus_Z-920_Keyboard.jpg/250px-Zeus_Z-920_Keyboard.jpg",
+      "original_creator": "Jayvee Enaguas (The Harvett Vault)",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "9eb7181e82fae8c9474f5f7b4743052463f4e004d0661256212d3459c8672097"
+    },
+    {
+      "file": "keyboard-14.jpg",
+      "title": "КТ-У1 keyboard magnetic reed switches 1.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=142656214",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/24/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_1.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/24/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_1.jpg/250px-%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_1.jpg",
+      "original_creator": "Tucvbif",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "c2899ae529b90a611468cf2a895e369c26fa52aa2c5f05b3f3597a8d578b3955"
+    },
+    {
+      "file": "keyboard-15.jpg",
+      "title": "КТ-У1 keyboard magnetic reed switches 2.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=142656216",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/52/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_2.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/52/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_2.jpg/250px-%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_2.jpg",
+      "original_creator": "Tucvbif",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "351e7f6a12bb1968e5775670595582c6568d14cc8acd0fb87174f04e9baec405"
+    },
+    {
+      "file": "keyboard-16.jpg",
+      "title": "КТ-У1 keyboard magnetic reed switches 3.jpg",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=142656215",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/6/63/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_3.jpg",
+      "thumbnail_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/63/%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_3.jpg/250px-%D0%9A%D0%A2-%D0%A31_keyboard_magnetic_reed_switches_3.jpg",
+      "original_creator": "Tucvbif",
+      "licence": "CC BY 4.0",
+      "objects": [
+        "keyboard"
+      ],
+      "sha256": "65e37da605cf76ad226b3b4d4dd5e58a723805c15092213246f7fc634d471ccf"
+    }
+  ]
+}

@@ -11,7 +11,13 @@ COPY apps/api apps/api
 COPY workers workers
 
 ARG UV_GROUPS=runtime
+# The ML vendor requires the GUI opencv-python, while the compiler requires the
+# headless implementation. The two distributions must not share one environment.
 RUN uv sync --frozen --only-group ${UV_GROUPS} --no-install-project --no-install-workspace && \
+    if [ "${UV_GROUPS}" = "ml" ]; then \
+      uv pip uninstall opencv-python && \
+      uv pip install --no-deps opencv-python-headless==4.13.0.92; \
+    fi && \
     uv pip install --no-deps --no-editable ./packages/core && \
     if [ "${UV_GROUPS}" = "ml" ]; then \
       uv pip install --no-deps --no-editable ./workers/ml; \

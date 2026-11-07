@@ -10,7 +10,7 @@ This repository is at **M0: development bootstrap**. It supplies the monorepo, p
 - `make` and `uv` for the fixture integrity preflight.
 - No providers, API keys, paid calls or live Platform account are used.
 
-For Python or web changes, installed `uv`, Node 24 and `corepack` support local development (`make setup`). The optional ML package uses its separate dependency group and the CPU PyTorch index.
+For Python or web changes, installed `uv`, Node 24 and `corepack` support local development (`make setup`). The optional ML package uses its separate dependency group and the CPU PyTorch index. Its Docker image replaces the vendor's GUI OpenCV distribution with the same pinned headless OpenCV wheel used by the compiler, since those two `cv2` packages cannot coexist.
 
 ## Start the stack
 
@@ -20,7 +20,7 @@ uv sync --frozen
 make dev
 ```
 
-`make dev` builds and starts all six services, waits for health checks, and verifies the 32 licensed fixture images (160 × 160 JPEG, under 5 MB total).
+`make dev` builds and starts all six long-running services, verifies the 32 licensed fixture images (160 × 160 JPEG, under 5 MB total), creates the development bucket through a one-shot `minio-init` service, and waits for health checks.
 
 - **Web:** `http://localhost:5173` (substitute `${WEB_PORT}` if you configure the port below)
 - **API/OpenAPI:** `http://localhost:8000/docs`
@@ -66,4 +66,4 @@ corepack pnpm --dir apps/web typecheck
 
 ## Licence
 
-Labelloop is AGPL-3.0. See [`LICENSE`](LICENSE). The project depends on `ultralytics` and `ultralytics-platform`, which are both AGPL-3.0; see plan §12.3. This does **not** grant arbitrary third-party fixture rights; see [`fixtures/README.md`](fixtures/README.md). The interface set is CC0; each COCO photo carries its original licence/source and creator pointer. The unchanged MinIO development binary uses its last official archived release, verified by release SHA-256, with its license in [`dev/minio/LICENSE`](dev/minio/LICENSE). If you run a modified version as a network service, AGPL §13 requires you to offer its source to your users.
+Labelloop is AGPL-3.0. See [`LICENSE`](LICENSE). The project depends on `ultralytics` and `ultralytics-platform`, which are both AGPL-3.0; see plan §12.3. This does **not** grant arbitrary third-party fixture rights; see [`fixtures/README.md`](fixtures/README.md). The interface set is CC0; the office keyboard set is CC BY 4.0 with per-image creator and source-page attribution. The unchanged MinIO development binary uses its last official archived release, verified by release SHA-256, with its license in [`dev/minio/LICENSE`](dev/minio/LICENSE). If you run a modified version as a network service, AGPL §13 requires you to offer its source to your users.

@@ -7,9 +7,10 @@ setup:
 dev:
 	uv run --no-sync python scripts/check-fixtures.py
 	docker compose up --build --detach --wait
-	@echo "Web: http://localhost:5173"
-	@echo "API: http://localhost:8000/docs"
-	@echo "MinIO console: http://localhost:9001"
+	@# Compose reads .env; this shell expansion reproduces its port defaults.
+	@ports="$$(set -a; [ ! -f .env ] || . ./.env; set +a; printf '%s %s %s' "$${WEB_PORT:-5173}" "$${API_PORT:-8000}" "$${S3_CONSOLE_PORT:-9001}")"; \
+	  set -- $$ports; \
+	  printf 'Web: http://localhost:%s\nAPI: http://localhost:%s/docs\nMinIO console: http://localhost:%s\n' "$$1" "$$2" "$$3"
 
 down:
 	docker compose down
