@@ -95,7 +95,10 @@ def current_principal(request: Request) -> Principal:
 def require_permission(request: Request, permission: str) -> Principal:
     actor = current_principal(request)
     if not actor.permits(permission):
-        auth_store().event(actor, "permission_denied", clock())
+        try:
+            auth_store().event(actor, "permission_denied", clock())
+        except SQLAlchemyError:
+            raise HTTPException(503, detail="authentication_unavailable") from None
         raise HTTPException(403, detail="permission_denied")
     return actor
 

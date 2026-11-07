@@ -32,8 +32,10 @@ kind and role. Auth responses are `Cache-Control: no-store`.
 Passwords use pinned `argon2-cffi`, Argon2id with 64 MiB, three iterations and four
 lanes. Successful verification upgrades parameters when necessary. Known and unknown
 accounts both perform verification. Five failed attempts lock a known account for
-15 minutes, with transactional row locking. Bad/unknown/disabled/locked/service
-logins share the same 401 response. Add perimeter admission/rate controls before
+15 minutes, with transactional row locking. Requests during the lockout do not
+extend its deadline, even with a correct password. At expiry the next failed login
+starts a fresh failure count; a successful login resets it. Bad/unknown/disabled/
+locked/service logins share the same 401 response. Add perimeter admission/rate controls before
 Internet exposure: per-account lockout is not global request-rate or DoS protection.
 
 ## Principals, permissions and storage

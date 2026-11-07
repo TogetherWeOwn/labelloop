@@ -71,13 +71,8 @@ class AuthStore:
                 valid = PASSWORDS.verify(encoded or self._dummy_hash, password)
             except (VerificationError, InvalidHashError):
                 valid = False
-            allowed = bool(
-                record
-                and encoded
-                and valid
-                and record["enabled"]
-                and (record["locked_until"] is None or utc(record["locked_until"]) <= now)
-            )
+            locked = bool(record and record["locked_until"] and utc(record["locked_until"]) > now)
+            allowed = bool(record and encoded and valid and record["enabled"] and not locked)
             identity = record["id"] if record else None
             connection.execute(
                 insert(auth_event).values(
@@ -88,8 +83,11 @@ class AuthStore:
                 )
             )
             if not allowed:
-                if record and record["kind"] == "human":
-                    attempts = min(record["failed_attempts"] + 1, 5)
+                if record and record["kind"] == "human" and not locked:
+                    previous = (
+                        0 if record["locked_until"] is not None else record["failed_attempts"]
+                    )
+                    attempts = min(previous + 1, 5)
                     connection.execute(
                         update(principal)
                         .where(principal.c.id == identity)

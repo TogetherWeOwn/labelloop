@@ -7,8 +7,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, insert, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import create_engine, event, insert, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 from labelloop_api import auth
@@ -218,6 +218,108 @@ def test_failed_login_is_generic_and_locks_after_five(client, store):
         assert store.login("reviewer", "wrong", NOW) is None
     assert store.login("reviewer", PASSWORD, NOW) is None
     assert store.login("reviewer", PASSWORD, NOW + timedelta(minutes=16)) is not None
+
+
+@pytest.mark.parametrize("password", [PASSWORD, "wrong"])
+def test_locked_retries_preserve_original_expiry(store, password):
+    for _ in range(5):
+        assert store.login("reviewer", "wrong", NOW) is None
+    assert store.login("reviewer", password, NOW + timedelta(minutes=14)) is None
+    with store.engine.connect() as connection:
+        row = (
+            connection.execute(select(principal).where(principal.c.name == "reviewer"))
+            .mappings()
+            .one()
+        )
+    assert row["locked_until"].replace(tzinfo=UTC) == NOW + timedelta(minutes=15)
+    assert row["failed_attempts"] == 5
+    assert store.login("reviewer", PASSWORD, NOW + timedelta(minutes=15)) is not None
+
+
+def test_failure_counter_restarts_after_lockout_expiry(store):
+    for _ in range(5):
+        assert store.login("reviewer", "wrong", NOW) is None
+    expired = NOW + timedelta(minutes=15)
+    assert store.login("reviewer", "wrong", expired) is None
+    with store.engine.connect() as connection:
+        row = (
+            connection.execute(select(principal).where(principal.c.name == "reviewer"))
+            .mappings()
+            .one()
+        )
+    assert row["failed_attempts"] == 1
+    assert row["locked_until"] is None
+    assert store.login("reviewer", PASSWORD, expired) is not None
+
+
+@pytest.mark.parametrize("name,path", [("reviewer", "/admin"), ("worker-ml", "/auth/logout")])
+def test_permission_audit_failure_is_generic_unavailable(
+    client, store, monkeypatch, caplog, name, path
+):
+    if name == "reviewer":
+        csrf = login(client).json()["csrf_token"]
+        headers = {"origin": ORIGIN, "x-csrf-token": csrf}
+    else:
+        headers = {"authorization": f"Bearer {worker_token(store, name)}"}
+
+    def unavailable(*args):
+        raise SQLAlchemyError("must-not-echo audit database detail")
+
+    monkeypatch.setattr(store, "event", unavailable)
+    response = client.post(path, headers=headers)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "authentication_unavailable"}
+    assert "must-not-echo" not in response.text + caplog.text
+
+
+def test_failed_session_insert_rolls_back_login_and_counter_reset(client, store):
+    assert store.login("reviewer", "wrong", NOW) is None
+
+    def unavailable(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO auth_session"):
+            raise SQLAlchemyError("must-not-echo session database detail")
+
+    event.listen(store.engine, "before_cursor_execute", unavailable)
+    try:
+        response = login(client)
+    finally:
+        event.remove(store.engine, "before_cursor_execute", unavailable)
+    assert response.status_code == 503
+    assert "must-not-echo" not in response.text
+    assert auth.COOKIE not in client.cookies
+    with store.engine.connect() as connection:
+        assert connection.execute(select(session)).all() == []
+        events = connection.execute(select(auth_event.c.action)).scalars().all()
+        assert events == ["login_failed"]
+        assert (
+            connection.execute(
+                select(principal.c.failed_attempts).where(principal.c.name == "reviewer")
+            ).scalar_one()
+            == 1
+        )
+
+
+def test_failed_logout_audit_rolls_back_revocation(client, store):
+    csrf = login(client).json()["csrf_token"]
+    token = client.cookies.get(auth.COOKIE)
+
+    def unavailable(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO auth_event"):
+            raise SQLAlchemyError("must-not-echo logout database detail")
+
+    event.listen(store.engine, "before_cursor_execute", unavailable)
+    try:
+        response = client.post("/auth/logout", headers={"origin": ORIGIN, "x-csrf-token": csrf})
+    finally:
+        event.remove(store.engine, "before_cursor_execute", unavailable)
+    assert response.status_code == 503
+    assert "must-not-echo" not in response.text
+    assert "set-cookie" not in response.headers
+    assert store.authenticate(token, service=False, now=NOW) is not None
+    with store.engine.connect() as connection:
+        assert connection.execute(select(auth_event.c.action)).scalars().all() == [
+            "login_succeeded"
+        ]
 
 
 @pytest.mark.parametrize(
