@@ -5,16 +5,22 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import shutil
 import sys
+from html import unescape
 from html.parser import HTMLParser
+from http.client import HTTPMessage
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from typing import BinaryIO
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from PIL import Image, ImageOps, features
 from PIL import __version__ as pillow_version
 
 HERE = Path(__file__).resolve().parent
+ALLOWED_SOURCE_HOSTS = {"commons.wikimedia.org", "thumb.wikimedia.org", "upload.wikimedia.org"}
 PROCESSING = {
     "pillow": pillow_version,
     "decoder": "Pillow Image.open; ImageOps.exif_transpose; convert to RGB",
@@ -48,10 +54,32 @@ class Text(HTMLParser):
 def plain_text(markup: str) -> str:
     parser = Text()
     parser.feed(markup)
-    return "".join(parser.parts).replace("\xa0", " ").strip()
+    return unescape("".join(parser.parts)).replace("\xa0", " ").strip()
+
+
+class AllowlistedRedirects(HTTPRedirectHandler):
+    """Reject non-HTTPS or off-host redirect targets before connecting."""
+
+    def redirect_request(  # type: ignore[override]
+        self,
+        req: Request,
+        fp: BinaryIO,
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        resolved_url = urljoin(req.full_url, newurl)
+        parsed = urlparse(resolved_url)
+        if parsed.scheme != "https" or parsed.hostname not in ALLOWED_SOURCE_HOSTS:
+            raise ValueError("redirect URL must use HTTPS and an allowlisted host")
+        return super().redirect_request(req, fp, code, msg, headers, resolved_url)
 
 
 def response(url: str) -> bytes:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_SOURCE_HOSTS:
+        raise ValueError("source URL must use HTTPS and an allowlisted host")
     request = Request(
         url,
         headers={
@@ -59,7 +87,7 @@ def response(url: str) -> bytes:
             "(https://github.com/TogetherWeOwn/labelloop)"
         },
     )
-    with urlopen(request, timeout=30) as reply:
+    with build_opener(AllowlistedRedirects).open(request, timeout=30) as reply:
         data: bytes = reply.read()
         return data
 
@@ -76,8 +104,11 @@ def resize(data: bytes) -> bytes:
         return output.getvalue()
 
 
-def commons_metadata(item: dict[str, str]) -> str:
-    source_page = urlparse(item["source_page"])
+def commons_metadata(item: dict[str, object]) -> str:
+    for key in ("source_page", "file", "licence", "original_creator", "title"):
+        if not isinstance(item.get(key), str):
+            raise ValueError("invalid Commons record")
+    source_page = urlparse(str(item["source_page"]))
     page_ids = parse_qs(source_page.query).get("curid", [])
     if (
         source_page.scheme != "https"
@@ -103,53 +134,58 @@ def commons_metadata(item: dict[str, str]) -> str:
         raise ValueError(f"source licence changed: {item['file']}")
     if not metadata["LicenseUrl"]["value"].rstrip("/").startswith("https://creativecommons.org/"):
         raise ValueError(f"unexpected licence URL: {item['file']}")
-    creator = plain_text(metadata["Artist"]["value"])
+    creator = plain_text(unescape(metadata["Artist"]["value"]))
     if creator != item["original_creator"]:
-        raise ValueError(f"source creator changed: {item['file']}")
+        if plain_text(str(item["original_creator"])) != creator:
+            raise ValueError(f"source creator changed: {item['file']}")
+        item["original_creator"] = creator
     if record["title"].removeprefix("File:") != item["title"]:
         raise ValueError(f"source title changed: {item['file']}")
-    item["original_url"] = urlunparse(urlparse(info["url"])._replace(query=""))
+    original_url = urlunparse(urlparse(info["url"])._replace(query=""))
+    item["original_url"] = original_url
     thumbnail_url = info["thumburl"]
     if not isinstance(thumbnail_url, str):
         raise ValueError(f"invalid thumbnail URL: {item['file']}")
-    return urlunparse(urlparse(thumbnail_url)._replace(query=""))
+    thumbnail = urlunparse(urlparse(thumbnail_url)._replace(query=""))
+    if item.get("thumbnail_url") != thumbnail:
+        raise ValueError(f"source thumbnail changed: {item['file']}")
+    return thumbnail
 
 
 def prepare(manifest_path: Path, licence: str) -> None:
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     spec = importlib.util.spec_from_file_location(
         "check_fixtures", HERE.parent / "scripts" / "check-fixtures.py"
     )
     assert spec is not None and spec.loader is not None
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
-    check_toolchain = validator.check_toolchain
-    check_toolchain(manifest, manifest_path.parent.name)
+    validator.check_toolchain(manifest, manifest_path.parent.name)
     assert manifest["processing"] == PROCESSING, "actual imaging toolchain differs from manifest"
     output = Path(sys.argv[1]) / manifest_path.parent.name
     if output.exists():
         raise ValueError(f"output domain already exists: {output}")
-    destination = output / "images"
-    destination.mkdir(parents=True)
-    for item in manifest["images"]:
-        if item["licence"] != licence:
-            raise ValueError(f"unexpected licence: {item['licence']}")
-        source_url = item["original_url"]
-        if licence == "CC BY 4.0":
-            source_url = commons_metadata(item)
-            item["thumbnail_url"] = source_url
-        parsed = urlparse(source_url)
-        if parsed.scheme != "https" or parsed.hostname not in {
-            "upload.wikimedia.org",
-            "thumb.wikimedia.org",
-        }:
-            raise ValueError(f"unexpected source host: {item['file']}")
-        data = resize(response(source_url))
-        if hashlib.sha256(data).hexdigest() != item["sha256"]:
-            raise ValueError(f"source reproduction hash changed: {item['file']}")
-        (destination / item["file"]).write_bytes(data)
-    manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
-    (output / "manifest.json").write_text(manifest_bytes)
+    temporary = output.with_name(f".{output.name}.partial.{os.getpid()}")
+    temporary.mkdir(parents=True, exist_ok=False)
+    destination = temporary / "images"
+    destination.mkdir()
+    try:
+        for item in manifest["images"]:
+            if item["licence"] != licence:
+                raise ValueError(f"unexpected licence: {item['licence']}")
+            source_url = item["original_url"]
+            if licence == "CC BY 4.0":
+                source_url = commons_metadata(item)
+            data = resize(response(source_url))
+            if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                raise ValueError(f"source reproduction hash changed: {item['file']}")
+            (destination / item["file"]).write_bytes(data)
+        manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        (temporary / "manifest.json").write_text(manifest_bytes, encoding="utf-8")
+        temporary.rename(output)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,15 @@ def test_ci_results_rejects_failure() -> None:
     results["dev-stack"] = {"result": "failure"}
     with pytest.raises(ValueError, match="dev-stack.*failure"):
         validate(results, AREAS, True)
+
+
+@pytest.mark.parametrize("area_json", ["", "null", "{}", '{"python":true}'])
+def test_ci_main_reports_missing_area_selection(
+    monkeypatch: pytest.MonkeyPatch, area_json: str
+) -> None:
+    results = successful_results()
+    monkeypatch.setattr(
+        "sys.argv", ["check_ci_results.py", json.dumps(results), area_json, "false"]
+    )
+    with pytest.raises(ValueError, match="changes job produced no area map.*dev-stack"):
+        module.main()

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { fetchHealth } from './health.ts';
 import './styles.css';
 
 export function App() {
@@ -6,13 +7,12 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/healthz', { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error('API unavailable');
-        return response.json() as Promise<{ status: string }>;
-      })
-      .then((health) => setApiState(health.status))
-      .catch(() => setApiState('starting'));
+    fetchHealth(controller.signal)
+      .then((status) => setApiState(status))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setApiState('unavailable');
+      });
     return () => controller.abort();
   }, []);
 

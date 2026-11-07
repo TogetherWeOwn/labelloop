@@ -6,7 +6,8 @@ setup:
 
 dev:
 	uv run --no-sync python scripts/check-fixtures.py
-	docker compose up --build --detach --wait
+	LOCAL_UID="$${LOCAL_UID:-$$(id -u)}" LOCAL_GID="$${LOCAL_GID:-$$(id -g)}" \
+	  docker compose up --build --detach --wait
 	@# Compose reads .env; this shell expansion reproduces its port defaults.
 	@ports="$$(set -a; [ ! -f .env ] || . ./.env; set +a; printf '%s %s %s' "$${WEB_PORT:-5173}" "$${API_PORT:-8000}" "$${S3_CONSOLE_PORT:-9001}")"; \
 	  set -- $$ports; \

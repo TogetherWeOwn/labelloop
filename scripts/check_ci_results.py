@@ -42,7 +42,20 @@ def validate(results: dict[str, dict[str, str]], areas: dict[str, bool], full_ru
 
 
 def main() -> None:
-    validate(json.loads(sys.argv[1]), json.loads(sys.argv[2]), json.loads(sys.argv[3]))
+    results = json.loads(sys.argv[1])
+    try:
+        areas = json.loads(sys.argv[2])
+        if (
+            not isinstance(areas, dict)
+            or not isinstance(areas.get("python"), bool)
+            or not isinstance(areas.get("web"), bool)
+        ):
+            raise TypeError("missing changed-area booleans")
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError(
+            f"CI failure: changes job produced no area map; results: {results}"
+        ) from None
+    validate(results, areas, json.loads(sys.argv[3]))
     print("ci-ok: all selected checks passed; skips match the exact changed areas")
 
 

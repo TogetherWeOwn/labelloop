@@ -33,8 +33,14 @@ PROCESSING = {
 def check_toolchain(manifest: dict[str, object], domain: str) -> None:
     assert manifest["processing"] == PROCESSING, f"{domain}: processing record differs"
     assert pillow_version == PROCESSING["pillow"], "Pillow does not match manifest"
-    assert features.version("libjpeg_turbo") == PROCESSING["libjpeg_turbo"]
-    assert features.version_codec("jpg") == PROCESSING["jpeg_compatibility"]
+    libjpeg_turbo = features.version("libjpeg_turbo")
+    assert libjpeg_turbo == PROCESSING["libjpeg_turbo"], (
+        f"libjpeg-turbo {libjpeg_turbo} does not match manifest {PROCESSING['libjpeg_turbo']}"
+    )
+    jpeg_codec = features.version_codec("jpg")
+    assert jpeg_codec == PROCESSING["jpeg_compatibility"], (
+        f"JPEG codec {jpeg_codec} does not match manifest {PROCESSING['jpeg_compatibility']}"
+    )
     assert sys.version_info[:2] == (3, 12), "Python does not match manifest"
 
 
@@ -53,7 +59,10 @@ def main() -> None:
     image_count = 0
     for domain in ("commons-office-keyboards", "cc0-interface"):
         root = fixture_root / domain
-        manifest = json.loads((root / "manifest.json").read_text())
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        drift = manifest.get("original_changed_upstream", [])
+        assert isinstance(drift, list) and len(drift) == len(set(drift))
+        assert set(drift) <= {item["file"] for item in manifest["images"]}
         check_toolchain(manifest, domain)
         images = (root / "images").glob("*.jpg")
         actual = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in images}
@@ -65,6 +74,7 @@ def main() -> None:
         assert manifest["source"], f"{domain}: missing source"
         allowed_urls = {"upload.wikimedia.org"}
         for item in manifest["images"]:
+            assert item["licence"] in LICENCES, f"Unknown fixture licence: {item['licence']}"
             if domain == "commons-office-keyboards":
                 assert manifest["licence_url"] == LICENCES[item["licence"]]
             source_url = item["original_url"]
@@ -78,8 +88,16 @@ def main() -> None:
             assert parse_qs(source_page.query).get("curid")
             assert item["title"], f"Missing source title: {item['file']}"
             assert item["licence"] in LICENCES, f"Unknown fixture licence: {item['licence']}"
+            assert item["licence"] in LICENCES, f"Unknown fixture licence: {item['licence']}"
+            expected_licence = "CC BY 4.0" if domain == "commons-office-keyboards" else "CC0-1.0"
+            assert item["licence"] == expected_licence, f"{domain}: unexpected licence"
             creator = item.get("original_creator", item.get("creator"))
             assert creator, f"Missing recorded source creator: {item['file']}"
+            assert not any(char in creator for char in "<>"), (
+                f"Markup in source creator: {item['file']}"
+            )
+            drift_flag = item.get("original_changed_upstream")
+            assert drift_flag in (None, True), f"Invalid upstream flag: {item['file']}"
             with Image.open(BytesIO((root / "images" / item["file"]).read_bytes())) as image:
                 assert image.size == (160, 160), f"{domain}/{item['file']}: wrong size"
                 assert image.mode == "RGB"

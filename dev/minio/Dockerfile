@@ -10,6 +10,5 @@ RUN case "$TARGETARCH" in \
     wget --no-verbose "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-$TARGETARCH.RELEASE.2025-09-07T16-13-09Z" -O /usr/local/bin/minio && \
     echo "$checksum /usr/local/bin/minio" | sha256sum -c - && \
     chmod 0555 /usr/local/bin/minio
-HEALTHCHECK --interval=2s --timeout=3s --retries=30 CMD wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1
 EXPOSE 9000 9001
 CMD ["minio", "server", "/data", "--console-address", ":9001"]

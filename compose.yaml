@@ -1,6 +1,8 @@
 name: labelloop
 
 x-python-dev: &python-dev
+  # Match the host bind-mount owner; files created by development stay host-owned.
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
   build:
     context: .
     args:
@@ -78,9 +80,10 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=14)"]
       interval: 3s
-      timeout: 5s
+      # Covers the sequential database connect/query and two storage reads.
+      timeout: 15s
       retries: 30
 
   worker-core:
@@ -103,6 +106,8 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       API_PROXY_TARGET: http://api:8000
+    # Refresh the persistent dependency volume before serving a lockfile change.
+    command: ["sh", "-c", "pnpm install --frozen-lockfile --filter @labelloop/web... && pnpm --dir apps/web dev"]
     ports:
       - "127.0.0.1:${WEB_PORT:-5173}:5173"
     volumes:

@@ -83,6 +83,25 @@ def test_readiness_dependency_failure(
     assert "test internal detail" not in response.text
 
 
+def test_readiness_logs_no_connection_message(
+    development_environment: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = development_environment["POSTGRES_PASSWORD"]
+    with (
+        patch(
+            "labelloop_api.main.psycopg.connect",
+            side_effect=OSError(f"connection refused: {secret}"),
+        ),
+        patch.dict("os.environ", development_environment),
+        caplog.at_level("WARNING"),
+    ):
+        response = TestClient(app, raise_server_exceptions=False).get("/readyz")
+    assert response.status_code == 503
+    assert "error_type" in caplog.text
+    assert secret not in caplog.text
+    assert "connection refused" not in caplog.text
+
+
 def test_missing_bucket_is_not_created(development_environment: dict[str, str]) -> None:
     with (
         patch("labelloop_api.main.psycopg.connect"),

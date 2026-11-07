@@ -85,6 +85,7 @@ jobs:
           version: "0.13.6"
           enable-cache: false
       - run: uv sync --frozen
+      # M0 mandates strict core typing; other packages get extended gates in later milestones.
       - run: uv run mypy --strict packages/core
 
   unit:

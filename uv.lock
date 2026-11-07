@@ -424,22 +424,26 @@ version = "0.0.0"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "alembic" },
+    { name = "certifi" },
     { name = "fastapi" },
     { name = "minio" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "sqlalchemy" },
+    { name = "urllib3" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = "==1.18.4" },
+    { name = "certifi", specifier = "==2026.10.23" },
     { name = "fastapi", specifier = "==0.135.1" },
     { name = "minio", specifier = "==7.2.20" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
     { name = "pydantic", specifier = "==2.13.0" },
     { name = "sqlalchemy", specifier = "==2.0.50" },
+    { name = "urllib3", specifier = "==2.8.0" },
     { name = "uvicorn", specifier = "==0.40.0" },
 ]
 

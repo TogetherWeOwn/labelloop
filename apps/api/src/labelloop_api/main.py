@@ -1,6 +1,9 @@
 """Minimal API service used by the development stack."""
 
+import html
+import logging
 import os
+import socket
 
 import certifi
 import psycopg
@@ -10,6 +13,22 @@ from fastapi import FastAPI, HTTPException
 from minio import Minio
 
 app = FastAPI(title="Labelloop", version="0.0.0")
+logger = logging.getLogger(__name__)
+
+
+def log_readiness_failure(dependency: str, error: Exception) -> None:
+    """Keep driver messages out of logs because they can contain credentials."""
+    log_context: dict[str, str | int] = {
+        "dependency": dependency,
+        "error_type": type(error).__name__,
+    }
+    if isinstance(error, OSError):
+        log_context["errno"] = error.errno or 0
+        log_context["socket_error"] = isinstance(error, socket.gaierror)
+    logger.warning(
+        "Readiness check failed: %s",
+        html.escape(str(log_context), quote=True),
+    )
 
 
 def storage_client() -> Minio:
@@ -53,6 +72,7 @@ def readyz() -> dict[str, str]:
             if result is None:
                 raise RuntimeError("pgvector is not enabled")
     except Exception as error:
+        log_readiness_failure("database", error)
         raise HTTPException(status_code=503, detail={"dependency": "database"}) from error
     try:
         storage = storage_client()
@@ -63,6 +83,7 @@ def readyz() -> dict[str, str]:
     except HTTPException:
         raise
     except Exception as error:
+        log_readiness_failure("storage", error)
         raise HTTPException(status_code=503, detail={"dependency": "storage"}) from error
     return {"status": "ready", "storage": "connected", "database": "connected"}
 
