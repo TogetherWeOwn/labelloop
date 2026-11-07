@@ -468,6 +468,88 @@ def test_chat_rejects_ambiguous_choices_tools_and_accepts_refusal() -> None:
     assert reviewer.parse(json.dumps(data).encode()).status == "refused"
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tool_calls", {}),
+        ("tool_calls", False),
+        ("tool_calls", 0),
+        ("tool_calls", ""),
+        ("tool_calls", "private-canary"),
+        ("tool_calls", [{"function": {"name": "write"}}]),
+        ("function_call", False),
+        ("function_call", 0),
+        ("function_call", ""),
+        ("function_call", []),
+        ("function_call", {}),
+        ("function_call", {"name": "write", "arguments": "{}"}),
+        ("refusal", []),
+        ("refusal", {}),
+        ("refusal", False),
+        ("refusal", True),
+        ("refusal", 0),
+        ("refusal", 1),
+    ],
+)
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "content_filter"])
+def test_chat_rejects_malformed_or_active_control_fields(
+    field: str, value: Any, finish_reason: str
+) -> None:
+    reviewer = OpenAIChatReviewer("fixture-model")
+    data = json.loads(response(reviewer))
+    data["choices"][0]["finish_reason"] = finish_reason
+    data["choices"][0]["message"][field] = value
+    with pytest.raises(ReviewerError, match="^unsupported_response$") as error:
+        reviewer.parse(json.dumps(data).encode())
+    assert "private-canary" not in repr(error.value)
+
+
+@pytest.mark.parametrize(
+    "controls",
+    [
+        {},
+        {"tool_calls": None, "function_call": None, "refusal": None},
+        {"tool_calls": [], "function_call": None, "refusal": ""},
+    ],
+)
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "content_filter"])
+@pytest.mark.parametrize("with_tier", [False, True])
+def test_chat_supported_inactive_controls_preserve_status_and_usage(
+    controls: dict[str, Any], finish_reason: str, with_tier: bool
+) -> None:
+    reviewer = OpenAIChatReviewer("fixture-model")
+    data = json.loads(response(reviewer))
+    data["choices"][0]["finish_reason"] = finish_reason
+    data["choices"][0]["message"].update(controls)
+    if with_tier:
+        data["service_tier"] = "priority"
+    reply = reviewer.parse(json.dumps(data).encode())
+    assert (
+        reply.status
+        == {"stop": "complete", "length": "truncated", "content_filter": "refused"}[finish_reason]
+    )
+    assert reply.patch == (patch() if finish_reason == "stop" else None)
+    assert reply.usage == (None if with_tier else TokenUsage(120, 60))
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "content_filter"])
+@pytest.mark.parametrize("with_tier", [False, True])
+def test_chat_valid_refusal_discards_patch_and_preserves_usage(
+    finish_reason: str, with_tier: bool
+) -> None:
+    reviewer = OpenAIChatReviewer("fixture-model")
+    data = json.loads(response(reviewer, "not a patch"))
+    data["choices"][0]["finish_reason"] = finish_reason
+    data["choices"][0]["message"].update(
+        {"tool_calls": [], "function_call": None, "refusal": "Cannot inspect"}
+    )
+    if with_tier:
+        data["service_tier"] = "priority"
+    reply = reviewer.parse(json.dumps(data).encode())
+    assert reply.status == "refused" and reply.patch is None
+    assert reply.usage == (None if with_tier else TokenUsage(120, 60))
+
+
 def test_bundle_refuses_wrong_source_missing_overview_and_unapproved_evidence(
     bundle: ReviewBundle,
 ) -> None:

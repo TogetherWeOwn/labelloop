@@ -55,6 +55,11 @@ selection defaults are introduced. Each caller supplies an exact model ID.
   patch even if its JSON happens to be complete. Refusals return no patch.
   Messages `stop_sequence` is conservatively incomplete because no stop sequence
   is requested. Tool use, paused turns and fallback blocks are unsupported.
+- Chat control fields are type-checked before stop normalization, including for
+  refused/truncated replies. `tool_calls` may be absent, null or an empty array;
+  nonempty arrays and all other types are unsupported. `function_call` may only be
+  absent or null. `refusal` may be absent, null or a string: an empty string leaves
+  the finish reason authoritative, and a nonempty string returns no patch.
 - Messages text blocks are concatenated; thinking blocks are not used as labels.
   Neither codec executes tools or forwards model-selected actions anywhere.
 - Completed text must pass `core.review.decode_patch`, including its action,

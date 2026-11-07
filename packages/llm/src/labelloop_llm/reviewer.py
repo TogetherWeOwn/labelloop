@@ -268,17 +268,23 @@ class OpenAIChatReviewer:
         message = choice.get("message")
         if choice["index"] != 0 or not isinstance(message, dict):
             raise ReviewerError("invalid_response")
+        tool_calls = message.get("tool_calls")
+        refusal = message.get("refusal")
         if (
             message.get("role") != "assistant"
-            or message.get("tool_calls")
-            or message.get("function_call")
+            or (
+                tool_calls is not None
+                and (not isinstance(tool_calls, list) or len(tool_calls) != 0)
+            )
+            or message.get("function_call") is not None
+            or (refusal is not None and not isinstance(refusal, str))
         ):
             raise ReviewerError("unsupported_response")
         reason = choice.get("finish_reason")
         statuses = {"stop": "complete", "length": "truncated", "content_filter": "refused"}
         if not isinstance(reason, str) or reason not in statuses:
             raise ReviewerError("unsupported_response")
-        status = "refused" if message.get("refusal") else statuses[reason]
+        status = "refused" if refusal is not None and refusal != "" else statuses[reason]
         usage = None if "service_tier" in data else _usage(data.get("usage"), anthropic=False)
         return _reply(status, message.get("content"), usage)
 
