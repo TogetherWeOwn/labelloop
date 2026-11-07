@@ -1,5 +1,6 @@
 import hashlib
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -7,11 +8,13 @@ from labelloop_core.evaluation import ClassMetrics, Coverage, EvaluationReport, 
 from labelloop_core.experiments import (
     BASELINE,
     ArmEvidence,
+    Cohort,
     DatasetPin,
     ExperimentManifest,
     RecipePin,
     RetentionObservation,
     SourcePin,
+    SourceRole,
     compare_experiment,
 )
 from labelloop_core.training import (
@@ -28,7 +31,7 @@ def digest(value: str) -> str:
 
 def experiment(*, expanded: bool = False, fixture: bool = True) -> ExperimentManifest:
     sources = tuple(
-        SourcePin(name, name, digest(name), digest(name + "truth"), role)
+        SourcePin(name, name, digest(name), digest(name + "truth"), cast(SourceRole, role))
         for name, role in (
             ("train", "curated"),
             ("dev-a", "development"),
@@ -59,7 +62,13 @@ def experiment(*, expanded: bool = False, fixture: bool = True) -> ExperimentMan
         sources,
         recipes,
         tuple(
-            DatasetPin(r.recipe_id, cohort, "release-" + cohort, digest(r.recipe_id + cohort), ids)
+            DatasetPin(
+                r.recipe_id,
+                cast(Cohort, cohort),
+                "release-" + cohort,
+                digest(r.recipe_id + cohort),
+                ids,
+            )
             for r in recipes
             for cohort, ids in (
                 ("curated-only", ("train",)),
@@ -186,9 +195,9 @@ def test_observed_gain_still_requires_external_adjudicated_quality_and_declared_
         {"hsv_s": 0.6},
     ],
 )
-def test_reserved_baseline_cannot_drift(change: dict) -> None:
+def test_reserved_baseline_cannot_drift(change: dict[str, float]) -> None:
     with pytest.raises(ValueError, match="baseline augmentation drift"):
-        AugmentationProfile(**change)
+        replace(BASELINE, **change)
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1, float("nan"), float("inf")])
@@ -313,7 +322,9 @@ def test_invalid_comparison_evidence_fails_closed(kind: str) -> None:
         )
     elif kind == "baseline-args":
         # A frozen dataclass still contains mutable vendor dictionaries: re-audit at consumption.
-        arm.training.resolved_arguments["fliplr"] = 0.5
+        resolved = arm.training.resolved_arguments
+        assert isinstance(resolved, dict)
+        resolved["fliplr"] = 0.5
     elif kind == "wrong-init":
         request = replace(arm.training.request, initialization_sha256=digest("unapproved"))
         arms[0] = replace(arm, training=replace(arm.training, request=request))

@@ -201,12 +201,13 @@ class ExperimentManifest:
         return tuple(sorted({s.group_id for s in self.sources if s.role == "development"}))
 
     def cells(self) -> tuple[Cell, ...]:
+        initializations: tuple[Initialization, ...] = ("base", "warm-start")
         return tuple(
             Cell(*values)
             for values in product(
                 (r.recipe_id for r in self.recipes),
                 self.cohorts(),
-                ("base", "warm-start"),
+                initializations,
                 (p.profile_id for p in self.augmentations),
                 self.seeds,
             )
@@ -376,11 +377,11 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
         ):
             raise ValueError(f"unsupported class: {class_id}")
     for name in manifest.critical_slices:
-        metrics = arm.evaluation.slices.get(name)
+        slice_metrics = arm.evaluation.slices.get(name)
         if (
-            metrics is None
-            or metrics.support < manifest.minimum_slice_support
-            or metrics.map50_95 is None
+            slice_metrics is None
+            or slice_metrics.support < manifest.minimum_slice_support
+            or slice_metrics.map50_95 is None
         ):
             raise ValueError(f"unsupported critical slice: {name}")
 
