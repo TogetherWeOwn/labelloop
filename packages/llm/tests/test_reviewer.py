@@ -48,9 +48,30 @@ def bundle() -> ReviewBundle:
         (ClassDefinition("target", "A target object"),),
         (
             ReviewImage("scene", "full_image", "image/png", pixels),
-            ReviewImage("ref", "reference", "image/png", pixels),
+            ReviewImage("ref", "reference", "image/png", pixels, class_id="target"),
         ),
         "Visible extents only; preserve unknown targets.",
+    )
+
+
+@pytest.fixture
+def two_class_bundle(bundle: ReviewBundle) -> ReviewBundle:
+    output = io.BytesIO()
+    Image.new("RGB", (10, 10), (200, 90, 150)).save(output, format="PNG")
+    images = (
+        bundle.images[0],
+        replace(bundle.images[1], evidence_id="e-9f"),
+        ReviewImage("e-2c", "reference", "image/png", output.getvalue(), class_id="other"),
+    )
+    return replace(
+        bundle,
+        context=replace(
+            bundle.context,
+            class_ids=frozenset({"target", "other"}),
+            evidence_ids=frozenset(image.evidence_id for image in images),
+        ),
+        classes=(*bundle.classes, ClassDefinition("other", "Another permitted object")),
+        images=images,
     )
 
 
@@ -121,7 +142,7 @@ def test_fixture_probe_prepares_vision_and_validates_negative(
     assert payload["classes"] == [{"class_id": "target", "definition": "A target object"}]
     assert payload["images"] == [
         {"evidence_id": "scene", "kind": "full_image"},
-        {"evidence_id": "ref", "kind": "reference"},
+        {"evidence_id": "ref", "kind": "reference", "class_id": "target"},
     ]
     assert len(user["content"]) == 5
     image = user["content"][2]
@@ -141,6 +162,59 @@ def test_fixture_probe_prepares_vision_and_validates_negative(
     assert loop.status == "accepted" and loop.current.scope_completeness == "exhaustive_for_scope"
     assert loop.current.review_tier == "machine_verified_no_human_review"
     assert not loop.current.training_eligible and not loop.current.gold_eligible
+
+
+def test_reference_class_bindings_survive_both_wire_formats(
+    reviewer: LLMReviewer,
+    two_class_bundle: ReviewBundle,
+) -> None:
+    prepared = reviewer.prepare(two_class_bundle)
+    content = json.loads(prepared.body)["messages"][-1]["content"]
+    prompt = json.loads(content[0]["text"])
+    assert prompt["images"] == [
+        {"evidence_id": "scene", "kind": "full_image"},
+        {"evidence_id": "e-9f", "kind": "reference", "class_id": "target"},
+        {"evidence_id": "e-2c", "kind": "reference", "class_id": "other"},
+    ]
+    images = two_class_bundle.images
+    swapped = replace(
+        two_class_bundle,
+        images=(
+            images[0],
+            replace(images[1], class_id="other"),
+            replace(images[2], class_id="target"),
+        ),
+    )
+    swapped_prepared = reviewer.prepare(swapped)
+    swapped_content = json.loads(swapped_prepared.body)["messages"][-1]["content"]
+    assert prepared.body != swapped_prepared.body
+    assert content[1:] == swapped_content[1:]
+    assert json.loads(swapped_content[0]["text"])["images"] == [
+        prompt["images"][0],
+        {"evidence_id": "e-9f", "kind": "reference", "class_id": "other"},
+        {"evidence_id": "e-2c", "kind": "reference", "class_id": "target"},
+    ]
+
+
+@pytest.mark.parametrize("class_id", [None, "", " ", True, 1, []])
+def test_reference_rejects_missing_or_malformed_label(bundle: ReviewBundle, class_id: Any) -> None:
+    with pytest.raises(ValueError):
+        replace(bundle.images[1], class_id=class_id)
+
+
+def test_reference_rejects_unknown_class(two_class_bundle: ReviewBundle) -> None:
+    images = two_class_bundle.images
+    with pytest.raises(ValueError, match="reference class labels.*pinned ontology"):
+        replace(
+            two_class_bundle,
+            images=(images[0], replace(images[1], class_id="unapproved"), images[2]),
+        )
+
+
+@pytest.mark.parametrize("kind", ["full_image", "target_crop", "context_crop"])
+def test_non_reference_rejects_inconsistent_class_label(bundle: ReviewBundle, kind: Any) -> None:
+    with pytest.raises(ValueError, match="only reference evidence"):
+        replace(bundle.images[1], kind=kind)
 
 
 def test_fixture_probe_missing_object_requires_reinspection(
@@ -315,6 +389,35 @@ def test_unmapped_messages_pricing_metadata_keeps_estimate(
     assert reply.usage is None
 
 
+@pytest.mark.parametrize(
+    "tier", ["flex", "priority", "default", "auto", "unknown", None, 0, {}, []]
+)
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "content_filter"])
+def test_chat_envelope_service_tier_keeps_usage_unconfirmed(tier: Any, finish_reason: str) -> None:
+    reviewer = OpenAIChatReviewer("fixture-model")
+    data = json.loads(response(reviewer, service_tier=tier))
+    data["choices"][0]["finish_reason"] = finish_reason
+    reply = reviewer.parse(json.dumps(data).encode())
+    assert (
+        reply.status
+        == {"stop": "complete", "length": "truncated", "content_filter": "refused"}[finish_reason]
+    )
+    assert reply.patch == (patch() if finish_reason == "stop" else None)
+    assert reply.usage is None
+    del data["service_tier"]
+    control = reviewer.parse(json.dumps(data).encode())
+    assert control.status == reply.status and control.patch == reply.patch
+    assert control.usage == TokenUsage(120, 60)
+
+
+def test_chat_explicit_refusal_with_service_tier_keeps_usage_unconfirmed() -> None:
+    reviewer = OpenAIChatReviewer("fixture-model")
+    data = json.loads(response(reviewer, service_tier="priority"))
+    data["choices"][0]["message"]["refusal"] = "Cannot inspect"
+    reply = reviewer.parse(json.dumps(data).encode())
+    assert reply.status == "refused" and reply.patch is None and reply.usage is None
+
+
 def test_text_blocks_are_joined_but_tools_are_never_executed() -> None:
     reviewer = AnthropicMessagesReviewer("fixture-model")
     raw_patch = patch()
@@ -369,7 +472,13 @@ def test_bundle_refuses_wrong_source_missing_overview_and_unapproved_evidence(
     bundle: ReviewBundle,
 ) -> None:
     with pytest.raises(ValueError, match="full source image"):
-        replace(bundle, images=(replace(bundle.images[0], kind="reference"), bundle.images[1]))
+        replace(
+            bundle,
+            images=(
+                replace(bundle.images[0], kind="reference", class_id="target"),
+                bundle.images[1],
+            ),
+        )
     with pytest.raises(ValueError, match="pinned source"):
         replace(bundle, images=(replace(bundle.images[0], data=b"different"), bundle.images[1]))
     with pytest.raises(ValueError, match="unique available"):
@@ -388,7 +497,9 @@ def test_resource_caps_and_opaque_representations(bundle: ReviewBundle) -> None:
     with pytest.raises(ValueError, match="counts"):
         replace(bundle, images=bundle.images * 9)
     images = (bundle.images[0],) + tuple(
-        ReviewImage(f"ref-{index}", "reference", "image/png", b"x" * MAX_IMAGE_BYTES)
+        ReviewImage(
+            f"ref-{index}", "reference", "image/png", b"x" * MAX_IMAGE_BYTES, class_id="target"
+        )
         for index in range(3)
     )
     context = replace(bundle.context, evidence_ids=frozenset(item.evidence_id for item in images))
@@ -396,7 +507,12 @@ def test_resource_caps_and_opaque_representations(bundle: ReviewBundle) -> None:
         replace(bundle, context=context, images=images)
     classes = tuple(ClassDefinition(f"class-{index}", "x" * 2048) for index in range(128))
     context = replace(bundle.context, class_ids=frozenset(item.class_id for item in classes))
-    large = replace(bundle, context=context, classes=classes)
+    large = replace(
+        bundle,
+        context=context,
+        classes=classes,
+        images=(bundle.images[0], replace(bundle.images[1], class_id="class-0")),
+    )
     with pytest.raises(ValueError, match="prompt exceeds"):
         OpenAIChatReviewer("fixture-model").prepare(large)
     for cap in (True, 0, -1, 16_385, 1.5):

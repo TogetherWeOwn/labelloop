@@ -17,11 +17,18 @@ Zero teacher detections do not remove that image from the request. Target crops,
 context crops and approved references can accompany it. Full-image source
 coordinates remain authoritative; a crop is recognition evidence, not a new
 coordinate frame. Image IDs must be unique and match the context's evidence set
-exactly, so a patch cannot cite a reference omitted from the request.
+exactly, so a patch cannot cite a reference omitted from the request. Every
+reference image requires an explicit nonempty `class_id` from the pinned ontology;
+non-reference images cannot carry that label. The prompt includes the validated
+reference-to-class binding next to its opaque evidence ID. Swapping reference
+labels changes both codecs' requests without changing the image bytes.
 
 The caller must obtain the revision for that asset from authoritative storage,
 authenticate the project/access scope, exclude holdout references, verify evidence
-approval, and decode/orientation-normalize images before constructing the bundle.
+approval, copy each reference's authoritative `ReferenceExample.class_id` into its
+`ReviewImage.class_id`, and decode/orientation-normalize images before constructing
+the bundle. Ontology membership cannot establish that the caller selected the
+correct authoritative label or pixels; that storage join remains mandatory.
 `AnnotationRevision` has no asset identity of its own; this codec does not replace
 that repository join. Hash matching checks bytes, not image decoding, dimensions,
 media type or visual validity. Reject invalid assets upstream, not at a provider.
@@ -75,6 +82,11 @@ provider mapping for those fields. This intentionally limits live-shaped usage
 normalization, not patch parsing: a valid patch may still be returned with
 `usage=None`. Do not enable paid use expecting confirmed actuals until a pinned
 price adapter and its fixtures explicitly cover the provider's usage envelope.
+Chat envelope-level `service_tier` likewise keeps usage unconfirmed whenever the
+field is present, including `default`, null or malformed values. There is no pinned
+tier-to-price mapping here, so the codec does not infer one from a provider string.
+The supported uncached control has no tier field. This policy also applies to
+billable refused/truncated replies, without changing patch/stop normalization.
 Synthetic metadata examples in the tests are not captured live responses.
 
 The dispatch worker must commit a ledger estimate within all applicable limits,

@@ -47,6 +47,7 @@ class ReviewImage:
     kind: Literal["full_image", "target_crop", "context_crop", "reference"]
     media_type: Literal["image/png", "image/jpeg"]
     data: bytes = field(repr=False)
+    class_id: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.evidence_id)
@@ -56,6 +57,12 @@ class ReviewImage:
             raise ValueError("unsupported image type")
         if type(self.data) is not bytes or not 0 < len(self.data) <= MAX_IMAGE_BYTES:
             raise ValueError("image evidence exceeds the byte limit")
+        if self.kind == "reference":
+            if self.class_id is None:
+                raise ValueError("reference evidence requires a class label")
+            _text(self.class_id)
+        elif self.class_id is not None:
+            raise ValueError("only reference evidence may carry a class label")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +92,11 @@ class ReviewBundle:
         ids = [item.class_id for item in self.classes]
         if len(set(ids)) != len(ids) or set(ids) != self.context.class_ids:
             raise ValueError("class definitions must match the pinned ontology")
+        if any(
+            item.kind == "reference" and item.class_id not in self.context.class_ids
+            for item in self.images
+        ):
+            raise ValueError("reference class labels must match the pinned ontology")
         image_ids = [item.evidence_id for item in self.images]
         if len(set(image_ids)) != len(image_ids) or set(image_ids) != self.context.evidence_ids:
             raise ValueError("images require unique available evidence identities")
@@ -107,7 +119,12 @@ class ReviewBundle:
             "classes": [asdict(item) for item in self.classes],
             "objects": [asdict(item) for item in self.current.objects],
             "images": [
-                {"evidence_id": item.evidence_id, "kind": item.kind} for item in self.images
+                {
+                    "evidence_id": item.evidence_id,
+                    "kind": item.kind,
+                    **({"class_id": item.class_id} if item.kind == "reference" else {}),
+                }
+                for item in self.images
             ],
         }
         prompt = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -262,7 +279,8 @@ class OpenAIChatReviewer:
         if not isinstance(reason, str) or reason not in statuses:
             raise ReviewerError("unsupported_response")
         status = "refused" if message.get("refusal") else statuses[reason]
-        return _reply(status, message.get("content"), _usage(data.get("usage"), anthropic=False))
+        usage = None if "service_tier" in data else _usage(data.get("usage"), anthropic=False)
+        return _reply(status, message.get("content"), usage)
 
 
 @dataclass(frozen=True, slots=True)
