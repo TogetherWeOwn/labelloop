@@ -77,6 +77,7 @@ def main() -> None:
             assert source_page.hostname == "commons.wikimedia.org"
             assert parse_qs(source_page.query).get("curid")
             assert item["title"], f"Missing source title: {item['file']}"
+            assert item["licence"] in LICENCES, f"Unknown fixture licence: {item['licence']}"
             creator = item.get("original_creator", item.get("creator"))
             assert creator, f"Missing recorded source creator: {item['file']}"
             with Image.open(BytesIO((root / "images" / item["file"]).read_bytes())) as image:

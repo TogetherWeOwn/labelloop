@@ -24,7 +24,7 @@ def validate(results: dict[str, dict[str, str]], areas: dict[str, bool], full_ru
     web_selected = full_run or areas["web"]
     python_selected = full_run or areas["python"]
     can_skip = (
-        AREA_JOBS
+        AREA_JOBS | {"dev-stack"}
         if not python_selected and not web_selected
         else set()
         if python_selected and web_selected

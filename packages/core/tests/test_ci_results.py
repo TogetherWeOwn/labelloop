@@ -30,7 +30,7 @@ def test_ci_results_requires_every_job() -> None:
         ({"python": False, "web": True, "docs": False}, {"types", "unit", "import-contract"}),
         (
             {"python": False, "web": False, "docs": True},
-            {"types", "unit", "import-contract", "web-build"},
+            {"types", "unit", "import-contract", "web-build", "dev-stack"},
         ),
     ],
 )
@@ -39,9 +39,10 @@ def test_ci_results_matches_exact_area_selection(areas: dict[str, bool], skipped
     for name in skipped:
         results[name] = {"result": "skipped"}
     validate(results, areas, False)
-    results["dev-stack"] = {"result": "skipped"}
-    with pytest.raises(ValueError, match="dev-stack.*skipped"):
-        validate(results, areas, False)
+    if areas["python"] or areas["web"]:
+        results["dev-stack"] = {"result": "skipped"}
+        with pytest.raises(ValueError, match="dev-stack.*skipped"):
+            validate(results, areas, False)
 
 
 def test_ci_results_rejects_unexpected_skips() -> None:
