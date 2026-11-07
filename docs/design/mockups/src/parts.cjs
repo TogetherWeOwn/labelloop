@@ -109,6 +109,7 @@ const overlay = (objects, { width = 860, selected = null, drawing = null, tabs =
     const ym = (y0 + y1) / 2;
     const h = u(8);
     // Kit accessibility.md §4: corners at >= 24 screen px both ways, edges at >= 48, so hit areas never overlap.
+    // Static render: `width` is the canvas width this mockup is drawn at. The product uses the live displayed scale.
     const fits = (n) => x1 - x0 >= u(n) && y1 - y0 >= u(n);
     const pts = fits(24) ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : [];
     if (fits(48)) pts.push([xm, y0], [x1, ym], [xm, y1], [x0, ym]);
