@@ -58,9 +58,9 @@ The stage and inspector scroll independently. The image well never scrolls out o
 
 ### 390
 
-Order: header (compact) · tool row (queue link, file name, position, previous / next) · **note** "Drawing, redrawing, split and merge need a screen 820 px or wider. Here you can decide proposals, change a class and mark uncertain." · image well (only the selected box keeps its tab) · legend (scrolls sideways) · crop strip · inspector · the decision dock as a fixed bottom bar (B4 behaviour; the mockup shows it at the end of the page because full-page captures can't show fixed bars).
+Order: header (compact) · tool row (queue link, file name, position, previous / next) · **note** "Drawing, redrawing, split and merge need a screen wider than 820 px. Here you can decide proposals, change a class and mark uncertain." · image well (only the selected box keeps its tab) · legend (scrolls sideways) · crop strip · inspector · the decision dock as a fixed bottom bar (B4 behaviour; the mockup shows it at the end of the page because full-page captures can't show fixed bars).
 
-**Audit samples are never served below 820 px.** At 390 the queue skips them (they stay in the queue for a wider screen). An audit sample opened by link shows the tool row, then only the info notice "Audit samples need a screen 820 px or wider. You need to box every object yourself before you compare, and drawing needs the larger screen." with the dock's Skip; no image, no proposals and no "Compare with proposals" (mockup R3 at 390).
+**Audit samples are never served at 820 px or narrower** (the kit's one layout switch, `breakpoint.compact-max`, is inclusive). At 390 the queue skips them (they stay in the queue for a wider screen). An audit sample opened by link shows the tool row, then only the info notice "Audit samples need a screen wider than 820 px. You need to box every object yourself before you compare, and drawing needs the larger screen." with Skip alone in the decision dock; no image, no proposals and no "Compare with proposals" (mockup R3 at 390).
 
 At 390 a reviewer can: select objects (tap a tile or a box), accept or keep a proposal, change a class, mark uncertain, delete a box, confirm auto-accepted boxes, accept or skip the image. Drawing tools and handles are not rendered.
 
@@ -146,7 +146,7 @@ Single-key shortcuts work when no text field has focus, and can be turned off in
 | Queue empty | P6 page instead of P7, C3 empty state. | "Nothing to review. 1,240 images are reviewed or auto-accepted." · ghost "Open the adjudication queue" |
 | Nothing to decide on arrival | R4 straight away (all auto-accepted or reviewed). | "Nothing here needs a decision. Check the image is complete, then accept it." |
 | Audit sample (R3) | Tool row shows the warn tag "Audit sample"; the overlay shows only the reviewer's own boxes; the legend is "Your boxes 9"; the inspector explains the rule; the dock primary is "Compare with proposals". After comparing, every machine box is paired with the reviewer's: matched, missed by the machine, extra; disagreements are recorded against the auto-accept policy (plan §10.2, §11.5). | "This image was picked at random from auto-accepted work. Box every in-scope object you can see. Proposals stay hidden until you compare, so the models can't steer you." |
-| Audit sample below 820 px (R3 at 390) | The queue never serves an audit sample here. Opened by link: tool row with the "Audit sample" tag, an info notice, and the dock with Skip only. No canvas, no machine boxes, no Compare. | "Audit samples need a screen 820 px or wider. You need to box every object yourself before you compare, and drawing needs the larger screen." · ghost "Skip" |
+| Audit sample at ≤ 820 px (R3 at 390) | The queue never serves an audit sample here. Opened by link: tool row with the "Audit sample" tag, an info notice, and the dock with Skip only. No canvas, no machine boxes, no Compare. | "Audit samples need a screen wider than 820 px. You need to box every object yourself before you compare, and drawing needs the larger screen." · ghost "Skip" |
 | Stale proposal | J8 stale state: only Keep or Mark uncertain. | "This proposal was made on revision 4; the box has changed since." |
 | Someone else changed the image | Warn notice at the top of the inspector, dock primary unavailable until resolved. The reviewer's decisions are kept as a draft. | "Ade changed this image at 01:20 while you were reviewing. Your 3 decisions are saved as a draft." · ghost "See Ade's changes" · ghost "Reapply mine" |
 | Save failed | Danger notice in the inspector (`role="alert"`, it's the reviewer's own action); the decision stays on screen as unsaved. | "That decision didn't save. Try again. Nothing else changed." · ghost "Try again" |
@@ -186,7 +186,7 @@ One request for the review view of an image returns: source image URL and dimens
 3. Accepting an image with auto-accepted boxes leaves them auto-accepted.
 4. "Accept image" is unavailable while any proposal is undecided, and says why.
 5. Every decision works by keyboard alone, including adding and redrawing a box.
-6. An audit-sample image shows no machine boxes until "Compare with proposals". Below 820 px the queue skips audit samples, and one opened by link shows only the notice and Skip.
+6. An audit-sample image shows no machine boxes until "Compare with proposals". At ≤ 820 px the queue skips audit samples, and one opened by link shows only the notice and Skip.
 7. A concurrent edit by someone else blocks Accept and keeps the reviewer's decisions as a draft.
 8. Model reason text renders as plain text (no HTML, no links).
 9. axe: 0 violations at 1280 and 390; keyboard pass written in the PR (kit AGENTS.md §4).

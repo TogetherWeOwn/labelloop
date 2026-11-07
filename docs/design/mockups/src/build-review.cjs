@@ -81,7 +81,7 @@ const dock = ({ left, ready = false, note }) => `<div class="dock">
   <button class="linkbtn" style="align-self:flex-start">Exclude this image…</button>
 </div>`;
 
-const compactNote = `<div class="notice only-m" role="note">${I.info}<p>Drawing, redrawing, split and merge need a screen 820 px or wider. Here you can decide proposals, change a class and mark uncertain.</p></div>`;
+const compactNote = `<div class="notice only-m" role="note">${I.info}<p>Drawing, redrawing, split and merge need a screen wider than 820&nbsp;px. Here you can decide proposals, change a class and mark uncertain.</p></div>`;
 
 // R1: default, object 4 selected with a proposed class change.
 function r1() {
@@ -272,8 +272,12 @@ ${toolbar({ tool: "box", audit: true, file: "IMG_0388.png", pos: "3 of 20" })}
   </div>
   ${inspector.replace('<aside class="inspector"', '<aside class="inspector hide-m"')}
   <section class="audit-narrow only-m" aria-label="Audit sample">
-    <div class="notice" role="note">${I.info}<p>Audit samples need a screen 820 px or wider. You need to box every object yourself before you compare, and drawing needs the larger screen.</p></div>
-    <div class="row"><button class="pill ghost md">Skip</button><span class="small t2">The queue won't show you audit samples on this screen.</span></div>
+    <div class="notice" role="note">${I.info}<p>Audit samples need a screen wider than 820&nbsp;px. You need to box every object yourself before you compare, and drawing needs the larger screen.</p></div>
+    <div class="dock">
+      <div class="label"><span>Audit sample</span></div>
+      <div class="row"><button class="pill ghost md">Skip</button></div>
+      <p class="help">The queue won't show you audit samples on this screen.</p>
+    </div>
   </section>
 </div></main>
 ${footerSlim}`;

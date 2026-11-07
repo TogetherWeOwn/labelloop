@@ -174,7 +174,7 @@ function runs() {
     <div class="stack" style="gap:12px">
       <div class="tile"><span class="label">Estimate <span class="tag warn">Estimate</span></span><span class="v">$1.38</span><span class="c">About 2 h at $0.69/h. Billed for time used, even if cancelled; at least 15 minutes.</span></div>
       <p class="small t2">This month after this run: $4.48 of $40. Per-run limit $5.</p>
-      <p class="small t2">The run won't start if its estimate is over $5 or your $40 monthly limit. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run.</p>
+      <p class="small t2">The run won't start if its estimate is over $5, or would take this month's spend past $40. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run.</p>
     </div>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="pill md">Start · estimate $1.38</button><button class="pill ghost md">Cancel</button></div>
