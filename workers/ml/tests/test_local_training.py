@@ -12,6 +12,29 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("column,delta", [(0, 0.02), (4, 0.001), (5, 1)])
+def test_export_comparison_rejects_geometry_score_and_class_drift(
+    column: int, delta: float
+) -> None:
+    import numpy as np
+
+    from labelloop_worker_ml.export import compare_detections
+
+    native = np.array([[10, 20, 30, 40, 0.8, 0], [11, 21, 31, 41, 0.7, 0]])
+    compare_detections(native, native[::-1])
+    changed = native.copy()
+    changed[0, column] += delta
+    with pytest.raises(ValueError, match="exceed declared tolerance"):
+        compare_detections(native, changed)
+    with pytest.raises(ValueError, match="count or layout mismatch"):
+        compare_detections(native, native[:1])
+    with pytest.raises(ValueError, match="exceed declared tolerance"):
+        compare_detections(native, np.repeat(native[:1], 2, axis=0))
+    changed[0, 0] = float("nan")
+    with pytest.raises(ValueError, match="nonfinite"):
+        compare_detections(native, changed)
+
+
 def test_transform_audit_rejects_a_dropped_tiny_target() -> None:
     import numpy as np
     import torch
@@ -44,6 +67,61 @@ def test_transform_audit_rejects_a_dropped_tiny_target() -> None:
 
 
 @pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize(
+    "width,edge", [(2, False), (2.1, False), (4, True), (6, False), (0, False)]
+)
+def test_real_loader_target_retention_boundaries(
+    tmp_path: Path, side: int, width: float, edge: bool
+) -> None:
+    from PIL import Image
+    from ultralytics.cfg import get_cfg
+    from ultralytics.data.build import build_yolo_dataset
+
+    from labelloop_core.training import InferencePolicy, TrainingRequest
+    from labelloop_worker_ml.training import AuditedTransforms
+
+    images = tmp_path / "images" / "train"
+    labels = tmp_path / "labels" / "train"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    Image.new("RGB", (side, side), (114, 114, 114)).save(images / "boundary.png")
+    center = width / (2 * side) if edge else 0.5
+    row = f"0 {center} 0.5 {width / side} {max(width, 4) / side}\n" if width else ""
+    (labels / "boundary.txt").write_text(row)
+    request = TrainingRequest(
+        "boundary",
+        "p",
+        "r",
+        "d",
+        "a" * 64,
+        "b" * 64,
+        "v1",
+        "c" * 64,
+        InferencePolicy(side),
+    )
+    dataset = build_yolo_dataset(
+        get_cfg(overrides=request.arguments()),
+        str(images),
+        1,
+        {"names": {0: "object"}, "nc": 1, "channels": 3},
+        mode="train",
+        rect=False,
+        stride=32,
+    )
+    records = []
+    dataset.transforms = AuditedTransforms(dataset.transforms, records)
+    if width == 2:
+        with pytest.raises(ValueError, match="dataloader dropped targets"):
+            dataset[0]
+        assert records[0].before == 1 and records[0].after == 0
+    else:
+        sample = dataset[0]
+        assert tuple(sample["img"].shape) == (3, side, side)
+        assert records[0].before == records[0].after == int(width > 0)
+    assert records[0].before_at_or_below_6px == int(width > 0)
+
+
+@pytest.mark.parametrize("side", [320, 640])
 def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     tmp_path: Path, side: int
 ) -> None:
@@ -54,6 +132,7 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     from labelloop_compiler.compiler import compile_dataset
     from labelloop_core.evaluation import EvaluationImage, GroundTruth
     from labelloop_core.training import InferencePolicy, TrainingRequest
+    from labelloop_worker_ml.export import export_and_compare
     from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "fixtures"))
@@ -99,7 +178,8 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         class_map_sha256=file_digest(dataset / "class-map.json"),
         split_assignment_version=fixture.release.assignment.assignment_version,
         initialization_sha256=file_digest(initialization),
-        policy=InferencePolicy(side),
+        # Exercise nonempty NMS output even after a single randomly initialized CPU epoch.
+        policy=InferencePolicy(side, conf=0.0),
         epochs=1,
         batch=2,
     )
@@ -137,6 +217,36 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         for path in dataset.rglob("*")
         if path.is_file()
     }
+    exported = export_and_compare(
+        weights=epoch_file,
+        expected_weights_sha256=result.selected.sha256,
+        images=tuple(
+            dataset / sample["image_path"]
+            for sample in manifest["samples"]
+            if sample["split"] == "val"
+        ),
+        policy=request.policy,
+        evidence=output / "export-equivalence.json",
+    )
+    assert exported.static_input_signature == (1, 3, side, side)
+    assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
+    assert exported.sample_count == len(validation_images)
+    assert all(count > 0 for count in exported.detection_counts)
+    import numpy as np
+    import onnxruntime as ort
+
+    session = ort.InferenceSession(
+        str(epoch_file.with_suffix(".onnx")), providers=["CPUExecutionProvider"]
+    )
+    with pytest.raises(ort.capi.onnxruntime_pybind11_state.InvalidArgument):
+        session.run(
+            None,
+            {
+                session.get_inputs()[0].name: np.zeros(
+                    (1, 3, side + 32, side + 32), dtype=np.float32
+                )
+            },
+        )
     # Fail closed before creating any run directory when a frozen input changes.
     initialization.write_bytes(b"modified checkpoint")
     with pytest.raises(ValueError, match="checkpoint digest mismatch"):

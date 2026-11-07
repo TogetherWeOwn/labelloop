@@ -11,10 +11,10 @@ from typing import Any
 
 import torch
 import ultralytics
-import yaml
 from ultralytics import YOLO
 from ultralytics.data.build import build_yolo_dataset
 from ultralytics.models.yolo.detect import DetectionTrainer, DetectionValidator
+from ultralytics.utils import YAML
 from ultralytics.utils.torch_utils import unwrap_model
 
 from labelloop_core.evaluation import (
@@ -244,10 +244,10 @@ class LocalUltralyticsBackend:
         # Ultralytics creates label caches: only its disposable run copy may be mutated.
         data_root = self.output / "dataset"
         shutil.copytree(self.dataset, data_root)
-        data = yaml.safe_load((data_root / "data.yaml").read_text())
+        data = YAML.load(data_root / "data.yaml")
         data.pop("test", None)
         data["path"] = str(data_root)
-        (data_root / "data.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+        YAML.save(data_root / "data.yaml", data)
         retention: list[TargetRetention] = []
         shapes: dict[str, list] = {"training": [], "validation": [], "inference": []}
         checkpoints: list[Checkpoint] = []
