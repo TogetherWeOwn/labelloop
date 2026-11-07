@@ -1,0 +1,11 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #17241c;
+  background: #f4f7f0;
+}
+body { margin: 0; }
+main { max-width: 44rem; margin: 12vh auto; padding: 2rem; }
+h1 { font-size: 3rem; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.1em; color: #315d3c; }
+footer { margin-top: 4rem; }
+a { color: #214d31; }

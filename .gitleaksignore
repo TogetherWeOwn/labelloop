@@ -1,0 +1,4 @@
+# Fixed, public, local-only development values in the example environment.
+.env.example:4
+.env.example:8
+.env.example:9

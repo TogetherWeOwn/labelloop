@@ -1,0 +1,189 @@
+name: CI
+
+# Adapted from the org starter CI. Only job-level gates are used here:
+# never put a workflow-level paths filter on the ci-ok producer.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group: {}
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: TogetherWeOwn/.github/.github/workflows/changes.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
+    with:
+      areas-json: '{"python":["packages/**","apps/api/**","workers/**","scripts/**","fixtures/**","pyproject.toml","uv.lock","importlinter.ini","Makefile","Dockerfile","compose.yaml"],"web":["apps/web/**","pnpm-lock.yaml","pnpm-workspace.yaml"],"docs":["docs/**","README.md","AGENTS.md"]}'
+      full-run-globs-json: '[".github/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","compose.yaml","Makefile*","**/Makefile*","package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","pnpm-workspace.yaml","**/pnpm-workspace.yaml","pyproject.toml","**/pyproject.toml","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","tsconfig*.json","**/tsconfig*.json"]'
+      docs-areas-json: '["docs"]'
+
+  full-run:
+    outputs:
+      force: ${{ steps.context.outputs.force }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - id: context
+        run: |
+          echo "force=${{ github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+
+  lint:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          include-prereleases: false
+          enable-cache: false
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: actionlint (checksum-pinned)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $RUNNER_TEMP/actionlint.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          advanced-security: false
+      - name: Immutable lockfile resolution
+        run: uv lock --check
+
+  types:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          include-prereleases: false
+          enable-cache: false
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run mypy --strict packages/core
+
+  unit:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          include-prereleases: false
+          enable-cache: false
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run pytest
+      - run: uv run python scripts/check-fixtures.py
+
+  import-contract:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          include-prereleases: false
+          enable-cache: false
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run python scripts/check-import-contract.py
+      - run: git diff --exit-code
+
+  web-build:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).web && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+        with:
+          version: 10.28.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/web lint
+      - run: pnpm --dir apps/web typecheck
+      - run: pnpm --dir apps/web test
+      - run: pnpm --dir apps/web build
+
+  dev-stack:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || ((fromJSON(needs.changes.outputs.areas).python || fromJSON(needs.changes.outputs.areas).web) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          include-prereleases: false
+          enable-cache: false
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: make dev
+      - run: curl --fail --show-error --silent --retry 5 --retry-connrefused http://localhost:5173/api/readyz
+      - run: docker compose logs --no-color
+        if: always()
+      - name: Snapshot stack for cleanup
+        run: docker compose ps -aq > "$RUNNER_TEMP/labelloop-containers"
+      - name: Stop development stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, full-run, lint, types, unit, import-contract, web-build, dev-stack]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python -I scripts/check_ci_results.py "$NEEDS_JSON"
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}

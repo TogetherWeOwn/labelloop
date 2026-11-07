@@ -1,0 +1,169 @@
+{
+  "domain": "cc0-interface",
+  "source": "Wikimedia Commons (source pages and licence declarations checked 2026-11-07)",
+  "licence": "CC0-1.0 for each image; source page and creator recorded in manifest.json",
+  "annotation_licence": "CC0-1.0; object labels proposed for this fixture are metadata only",
+  "description": "Small non-game screenshots of software user interfaces. Detection boxes are intentionally left for M1.",
+  "images": [
+    {
+      "file": "ui-01.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d1/Wikidata_%28Reasonator%29_screenshot_item_Q1339.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Wikidata_%28Reasonator%29_screenshot_item_Q1339.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=25758684",
+      "title": "Wikidata (Reasonator) screenshot item Q1339.png",
+      "licence": "CC0-1.0",
+      "creator": "Magnus Manske and other Wikidata contributors",
+      "sha256": "b515df2fa79c04ff4c713cc21cfefe09d299041a70ef69c2f9938aba195c0efd"
+    },
+    {
+      "file": "ui-02.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/06/8K-Screenshot_Mandelbulber_20200503.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/8K-Screenshot_Mandelbulber_20200503.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=89800969",
+      "title": "8K-Screenshot Mandelbulber 20200503.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:PantheraLeo1359531\" title=\"User:PantheraLeo1359531\">PantheraLeo1359531</a>",
+      "sha256": "d8ceb0f78d56e477dbb7ce6c7c1063e75dff497ccaec8bfd9a22f441dd589051"
+    },
+    {
+      "file": "ui-03.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/2c/20200709_Screenshot_Wikibase_Registry.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/20200709_Screenshot_Wikibase_Registry.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=92052635",
+      "title": "20200709 Screenshot Wikibase Registry.png",
+      "licence": "CC0-1.0",
+      "creator": "<bdi><a href=\"https://www.wikidata.org/wiki/Q98908523\" class=\"extiw\" title=\"d:Q98908523\"><span title=\"German Australian business man\">Karsten Hoffmeyer</span></a></bdi>",
+      "sha256": "679045b6e3b8048bc57b1157bd72cc055af5963f8a6cae691a5bf6c49d0f139e"
+    },
+    {
+      "file": "ui-04.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/e/e9/Mwcli_v0.1.0-dev-addshore.20210714.1_screenshot_-_%22mw%22.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Mwcli_v0.1.0-dev-addshore.20210714.1_screenshot_-_%22mw%22.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=107540292",
+      "title": "Mwcli v0.1.0-dev-addshore.20210714.1 screenshot - \"mw\".png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:Addshore\" title=\"User:Addshore\">Addshore</a>",
+      "sha256": "7a7fca2cb3b6dba54e944b843d3546cd8aada31c8b027e9694eece0d0174777e"
+    },
+    {
+      "file": "ui-05.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/49/Screenshot_of_Glazba_Modelling_Homepage.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_of_Glazba_Modelling_Homepage.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=143465231",
+      "title": "Screenshot of Glazba Modelling Homepage.png",
+      "licence": "CC0-1.0",
+      "creator": "Glazba Corporation, LLC",
+      "sha256": "1f9eadecffaf2e24a85ba26a8e1e1a0545d318acaffe96c72376834170ed7b86"
+    },
+    {
+      "file": "ui-06.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/58/Screenshot_of_Glazba_Link_Homepage.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_of_Glazba_Link_Homepage.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=143465318",
+      "title": "Screenshot of Glazba Link Homepage.png",
+      "licence": "CC0-1.0",
+      "creator": "Glazba Corporation, LLC",
+      "sha256": "e7fd93f506b0653771cb8040edc217a8652f191661e08fc639e60d4b07f5bd3e"
+    },
+    {
+      "file": "ui-07.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/ac/Screenshot_of_ilo_sona_Like.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_of_ilo_sona_Like.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=143883446",
+      "title": "Screenshot of ilo sona Like.png",
+      "licence": "CC0-1.0",
+      "creator": "kala pona Tonyu",
+      "sha256": "1fb83763425dcf8958ee090b0f9dc3aaeffbfcd18f93c243609463e3455f81c4"
+    },
+    {
+      "file": "ui-08.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/2c/Screenshot_Arc_Browser.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_Arc_Browser.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=145015186",
+      "title": "Screenshot Arc Browser.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Temaro&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Temaro (page does not exist)\">Temaro</a>",
+      "sha256": "0fdf58d7ab29ebbd3d50c008a3842b1a2244383ba73afc168e7c61617849b75f"
+    },
+    {
+      "file": "ui-09.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/41/CodeChef-Screenshot_2024-02-13-00-33.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/CodeChef-Screenshot_2024-02-13-00-33.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=145274675",
+      "title": "CodeChef-Screenshot 2024-02-13-00-33.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Fahian_Al_Fahim&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Fahian Al Fahim (page does not exist)\">Fahian Al Fahim</a>",
+      "sha256": "65066b100cde5518518735f269c0568d7ed5f61faf7e4c215e6010eb41b44b32"
+    },
+    {
+      "file": "ui-10.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/72/2025-01-25_screenshot_wikipedia_history_default.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/2025-01-25_screenshot_wikipedia_history_default.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=158531937",
+      "title": "2025-01-25 screenshot wikipedia history default.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:Lustiger_seth\" title=\"User:Lustiger seth\">Lustiger seth</a>",
+      "sha256": "9078ee56d139ee7fdd24027f90a65ba7ee6a0f52fc4a803f490971bc43d41fbc"
+    },
+    {
+      "file": "ui-11.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/72/2025-01-25_screenshot_history_as_table.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/2025-01-25_screenshot_history_as_table.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=158531938",
+      "title": "2025-01-25 screenshot history as table.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:Lustiger_seth\" title=\"User:Lustiger seth\">Lustiger seth</a>",
+      "sha256": "eefb7938baa889c515fa8b82fe6b0b3125a1bb3f836579f61d9829ea67aa82c3"
+    },
+    {
+      "file": "ui-12.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/9/91/2025-01-25_screenshot_wikipedia_history_as_table_filtered.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/2025-01-25_screenshot_wikipedia_history_as_table_filtered.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=158557301",
+      "title": "2025-01-25 screenshot wikipedia history as table filtered.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:Lustiger_seth\" title=\"User:Lustiger seth\">Lustiger seth</a>",
+      "sha256": "a091e1ccdaea2903bd436125585effdf2046035cd56a71fd1e8c18dbb8fe2976"
+    },
+    {
+      "file": "ui-13.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/00/Wikidata_screenshot_add_reference_choose_ref_type_2025_en.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Wikidata_screenshot_add_reference_choose_ref_type_2025_en.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=163081944",
+      "title": "Wikidata screenshot add reference choose ref type 2025 en.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:WhatamIdoing\" title=\"User:WhatamIdoing\">WhatamIdoing</a>",
+      "sha256": "368fc6a677c25eca85a5a3bbbba375e5c525097b1a3b90fb18bef894a18293e7"
+    },
+    {
+      "file": "ui-14.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/21/Screenshot_dutchcaribbeanspecies.org.jpg",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_dutchcaribbeanspecies.org.jpg?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=163925397",
+      "title": "Screenshot dutchcaribbeanspecies.org.jpg",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/wiki/User:Kallmemel\" title=\"User:Kallmemel\">Kallmemel</a>",
+      "sha256": "7dd3cbf75530b26182788abc08fc67254b85cb3c7c2cf53ae5978b9785dcb867"
+    },
+    {
+      "file": "ui-15.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Screenshot_of_proof_of_work_2.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_of_proof_of_work_2.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=175905686",
+      "title": "Screenshot of proof of work 2.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Alumifacts&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Alumifacts (page does not exist)\">Alumifacts</a>",
+      "sha256": "a0ac9fe6650b5ff61a054dd2c9c0c482ace336726dda7ec50c3a5b0106414ceb"
+    },
+    {
+      "file": "ui-16.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/da/Screenshot_of_proof_of_work_3.png",
+      "thumbnail_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Screenshot_of_proof_of_work_3.png?width=640",
+      "source_page": "https://commons.wikimedia.org/w/index.php?curid=175905689",
+      "title": "Screenshot of proof of work 3.png",
+      "licence": "CC0-1.0",
+      "creator": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Alumifacts&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Alumifacts (page does not exist)\">Alumifacts</a>",
+      "sha256": "44e51c74351478b4a59304937c25e6a525a64be61baa588baa8e36f322d71ffb"
+    }
+  ]
+}

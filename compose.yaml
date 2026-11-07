@@ -1,0 +1,106 @@
+name: labelloop
+
+x-python-dev: &python-dev
+  build:
+    context: .
+    args:
+      UV_GROUPS: ${UV_GROUPS:-runtime}
+  environment: &runtime-environment
+    DATABASE_URL: postgresql://${POSTGRES_USER:-labelloop}:${POSTGRES_PASSWORD:-labelloop-local-only}@postgres:5432/${POSTGRES_DB:-labelloop}
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-labelloop-local-only}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:-labelloop-local-secret}
+    S3_BUCKET: ${S3_BUCKET:-labelloop}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  volumes:
+    - .:/app
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-labelloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-labelloop-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-labelloop}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./apps/api/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    build:
+      context: dev/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-labelloop-local-only}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-labelloop-local-secret}
+    ports:
+      - "${S3_PORT:-9000}:9000"
+      - "${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9000/minio/health/live || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    <<: *python-dev
+    command: uv run --no-sync uvicorn labelloop_api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  worker-core:
+    <<: *python-dev
+    command: uv run --no-sync labelloop-worker-core
+
+  worker-ml:
+    <<: *python-dev
+    build:
+      context: .
+      args:
+        UV_GROUPS: ml
+    command: uv run --no-sync labelloop-worker-ml
+    cpus: 2.0
+    mem_limit: 4g
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    volumes:
+      - ./apps/web:/app/apps/web
+      - web-node-modules:/app/apps/web/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:
+  web-node-modules:

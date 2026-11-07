@@ -1,0 +1,34 @@
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+.claude/
+
+# Python and tools
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Web and coverage
+node_modules/
+dist/
+coverage/
+
+# Application data, image collections and model weights
+data/
+datasets/
+weights/
+*.onnx
+*.pt
+*.pth
+*.engine
+*.ckpt
+*.safetensors
+
+# Local database and object storage
+dev/postgres-data/
+dev/minio-data/
