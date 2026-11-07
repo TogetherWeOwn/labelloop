@@ -42,7 +42,7 @@ services:
   minio:
     build:
       context: dev/minio
-    command: server /data --console-address ":9001"
+    command: ["minio", "server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-labelloop-local-only}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-labelloop-local-secret}
