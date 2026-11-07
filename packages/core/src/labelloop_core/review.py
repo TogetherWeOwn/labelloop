@@ -105,7 +105,19 @@ def _box(value: Any) -> Box:
         raise ValueError("patch coordinates exceed the numeric range") from error
     if not valid:
         raise ValueError("patch coordinates must be finite numbers, not booleans")
-    return Box(*value)
+    box = Box(*value)
+    _area(box)
+    return box
+
+
+def _area(box: Box) -> float:
+    try:
+        area = float(box.area)
+    except OverflowError as error:
+        raise ValueError("box area exceeds the numeric range") from error
+    if not math.isfinite(area) or area <= 0:
+        raise ValueError("box area must be finite and numerically positive")
+    return area
 
 
 def _record(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -280,10 +292,16 @@ def validate_patch(
         if left.class_id not in context.class_ids:
             raise ValueError("source object class is absent from the pinned ontology")
         left.box.within(context.asset.width, context.asset.height)
+        left_area = _area(left.box)
         for right in next_objects[index + 1 :]:
+            right_area = _area(right.box)
             overlap = left.box.intersect(right.box)
-            if overlap and overlap.area / (left.box.area + right.box.area - overlap.area) >= 0.95:
-                adjudicate = True
+            if overlap:
+                scale = max(left_area, right_area)
+                intersection = overlap.area / scale
+                union = left_area / scale + right_area / scale - intersection
+                if intersection / union >= 0.95:
+                    adjudicate = True
     base_hash = object_set_hash(current)
     if adjudicate:
         return PatchValidation(

@@ -61,6 +61,20 @@ class AuditObservation:
     scope_complete: bool
     output_truncated: bool = False
 
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not bool
+            for value in (
+                self.blind_full_image_inspected,
+                self.labels_correct,
+                self.scope_complete,
+                self.output_truncated,
+            )
+        ):
+            raise ValueError("audit evidence flags must be booleans")
+        if type(self.revision) is not int or self.revision < 1:
+            raise ValueError("audit evidence requires a positive integer revision")
+
 
 @dataclass(frozen=True, slots=True)
 class AuditVerdict:

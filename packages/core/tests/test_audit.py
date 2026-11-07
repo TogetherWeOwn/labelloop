@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -119,6 +120,16 @@ def test_original_decider_cannot_independently_audit_its_acceptance(reviewer_id:
     sample = select_audit_sample((candidate("source"),), sample_id="sample", size=1, seed=7)
     with pytest.raises(ValueError, match="independent"):
         assess_audit(sample, (replace(observation("source"), reviewer_id=reviewer_id),))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["blind_full_image_inspected", "labels_correct", "scope_complete", "output_truncated"],
+)
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+def test_malformed_audit_flags_are_rejected(field: str, value: Any) -> None:
+    with pytest.raises(ValueError, match="must be booleans"):
+        replace(observation("source"), **{field: value})
 
 
 def test_observations_cannot_change_frozen_membership_or_revisions() -> None:

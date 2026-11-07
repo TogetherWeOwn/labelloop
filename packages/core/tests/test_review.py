@@ -335,6 +335,36 @@ def test_loop_cannot_switch_scope_between_passes(changes: dict[str, Any]) -> Non
     assert second.current == first.current
 
 
+@pytest.mark.parametrize("from_patch", [False, True])
+def test_underflowing_box_area_fails_without_changing_the_last_revision(from_patch: bool) -> None:
+    tiny = Box(0, 0, 1e-200, 1e-200)
+    current = (
+        revision()
+        if from_patch
+        else revision(
+            objects=(
+                DatasetObject("one", "a", tiny),
+                DatasetObject("two", "a", tiny),
+            )
+        )
+    )
+    edits = [operation("add", object_id="two", class_id="a", box=[0, 0, 1e-200, 1e-200])]
+    result = CorrectionLoop(current).consume(context(), patch(edits if from_patch else []))
+    assert result.status == "failed" and result.reason == "invalid_patch"
+    assert result.current == current
+
+
+@pytest.mark.parametrize("response", ["{", patch(expected_revision=1)])
+def test_bad_second_pass_preserves_the_last_valid_proposal(response: str) -> None:
+    first = CorrectionLoop(revision()).consume(
+        context(), patch([operation("relabel", class_id="b")])
+    )
+    second = first.consume(context(), response)
+    assert second.status == "failed" and second.current == first.current
+    with pytest.raises(ValueError, match="terminal"):
+        second.consume(context(), patch(expected_revision=2))
+
+
 def test_oscillation_hash_normalizes_integer_and_float_coordinates() -> None:
     first = CorrectionLoop(revision()).consume(
         context(), patch([operation("geometry", box=[2, 3, 21, 31])])
