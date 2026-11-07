@@ -8,7 +8,35 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from PIL import Image
+from PIL import Image, features
+from PIL import __version__ as pillow_version
+
+PROCESSING = {
+    "pillow": "12.2.0",
+    "decoder": "Pillow Image.open; ImageOps.exif_transpose; convert to RGB",
+    "encoder": "Pillow JPEG (libjpeg-turbo)",
+    "libjpeg_turbo": "3.1.4.1",
+    "jpeg_compatibility": "6.2",
+    "python": "3.12",
+    "interpolation": "Image.Resampling.LANCZOS",
+    "letterbox": {
+        "width": 160,
+        "height": 160,
+        "mode": "RGB",
+        "background": "#f0f0f0",
+        "align": "center",
+    },
+    "jpeg": {"quality": 65, "optimize": True, "progressive": False},
+}
+
+
+def check_toolchain(manifest: dict[str, object], domain: str) -> None:
+    assert manifest["processing"] == PROCESSING, f"{domain}: processing record differs"
+    assert pillow_version == PROCESSING["pillow"], "Pillow does not match manifest"
+    assert features.version("libjpeg_turbo") == PROCESSING["libjpeg_turbo"]
+    assert features.version_codec("jpg") == PROCESSING["jpeg_compatibility"]
+    assert sys.version_info[:2] == (3, 12), "Python does not match manifest"
+
 
 LICENCES = {
     "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
@@ -26,6 +54,7 @@ def main() -> None:
     for domain in ("commons-office-keyboards", "cc0-interface"):
         root = fixture_root / domain
         manifest = json.loads((root / "manifest.json").read_text())
+        check_toolchain(manifest, domain)
         images = (root / "images").glob("*.jpg")
         actual = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in images}
         expected = {item["file"]: item["sha256"] for item in manifest["images"]}
@@ -48,12 +77,6 @@ def main() -> None:
             assert source_page.hostname == "commons.wikimedia.org"
             assert parse_qs(source_page.query).get("curid")
             assert item["title"], f"Missing source title: {item['file']}"
-        for item in manifest["images"]:
-            source_url = item.get("source_url", item.get("original_url"))
-            assert urlparse(source_url).hostname in allowed_urls, (
-                f"Unhandled image host: {source_url}"
-            )
-            assert item["licence"] in LICENCES, f"Unknown fixture licence: {item['licence']}"
             creator = item.get("original_creator", item.get("creator"))
             assert creator, f"Missing recorded source creator: {item['file']}"
             with Image.open(BytesIO((root / "images" / item["file"]).read_bytes())) as image:

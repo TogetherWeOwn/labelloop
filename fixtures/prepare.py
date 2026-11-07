@@ -2,6 +2,7 @@
 """Reproduce committed fixtures in a separate output directory, without mutation."""
 
 import hashlib
+import importlib.util
 import io
 import json
 import sys
@@ -10,9 +11,27 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, features
+from PIL import __version__ as pillow_version
 
 HERE = Path(__file__).resolve().parent
+PROCESSING = {
+    "pillow": pillow_version,
+    "decoder": "Pillow Image.open; ImageOps.exif_transpose; convert to RGB",
+    "encoder": "Pillow JPEG (libjpeg-turbo)",
+    "libjpeg_turbo": features.version("libjpeg_turbo"),
+    "jpeg_compatibility": features.version_codec("jpg"),
+    "python": "3.12",
+    "interpolation": "Image.Resampling.LANCZOS",
+    "letterbox": {
+        "width": 160,
+        "height": 160,
+        "mode": "RGB",
+        "background": "#f0f0f0",
+        "align": "center",
+    },
+    "jpeg": {"quality": 65, "optimize": True, "progressive": False},
+}
 
 
 class Text(HTMLParser):
@@ -46,11 +65,12 @@ def response(url: str) -> bytes:
 
 
 def resize(data: bytes) -> bytes:
+    size = (160, 160)
     with Image.open(io.BytesIO(data)) as original:
         image = ImageOps.exif_transpose(original).convert("RGB")
-        image.thumbnail((160, 160), Image.Resampling.LANCZOS)
-        thumbnail = Image.new("RGB", (160, 160), "#f0f0f0")
-        thumbnail.paste(image, ((160 - image.width) // 2, (160 - image.height) // 2))
+        image.thumbnail(size, Image.Resampling.LANCZOS)
+        thumbnail = Image.new("RGB", size, "#f0f0f0")
+        thumbnail.paste(image, ((size[0] - image.width) // 2, (size[1] - image.height) // 2))
         output = io.BytesIO()
         thumbnail.save(output, format="JPEG", quality=65, optimize=True, progressive=False)
         return output.getvalue()
@@ -97,6 +117,15 @@ def commons_metadata(item: dict[str, str]) -> str:
 
 def prepare(manifest_path: Path, licence: str) -> None:
     manifest = json.loads(manifest_path.read_text())
+    spec = importlib.util.spec_from_file_location(
+        "check_fixtures", HERE.parent / "scripts" / "check-fixtures.py"
+    )
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    check_toolchain = validator.check_toolchain
+    check_toolchain(manifest, manifest_path.parent.name)
+    assert manifest["processing"] == PROCESSING, "actual imaging toolchain differs from manifest"
     output = Path(sys.argv[1]) / manifest_path.parent.name
     if output.exists():
         raise ValueError(f"output domain already exists: {output}")

@@ -165,5 +165,26 @@
       "creator": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Alumifacts&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:Alumifacts (page does not exist)\">Alumifacts</a>",
       "sha256": "44e51c74351478b4a59304937c25e6a525a64be61baa588baa8e36f322d71ffb"
     }
-  ]
+  ],
+  "processing": {
+    "pillow": "12.2.0",
+    "decoder": "Pillow Image.open; ImageOps.exif_transpose; convert to RGB",
+    "encoder": "Pillow JPEG (libjpeg-turbo)",
+    "libjpeg_turbo": "3.1.4.1",
+    "jpeg_compatibility": "6.2",
+    "python": "3.12",
+    "interpolation": "Image.Resampling.LANCZOS",
+    "letterbox": {
+      "width": 160,
+      "height": 160,
+      "mode": "RGB",
+      "background": "#f0f0f0",
+      "align": "center"
+    },
+    "jpeg": {
+      "quality": 65,
+      "optimize": true,
+      "progressive": false
+    }
+  }
 }

@@ -183,6 +183,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: python -I scripts/check_ci_results.py "$NEEDS_JSON"
+      - run: python -I scripts/check_ci_results.py "$NEEDS_JSON" "$AREAS_JSON" "$FULL_RUN"
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          AREAS_JSON: ${{ needs.changes.outputs.areas }}
+          FULL_RUN: ${{ needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' }}

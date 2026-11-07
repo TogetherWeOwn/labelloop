@@ -40,7 +40,13 @@ def healthz() -> dict[str, str]:
 def readyz() -> dict[str, str]:
     """Check local dependencies; the SQL file enables the extension on a new volume."""
     try:
-        with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=3) as connection:
+        with psycopg.connect(
+            host=os.environ["POSTGRES_HOST"],
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            dbname=os.environ["POSTGRES_DB"],
+            connect_timeout=3,
+        ) as connection:
             result = connection.execute(
                 "SELECT extname FROM pg_extension WHERE extname = 'vector'"
             ).fetchone()

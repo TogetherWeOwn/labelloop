@@ -16,7 +16,10 @@ def test_healthz() -> None:
 @pytest.fixture
 def development_environment() -> dict[str, str]:
     return {
-        "DATABASE_URL": "postgresql://test",
+        "POSTGRES_HOST": "postgres",
+        "POSTGRES_USER": "test",
+        "POSTGRES_PASSWORD": "test@local/password?",
+        "POSTGRES_DB": "labelloop/test",
         "S3_ENDPOINT": "minio:9000",
         "S3_ACCESS_KEY": "test-only",
         "S3_SECRET_KEY": "test-only",
@@ -36,6 +39,13 @@ def test_readiness(development_environment: dict[str, str]) -> None:
         minio.return_value.bucket_exists.return_value = True
         response = TestClient(app, raise_server_exceptions=True).get("/readyz")
     assert response.status_code == 200
+    connect.assert_called_once_with(
+        host="postgres",
+        user="test",
+        password="test@local/password?",
+        dbname="labelloop/test",
+        connect_timeout=3,
+    )
     assert response.json()["status"] == "ready"
     minio.assert_called_once_with(
         "minio:9000",

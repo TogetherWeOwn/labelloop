@@ -214,5 +214,26 @@
       ],
       "sha256": "65e37da605cf76ad226b3b4d4dd5e58a723805c15092213246f7fc634d471ccf"
     }
-  ]
+  ],
+  "processing": {
+    "pillow": "12.2.0",
+    "decoder": "Pillow Image.open; ImageOps.exif_transpose; convert to RGB",
+    "encoder": "Pillow JPEG (libjpeg-turbo)",
+    "libjpeg_turbo": "3.1.4.1",
+    "jpeg_compatibility": "6.2",
+    "python": "3.12",
+    "interpolation": "Image.Resampling.LANCZOS",
+    "letterbox": {
+      "width": 160,
+      "height": 160,
+      "mode": "RGB",
+      "background": "#f0f0f0",
+      "align": "center"
+    },
+    "jpeg": {
+      "quality": 65,
+      "optimize": true,
+      "progressive": false
+    }
+  }
 }
