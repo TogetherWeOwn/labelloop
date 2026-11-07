@@ -1,0 +1,735 @@
+{
+  "annotation_policy": "Fixture-only coarse visible rectangles; not independently adjudicated gold ground truth.",
+  "annotation_licence": "CC0-1.0 for fixture metadata only; image licences and attribution remain in manifest.json.",
+  "auto_accept_qualification": "fixture-compiler-policy-v1",
+  "classes": [
+    {
+      "stable_id": "application_view",
+      "name": "application view",
+      "definition": "Visible software application or web interface extent."
+    }
+  ],
+  "class_map": {
+    "application_view": 0
+  },
+  "images": [
+    {
+      "asset_id": "ui-01",
+      "file": "ui-01.jpg",
+      "normalized_sha256": "71bbf0dd941539c45847549cbea322af764091cc5076385c02183c034b97e4db",
+      "width": 160,
+      "height": 160,
+      "sha256": "71bbf0dd941539c45847549cbea322af764091cc5076385c02183c034b97e4db",
+      "objects": [
+        {
+          "object_id": "ui-01-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            0,
+            160,
+            159
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-01",
+        "sha256": "71bbf0dd941539c45847549cbea322af764091cc5076385c02183c034b97e4db",
+        "phash": 15733987584954967461,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-02",
+      "file": "ui-02.jpg",
+      "normalized_sha256": "e58722c5addcd9006fbe8857d2138c396f7b7457f200603e1394be2d35a75fbf",
+      "width": 160,
+      "height": 160,
+      "sha256": "e58722c5addcd9006fbe8857d2138c396f7b7457f200603e1394be2d35a75fbf",
+      "objects": [
+        {
+          "object_id": "ui-02-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            0,
+            160,
+            127
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-02",
+        "sha256": "e58722c5addcd9006fbe8857d2138c396f7b7457f200603e1394be2d35a75fbf",
+        "phash": 13360428118077682812,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-03",
+      "file": "ui-03.jpg",
+      "normalized_sha256": "d9e03aa4a716d721e9850facf2dbbb0c66c1c8c7191de04de601084a8500d284",
+      "width": 160,
+      "height": 160,
+      "sha256": "d9e03aa4a716d721e9850facf2dbbb0c66c1c8c7191de04de601084a8500d284",
+      "objects": [
+        {
+          "object_id": "ui-03-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            0,
+            159,
+            158
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-03",
+        "sha256": "d9e03aa4a716d721e9850facf2dbbb0c66c1c8c7191de04de601084a8500d284",
+        "phash": 11132968920275637079,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-04",
+      "file": "ui-04.jpg",
+      "normalized_sha256": "a2bd252dfec75f8416d272944dd4d10f97faf4bb80d6f1619ba6e2e06a1757c0",
+      "width": 160,
+      "height": 160,
+      "sha256": "a2bd252dfec75f8416d272944dd4d10f97faf4bb80d6f1619ba6e2e06a1757c0",
+      "objects": [
+        {
+          "object_id": "ui-04-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            47,
+            160,
+            113
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-04",
+        "sha256": "a2bd252dfec75f8416d272944dd4d10f97faf4bb80d6f1619ba6e2e06a1757c0",
+        "phash": 14878961342646614215,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-05",
+      "file": "ui-05.jpg",
+      "normalized_sha256": "314bfab0931b96af6d923cf9c44ddd661d16f722598db6c898453bf4de338861",
+      "width": 160,
+      "height": 160,
+      "sha256": "314bfab0931b96af6d923cf9c44ddd661d16f722598db6c898453bf4de338861",
+      "objects": [
+        {
+          "object_id": "ui-05-obj-1",
+          "class_id": "application_view",
+          "box": [
+            19,
+            57,
+            141,
+            96
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-05",
+        "sha256": "314bfab0931b96af6d923cf9c44ddd661d16f722598db6c898453bf4de338861",
+        "phash": 17108401549129203309,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-06",
+      "file": "ui-06.jpg",
+      "normalized_sha256": "b143ecce43996373f7c2863ff16ef3c22523bbaf90992a9cb308dc907c905e98",
+      "width": 160,
+      "height": 160,
+      "sha256": "b143ecce43996373f7c2863ff16ef3c22523bbaf90992a9cb308dc907c905e98",
+      "objects": [
+        {
+          "object_id": "ui-06-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            39,
+            160,
+            123
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-06",
+        "sha256": "b143ecce43996373f7c2863ff16ef3c22523bbaf90992a9cb308dc907c905e98",
+        "phash": 9259594886930194178,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-07",
+      "file": "ui-07.jpg",
+      "normalized_sha256": "a6cf5317b8a332913b0a3c2def8cf1a1f1953c6cbe0ec1f58a709724a6467151",
+      "width": 160,
+      "height": 160,
+      "sha256": "a6cf5317b8a332913b0a3c2def8cf1a1f1953c6cbe0ec1f58a709724a6467151",
+      "objects": [
+        {
+          "object_id": "ui-07-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            55,
+            160,
+            105
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-07",
+        "sha256": "a6cf5317b8a332913b0a3c2def8cf1a1f1953c6cbe0ec1f58a709724a6467151",
+        "phash": 16385955924378074686,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-08",
+      "file": "ui-08.jpg",
+      "normalized_sha256": "504ac565dc4863832dc82a99a7b8f488466adbc1690653ac88897fcc30429027",
+      "width": 160,
+      "height": 160,
+      "sha256": "504ac565dc4863832dc82a99a7b8f488466adbc1690653ac88897fcc30429027",
+      "objects": [
+        {
+          "object_id": "ui-08-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            56,
+            159,
+            105
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-08",
+        "sha256": "504ac565dc4863832dc82a99a7b8f488466adbc1690653ac88897fcc30429027",
+        "phash": 11620934907733588114,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-09",
+      "file": "ui-09.jpg",
+      "normalized_sha256": "6713c3f68ce50e22b7abda7a36252e93adb2a7abbfea9fb4d2b5fa428a7a7433",
+      "width": 160,
+      "height": 160,
+      "sha256": "6713c3f68ce50e22b7abda7a36252e93adb2a7abbfea9fb4d2b5fa428a7a7433",
+      "objects": [
+        {
+          "object_id": "ui-09-obj-1",
+          "class_id": "application_view",
+          "box": [
+            24,
+            0,
+            136,
+            131
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-09",
+        "sha256": "6713c3f68ce50e22b7abda7a36252e93adb2a7abbfea9fb4d2b5fa428a7a7433",
+        "phash": 16587770680847813068,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-10",
+      "file": "ui-10.jpg",
+      "normalized_sha256": "e4206b3f2a3ee7440ee7ecb376a465c86c5ec37145b2772781ed437e4a48baa2",
+      "width": 160,
+      "height": 160,
+      "sha256": "e4206b3f2a3ee7440ee7ecb376a465c86c5ec37145b2772781ed437e4a48baa2",
+      "objects": [
+        {
+          "object_id": "ui-10-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            32,
+            159,
+            125
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-10",
+        "sha256": "e4206b3f2a3ee7440ee7ecb376a465c86c5ec37145b2772781ed437e4a48baa2",
+        "phash": 13585041723172032385,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-11",
+      "file": "ui-11.jpg",
+      "normalized_sha256": "b2ed1ec15d2dc03acb6ec2429f91da22139e3ba2936b4061d526da27977937ad",
+      "width": 160,
+      "height": 160,
+      "sha256": "b2ed1ec15d2dc03acb6ec2429f91da22139e3ba2936b4061d526da27977937ad",
+      "objects": [
+        {
+          "object_id": "ui-11-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            32,
+            160,
+            125
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-11",
+        "sha256": "b2ed1ec15d2dc03acb6ec2429f91da22139e3ba2936b4061d526da27977937ad",
+        "phash": 13728028829363443593,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-12",
+      "file": "ui-12.jpg",
+      "normalized_sha256": "d08f1ffe399506b9d645b3d49a377aa2a3fd97d8a6d65843b04366051becb7cf",
+      "width": 160,
+      "height": 160,
+      "sha256": "d08f1ffe399506b9d645b3d49a377aa2a3fd97d8a6d65843b04366051becb7cf",
+      "objects": [
+        {
+          "object_id": "ui-12-obj-1",
+          "class_id": "application_view",
+          "box": [
+            1,
+            38,
+            160,
+            122
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-12",
+        "sha256": "d08f1ffe399506b9d645b3d49a377aa2a3fd97d8a6d65843b04366051becb7cf",
+        "phash": 13817958711345489977,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-13",
+      "file": "ui-13.jpg",
+      "normalized_sha256": "5baa63186fc73b7c366412b561e6e8c8e61b9d58b6bdda92e7b2271d4c0ac442",
+      "width": 160,
+      "height": 160,
+      "sha256": "5baa63186fc73b7c366412b561e6e8c8e61b9d58b6bdda92e7b2271d4c0ac442",
+      "objects": [
+        {
+          "object_id": "ui-13-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            43,
+            159,
+            123
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-13",
+        "sha256": "5baa63186fc73b7c366412b561e6e8c8e61b9d58b6bdda92e7b2271d4c0ac442",
+        "phash": 10054554936316758928,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-14",
+      "file": "ui-14.jpg",
+      "normalized_sha256": "65545128e6d1fae2f99633cfa6b46aafe615edf153e0c67e62bdb5e92d57e06c",
+      "width": 160,
+      "height": 160,
+      "sha256": "65545128e6d1fae2f99633cfa6b46aafe615edf153e0c67e62bdb5e92d57e06c",
+      "objects": [
+        {
+          "object_id": "ui-14-obj-1",
+          "class_id": "application_view",
+          "box": [
+            29,
+            24,
+            130,
+            139
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-14",
+        "sha256": "65545128e6d1fae2f99633cfa6b46aafe615edf153e0c67e62bdb5e92d57e06c",
+        "phash": 16484927044649718630,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-15",
+      "file": "ui-15.jpg",
+      "normalized_sha256": "e9a52eb4db9f2e7708a69f7dcf062a2660a2decb06468600d1b12f539c90063b",
+      "width": 160,
+      "height": 160,
+      "sha256": "e9a52eb4db9f2e7708a69f7dcf062a2660a2decb06468600d1b12f539c90063b",
+      "objects": [
+        {
+          "object_id": "ui-15-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            48,
+            160,
+            112
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-15",
+        "sha256": "e9a52eb4db9f2e7708a69f7dcf062a2660a2decb06468600d1b12f539c90063b",
+        "phash": 16941438861654027157,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    },
+    {
+      "asset_id": "ui-16",
+      "file": "ui-16.jpg",
+      "normalized_sha256": "c4021f2475428cd9179b2ec9a0a8292f8c6390a1ff62524cb4e6af5af096810e",
+      "width": 160,
+      "height": 160,
+      "sha256": "c4021f2475428cd9179b2ec9a0a8292f8c6390a1ff62524cb4e6af5af096810e",
+      "objects": [
+        {
+          "object_id": "ui-16-obj-1",
+          "class_id": "application_view",
+          "box": [
+            0,
+            48,
+            160,
+            112
+          ]
+        }
+      ],
+      "evidence": {
+        "asset_id": "ui-16",
+        "sha256": "c4021f2475428cd9179b2ec9a0a8292f8c6390a1ff62524cb4e6af5af096810e",
+        "phash": 16359348562939998315,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "application_view": 1
+        }
+      }
+    }
+  ],
+  "split_assignment": {
+    "assignment_version": "union-find-grouped-stratified-v2-de1c1f0d56441f35",
+    "asset_splits": {
+      "ui-01": "train",
+      "ui-02": "train",
+      "ui-03": "train",
+      "ui-04": "train",
+      "ui-05": "val",
+      "ui-06": "train",
+      "ui-07": "val",
+      "ui-08": "train",
+      "ui-09": "train",
+      "ui-10": "train",
+      "ui-11": "train",
+      "ui-12": "train",
+      "ui-13": "train",
+      "ui-14": "val",
+      "ui-15": "val",
+      "ui-16": "train"
+    },
+    "group_splits": {
+      "group-0000": "train",
+      "group-0001": "train",
+      "group-0002": "train",
+      "group-0003": "train",
+      "group-0004": "val",
+      "group-0005": "train",
+      "group-0006": "val",
+      "group-0007": "train",
+      "group-0008": "train",
+      "group-0009": "train",
+      "group-0010": "train",
+      "group-0011": "train",
+      "group-0012": "val",
+      "group-0013": "val",
+      "group-0014": "train"
+    },
+    "group_ids": {
+      "ui-01": "group-0000",
+      "ui-02": "group-0001",
+      "ui-03": "group-0002",
+      "ui-04": "group-0003",
+      "ui-05": "group-0004",
+      "ui-06": "group-0005",
+      "ui-07": "group-0006",
+      "ui-08": "group-0007",
+      "ui-09": "group-0008",
+      "ui-10": "group-0009",
+      "ui-11": "group-0009",
+      "ui-12": "group-0010",
+      "ui-13": "group-0011",
+      "ui-14": "group-0012",
+      "ui-15": "group-0013",
+      "ui-16": "group-0014"
+    },
+    "seed": 20261107,
+    "algorithm": "union-find-grouped-stratified-v2",
+    "reasons": {
+      "group-0000": "seeded group-level class-count stratification",
+      "group-0001": "seeded group-level class-count stratification",
+      "group-0002": "seeded group-level class-count stratification",
+      "group-0003": "seeded group-level class-count stratification",
+      "group-0004": "seeded group-level class-count stratification",
+      "group-0005": "seeded group-level class-count stratification",
+      "group-0006": "seeded group-level class-count stratification",
+      "group-0007": "seeded group-level class-count stratification",
+      "group-0008": "seeded group-level class-count stratification",
+      "group-0009": "seeded group-level class-count stratification",
+      "group-0010": "seeded group-level class-count stratification",
+      "group-0011": "seeded group-level class-count stratification",
+      "group-0012": "seeded group-level class-count stratification",
+      "group-0013": "seeded group-level class-count stratification",
+      "group-0014": "seeded group-level class-count stratification"
+    },
+    "locked": true
+  },
+  "evidence": [
+    {
+      "asset_id": "ui-01",
+      "sha256": "71bbf0dd941539c45847549cbea322af764091cc5076385c02183c034b97e4db",
+      "phash": 15733987584954967461,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-02",
+      "sha256": "e58722c5addcd9006fbe8857d2138c396f7b7457f200603e1394be2d35a75fbf",
+      "phash": 13360428118077682812,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-03",
+      "sha256": "d9e03aa4a716d721e9850facf2dbbb0c66c1c8c7191de04de601084a8500d284",
+      "phash": 11132968920275637079,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-04",
+      "sha256": "a2bd252dfec75f8416d272944dd4d10f97faf4bb80d6f1619ba6e2e06a1757c0",
+      "phash": 14878961342646614215,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-05",
+      "sha256": "314bfab0931b96af6d923cf9c44ddd661d16f722598db6c898453bf4de338861",
+      "phash": 17108401549129203309,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-06",
+      "sha256": "b143ecce43996373f7c2863ff16ef3c22523bbaf90992a9cb308dc907c905e98",
+      "phash": 9259594886930194178,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-07",
+      "sha256": "a6cf5317b8a332913b0a3c2def8cf1a1f1953c6cbe0ec1f58a709724a6467151",
+      "phash": 16385955924378074686,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-08",
+      "sha256": "504ac565dc4863832dc82a99a7b8f488466adbc1690653ac88897fcc30429027",
+      "phash": 11620934907733588114,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-09",
+      "sha256": "6713c3f68ce50e22b7abda7a36252e93adb2a7abbfea9fb4d2b5fa428a7a7433",
+      "phash": 16587770680847813068,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-10",
+      "sha256": "e4206b3f2a3ee7440ee7ecb376a465c86c5ec37145b2772781ed437e4a48baa2",
+      "phash": 13585041723172032385,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-11",
+      "sha256": "b2ed1ec15d2dc03acb6ec2429f91da22139e3ba2936b4061d526da27977937ad",
+      "phash": 13728028829363443593,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-12",
+      "sha256": "d08f1ffe399506b9d645b3d49a377aa2a3fd97d8a6d65843b04366051becb7cf",
+      "phash": 13817958711345489977,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-13",
+      "sha256": "5baa63186fc73b7c366412b561e6e8c8e61b9d58b6bdda92e7b2271d4c0ac442",
+      "phash": 10054554936316758928,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-14",
+      "sha256": "65545128e6d1fae2f99633cfa6b46aafe615edf153e0c67e62bdb5e92d57e06c",
+      "phash": 16484927044649718630,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-15",
+      "sha256": "e9a52eb4db9f2e7708a69f7dcf062a2660a2decb06468600d1b12f539c90063b",
+      "phash": 16941438861654027157,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    },
+    {
+      "asset_id": "ui-16",
+      "sha256": "c4021f2475428cd9179b2ec9a0a8292f8c6390a1ff62524cb4e6af5af096810e",
+      "phash": 16359348562939998315,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "application_view": 1
+      }
+    }
+  ]
+}

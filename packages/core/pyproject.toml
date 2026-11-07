@@ -3,7 +3,7 @@ name = "labelloop-core"
 version = "0.0.0"
 description = "Pure Python domain model and geometry"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = ["numpy==2.5.4", "pillow==12.2.0"]
 
 [build-system]
 requires = ["hatchling"]

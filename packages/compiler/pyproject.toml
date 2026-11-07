@@ -3,7 +3,12 @@ name = "labelloop-compiler"
 version = "0.0.0"
 description = "Deterministic YOLO dataset compiler"
 requires-python = ">=3.12,<3.13"
-dependencies = ["pillow==12.2.0", "opencv-python-headless==4.13.0.92"]
+dependencies = [
+  "labelloop-core",
+  "numpy==2.5.4",
+  "pillow==12.2.0",
+  "opencv-python-headless==4.13.0.92",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -11,3 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/labelloop_compiler"]
+
+[tool.uv.sources]
+labelloop-core = { workspace = true }

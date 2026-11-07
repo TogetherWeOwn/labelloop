@@ -57,7 +57,7 @@ def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 def readyz() -> dict[str, str]:
-    """Check local dependencies; the SQL file enables the extension on a new volume."""
+    """Check dependencies and the migrated schema without logging connection details."""
     try:
         with psycopg.connect(
             host=os.environ["POSTGRES_HOST"],
@@ -71,6 +71,11 @@ def readyz() -> dict[str, str]:
             ).fetchone()
             if result is None:
                 raise RuntimeError("pgvector is not enabled")
+            migrated = connection.execute(
+                "SELECT to_regclass('public.canonical_dataset_release') IS NOT NULL"
+            ).fetchone()
+            if not migrated or not migrated[0]:
+                raise RuntimeError("canonical schema is not migrated")
     except Exception as error:
         log_readiness_failure("database", error)
         raise HTTPException(status_code=503, detail={"dependency": "database"}) from error

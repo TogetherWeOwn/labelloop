@@ -39,7 +39,7 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./apps/api/migrations:/docker-entrypoint-initdb.d:ro
+      - ./apps/api/migrations/0001_pgvector.sql:/docker-entrypoint-initdb.d/0001_pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -76,8 +76,24 @@ services:
         condition: service_healthy
     command: ["python", "/app/scripts/initialize-dev-storage.py"]
 
+  migrate:
+    <<: *python-dev
+    # libpq requires a passwd entry even when host-side IDs are just bind ownership.
+    user: labelloop
+    command:
+      - sh
+      - -c
+      - |
+        DATABASE_URL="$$(python -c 'from labelloop_api.database_url import quoted_database_url; print(quoted_database_url())')" \
+          uv run --no-sync --no-project alembic -c apps/api/alembic.ini upgrade head && \
+        MIGRATE_SMOKE=1 DATABASE_URL="$$(python -c 'from labelloop_api.database_url import quoted_database_url; print(quoted_database_url())')" \
+          uv run --no-sync --no-project python apps/api/migrations/smoke.py
+
   api:
     <<: *python-dev
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     command: uv run --no-sync --no-project uvicorn labelloop_api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"

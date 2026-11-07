@@ -17,6 +17,7 @@ dev = [
   "mypy==1.20.0",
   "pytest==9.0.3",
   "ruff==0.15.12",
+  "hypothesis==6.148.7",
 ]
 ml = ["labelloop-worker-ml"]
 runtime = [
@@ -74,7 +75,7 @@ select = ["E", "F", "I", "B", "UP"]
 python_version = "3.12"
 strict = true
 files = ["packages/core/src"]
-mypy_path = "packages/core/src"
+mypy_path = "packages/core/src:fixtures"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
