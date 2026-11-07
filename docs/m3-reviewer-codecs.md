@@ -68,6 +68,15 @@ unknown nonzero billing categories and multi-iteration usage remain `None`.
 These require reconciliation or an explicit richer price adapter; they must not be
 priced as free or squeezed into the two-rate `TokenPrices` contract.
 
+Messages usage with tier/geography/speed metadata or nested cache/server-tool
+counters also remains unconfirmed, even for `standard`/`global` strings and
+zero-valued nested counters. The current `TokenPrices` contract has no pinned
+provider mapping for those fields. This intentionally limits live-shaped usage
+normalization, not patch parsing: a valid patch may still be returned with
+`usage=None`. Do not enable paid use expecting confirmed actuals until a pinned
+price adapter and its fixtures explicitly cover the provider's usage envelope.
+Synthetic metadata examples in the tests are not captured live responses.
+
 The dispatch worker must commit a ledger estimate within all applicable limits,
 with authenticated approval when required, **before any network I/O**, then commit
 the single-use dispatch intent. Preserve the full estimate for unconfirmed cost,

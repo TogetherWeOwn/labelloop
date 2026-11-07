@@ -286,6 +286,35 @@ def test_separately_priced_usage_remains_unconfirmed(reviewer: LLMReviewer) -> N
     )
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"service_tier": "standard"},
+        {"inference_geo": "global"},
+        {"speed": "standard"},
+        {"cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}},
+        {"server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0}},
+        {
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+        },
+    ],
+)
+def test_unmapped_messages_pricing_metadata_keeps_estimate(
+    metadata: dict[str, Any],
+) -> None:
+    reviewer = AnthropicMessagesReviewer("fixture-model")
+    usage = {"input_tokens": 120, "output_tokens": 60, **metadata}
+    reply = reviewer.parse(response(reviewer, usage=usage))
+    assert reply.status == "complete" and reply.patch == patch()
+    assert reply.usage is None
+
+
 def test_text_blocks_are_joined_but_tools_are_never_executed() -> None:
     reviewer = AnthropicMessagesReviewer("fixture-model")
     raw_patch = patch()
@@ -300,6 +329,19 @@ def test_text_blocks_are_joined_but_tools_are_never_executed() -> None:
             reviewer.parse(response(reviewer, content=[block]))
     with pytest.raises(ReviewerError):
         reviewer.parse(response(reviewer, content=[]))
+
+
+@pytest.mark.parametrize("malformed", [{}, {"text": None}, {"text": 1}, {"text": []}])
+@pytest.mark.parametrize("malformed_first", [False, True])
+def test_malformed_text_block_invalidates_otherwise_complete_reply(
+    malformed: dict[str, Any], malformed_first: bool
+) -> None:
+    reviewer = AnthropicMessagesReviewer("fixture-model")
+    blocks = [{"type": "text", "text": patch()}, {"type": "text", **malformed}]
+    if malformed_first:
+        blocks.reverse()
+    with pytest.raises(ReviewerError, match="^unsupported_response$"):
+        reviewer.parse(response(reviewer, content=blocks))
 
 
 @pytest.mark.parametrize("kind", [[], {}, None, True, 1])
