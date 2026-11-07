@@ -165,6 +165,7 @@ def prepare(manifest_path: Path, licence: str) -> None:
     output = Path(sys.argv[1]) / manifest_path.parent.name
     if output.exists():
         raise ValueError(f"output domain already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.partial.{os.getpid()}")
     temporary.mkdir(parents=True, exist_ok=False)
     destination = temporary / "images"

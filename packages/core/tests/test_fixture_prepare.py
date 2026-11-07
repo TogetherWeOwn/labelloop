@@ -59,14 +59,15 @@ def test_bad_initial_source_is_rejected() -> None:
 
 def test_atomic_output_cleanup(tmp_path: Path) -> None:
     manifest_path = Path(prepare.HERE) / "cc0-interface" / "manifest.json"
+    output_root = tmp_path / "new" / "output"
     with (
-        patch.object(prepare.sys, "argv", ["prepare.py", str(tmp_path)]),
+        patch.object(prepare.sys, "argv", ["prepare.py", str(output_root)]),
         patch.object(prepare, "response", side_effect=RuntimeError("simulated drift")),
         pytest.raises(RuntimeError, match="simulated drift"),
     ):
         prepare.prepare(manifest_path, "CC0-1.0")
-    assert not (tmp_path / "cc0-interface").exists()
-    assert not list(tmp_path.glob(".cc0-interface.partial*"))
+    assert not (output_root / "cc0-interface").exists()
+    assert not list(output_root.glob(".cc0-interface.partial*"))
     assert manifest_path.exists()
 
 

@@ -17,6 +17,8 @@ x-python-dev: &python-dev
     S3_SECRET_KEY: ${S3_SECRET_KEY:-labelloop-local-secret}
     S3_BUCKET: ${S3_BUCKET:-labelloop}
     PYTHONPATH: /app/packages/core/src:/app/packages/compiler/src:/app/packages/platform/src:/app/packages/llm/src:/app/apps/api/src:/app/workers/core/src:/app/workers/ml/src
+    # Host IDs do not own the image's HOME; shared dependency resolution is read-only.
+    UV_CACHE_DIR: /tmp/labelloop-uv-cache
   depends_on: &ready-services
     postgres:
       condition: service_healthy
