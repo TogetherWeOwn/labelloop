@@ -10,7 +10,6 @@ assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 REQUIRED = module.REQUIRED
-UNGATED = module.UNGATED
 validate = module.validate
 
 
@@ -23,11 +22,12 @@ def test_ci_results_requires_every_job() -> None:
         validate({})
 
 
-def test_ci_results_allows_only_area_gate_skips() -> None:
+def test_ci_results_rejects_skips() -> None:
     results = successful_results()
-    for name in REQUIRED - UNGATED:
+    for name in REQUIRED:
         results[name] = {"result": "skipped"}
-    validate(results)
+    with pytest.raises(ValueError, match="skipped"):
+        validate(results)
     results["lint"] = {"result": "skipped"}
     with pytest.raises(ValueError, match="lint.*skipped"):
         validate(results)

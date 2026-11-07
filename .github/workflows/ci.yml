@@ -70,7 +70,7 @@ jobs:
 
   types:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -89,7 +89,7 @@ jobs:
 
   unit:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -109,7 +109,7 @@ jobs:
 
   import-contract:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -129,7 +129,7 @@ jobs:
 
   web-build:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).web && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -150,7 +150,7 @@ jobs:
 
   dev-stack:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || ((fromJSON(needs.changes.outputs.areas).python || fromJSON(needs.changes.outputs.areas).web) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (fromJSON(needs.changes.outputs.areas).python || fromJSON(needs.changes.outputs.areas).web)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -60,7 +60,7 @@ uv run mypy --strict packages/core
 corepack pnpm --dir apps/web typecheck
 ```
 
-`make test` covers every Python package and the web component test. `make lint` adds the import-linter failing-fixture check. GitHub Actions is the authoritative complete-suite environment and additionally runs `mypy`, `tsc`, web build, fixtures, actionlint/zizmor, and the full `make dev` startup. Heavy jobs on draft pull requests follow the org starter's job-level gates; `ci-ok` still reports, and the full suite runs on `main`.
+`make test` covers every Python package and the web component test. `make lint` adds the import-linter failing-fixture check. GitHub Actions is the authoritative complete-suite environment and additionally runs `mypy`, `tsc`, web build, fixtures, actionlint/zizmor, and the full `make dev` startup. Area selection does not depend on draft state; all affected checks run on draft repair commits and on the complete review-ready suite. `ci-ok` requires every bootstrap job to succeed.
 
 `gitleaks` scans full history; `pr-lint` enforces Conventional Commits; `pr-size` labels changes and is advisory. Actions are pinned by commit SHA. `ci-ok` and secret scanning do not use workflow-level path filters.
 
