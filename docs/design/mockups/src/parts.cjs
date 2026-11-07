@@ -108,16 +108,11 @@ const overlay = (objects, { width = 860, selected = null, drawing = null, tabs =
     const xm = (x0 + x1) / 2;
     const ym = (y0 + y1) / 2;
     const h = u(8);
-    return [
-      [x0, y0],
-      [xm, y0],
-      [x1, y0],
-      [x1, ym],
-      [x1, y1],
-      [xm, y1],
-      [x0, y1],
-      [x0, ym],
-    ]
+    // Kit accessibility.md §4: corners at >= 24 screen px both ways, edges at >= 48, so hit areas never overlap.
+    const fits = (n) => x1 - x0 >= u(n) && y1 - y0 >= u(n);
+    const pts = fits(24) ? [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] : [];
+    if (fits(48)) pts.push([xm, y0], [x1, ym], [xm, y1], [x0, ym]);
+    return pts
       .map(([x, y]) => `<rect class="handle" x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}"/>`)
       .join("");
   };
