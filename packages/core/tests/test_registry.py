@@ -154,7 +154,9 @@ def test_incumbent_comparison_is_required_and_uses_the_same_frozen_dataset() -> 
 
 
 @pytest.mark.parametrize("gate", [PromotionPolicy(1, 0.9), PromotionPolicy(2, 0)])
-def test_better_candidate_can_replace_incumbent_below_current_absolute_gates(gate) -> None:
+def test_better_candidate_can_replace_incumbent_below_current_absolute_gates(
+    gate: PromotionPolicy,
+) -> None:
     first, second = model(320), model(320, "second")
     incumbent = report(first, missed=True)
     evidence = report(second)
@@ -193,7 +195,11 @@ def test_better_candidate_can_replace_incumbent_below_current_absolute_gates(gat
         (("object",), ("object",), "e" * 64),
     ],
 )
-def test_catalogue_changes_cannot_skip_or_crash_incumbent_comparison(before, after, digest) -> None:
+def test_catalogue_changes_cannot_skip_or_crash_incumbent_comparison(
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    digest: str,
+) -> None:
     first = replace(model(320), class_ids=before)
     second = replace(model(320, "second"), class_ids=after, class_map_sha256=digest)
     state = RegistryState("project-1", first.recipe_id, 1, first)
