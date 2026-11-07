@@ -510,11 +510,15 @@ name = "labelloop-llm"
 version = "0.0.0"
 source = { editable = "packages/llm" }
 dependencies = [
+    { name = "labelloop-core" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = "==2.13.0" }]
+requires-dist = [
+    { name = "labelloop-core", editable = "packages/core" },
+    { name = "pydantic", specifier = "==2.13.0" },
+]
 
 [[package]]
 name = "labelloop-platform"
