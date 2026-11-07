@@ -65,10 +65,13 @@ def upgrade() -> None:
         $$ LANGUAGE plpgsql;
         CREATE TRIGGER auth_event_no_update BEFORE UPDATE OR DELETE ON auth_event
         FOR EACH ROW EXECUTE FUNCTION auth_event_immutable();
+        CREATE TRIGGER auth_event_no_truncate BEFORE TRUNCATE ON auth_event
+        FOR EACH STATEMENT EXECUTE FUNCTION auth_event_immutable();
     """)
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER auth_event_no_truncate ON auth_event")
     op.execute("DROP TRIGGER auth_event_no_update ON auth_event")
     op.execute("DROP FUNCTION auth_event_immutable()")
     for name in ("auth_event", "auth_service_token", "auth_session", "auth_principal"):

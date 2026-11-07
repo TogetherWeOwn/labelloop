@@ -410,6 +410,54 @@ def test_database_rejects_service_admin_and_human_worker_roles(store):
             )
 
 
+def test_production_application_uses_authentication_boundary(store):
+    from labelloop_api.main import app
+
+    with TestClient(app, base_url=ORIGIN) as production:
+        assert app.docs_url is None and app.redoc_url is None and app.openapi_url is None
+        for path in ("/auth/me", "/docs", "/openapi.json", "/new-route"):
+            assert production.get(path).status_code == 401
+        assert login(production, role="admin").json() == {"detail": "invalid_request"}
+        assert login(production).status_code == 200
+        assert production.get("/auth/me").json()["role"] == "reviewer"
+
+
+def test_verification_releases_connection_and_rechecks_password(store, monkeypatch):
+    checked_out = set()
+
+    def checkout(dbapi_connection, record, proxy):
+        checked_out.add(id(record))
+
+    def checkin(dbapi_connection, record):
+        checked_out.discard(id(record))
+
+    event.listen(store.engine, "checkout", checkout)
+    event.listen(store.engine, "checkin", checkin)
+    verify = PASSWORDS.verify
+    replacement = PASSWORDS.hash("changed-fixture-password")
+
+    def concurrent_change(self, encoded, password):
+        assert not checked_out
+        valid = verify(encoded, password)
+        with store.engine.begin() as connection:
+            connection.execute(
+                update(principal)
+                .where(principal.c.name == "reviewer")
+                .values(password_hash=replacement)
+            )
+        return valid
+
+    monkeypatch.setattr(type(PASSWORDS), "verify", concurrent_change)
+    try:
+        assert store.login("reviewer", PASSWORD, NOW) is None
+    finally:
+        event.remove(store.engine, "checkout", checkout)
+        event.remove(store.engine, "checkin", checkin)
+    with store.engine.connect() as connection:
+        assert connection.execute(select(session)).all() == []
+        assert connection.execute(select(auth_event.c.action)).scalars().all() == ["login_failed"]
+
+
 def test_reload_recovers_csrf_without_revealing_session(client):
     assert login(client).status_code == 200
     # A new browser context retains cookies but not the previous login response.

@@ -310,6 +310,7 @@ def check_authentication_schema(connection: sa.Connection) -> None:
         for statement, message in (
             ("UPDATE auth_principal SET role = 'admin'", "check constraint"),
             ("DELETE FROM auth_event", "immutable"),
+            ("TRUNCATE auth_event", "immutable"),
             ("UPDATE auth_event SET action = 'logout'", "immutable"),
             ("INSERT INTO auth_session VALUES ('hash', 'absent', 'csrf', now())", "foreign key"),
         ):

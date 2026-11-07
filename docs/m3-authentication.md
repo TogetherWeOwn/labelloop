@@ -42,7 +42,11 @@ idle period. Active sessions and the separate immutable audit history are untouc
 
 Passwords use pinned `argon2-cffi`, Argon2id with 64 MiB, three iterations and four
 lanes. Successful verification upgrades parameters when necessary. Known and unknown
-accounts both perform verification. Five failed attempts lock a known account for
+accounts both perform verification. Verification and any rehash run outside the
+write transaction without holding a pooled connection. The subsequent locked read
+rechecks identity, password hash, enabled state and lock deadline; a concurrent
+credential change fails closed rather than issuing a stale-credential session.
+Five failed attempts lock a known account for
 15 minutes, with transactional row locking. Requests during the lockout do not
 extend its deadline, even with a correct password. At expiry the next failed login
 starts a fresh failure count; a successful login resets it. Bad/unknown/disabled/
@@ -72,7 +76,9 @@ names, passwords, tokens, headers, request paths or bodies. Validation errors re
 a fixed `invalid_request` response: the framework's default raw-input echo is not
 safe for credentials. Session/credential issuance, administrative account
 provisioning/rotation, audit retention and deployment DB grants remain separately
-gated operational work. Nothing in this slice authorizes creating a real account
+gated operational work. The event guard rejects UPDATE, DELETE and TRUNCATE. Before
+Internet exposure, an approved archival/retention and perimeter admission policy
+must bound event storage without weakening append-only history. Nothing in this slice authorizes creating a real account
 or token. Tests seed synthetic credentials only.
 
 ## Consuming review API contract (not implemented here)

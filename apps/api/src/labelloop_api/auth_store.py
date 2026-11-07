@@ -59,6 +59,23 @@ class AuthStore:
         self._dummy_hash = PASSWORDS.hash(secrets.token_urlsafe(32))
 
     def login(self, name: str, password: str, now: datetime) -> tuple[str, str] | None:
+        with self.engine.connect() as connection:
+            snapshot = (
+                connection.execute(select(principal).where(principal.c.name == name))
+                .mappings()
+                .one_or_none()
+            )
+        encoded = snapshot["password_hash"] if snapshot and snapshot["kind"] == "human" else None
+        # Expensive verification/rehashing holds neither a pooled connection nor a row lock.
+        try:
+            valid = PASSWORDS.verify(encoded or self._dummy_hash, password)
+        except (VerificationError, InvalidHashError):
+            valid = False
+        replacement = (
+            PASSWORDS.hash(password)
+            if valid and encoded and PASSWORDS.check_needs_rehash(encoded)
+            else None
+        )
         with self.engine.begin() as connection:
             record = (
                 connection.execute(
@@ -67,13 +84,18 @@ class AuthStore:
                 .mappings()
                 .one_or_none()
             )
-            encoded = record["password_hash"] if record and record["kind"] == "human" else None
-            try:
-                valid = PASSWORDS.verify(encoded or self._dummy_hash, password)
-            except (VerificationError, InvalidHashError):
-                valid = False
             locked = bool(record and record["locked_until"] and utc(record["locked_until"]) > now)
-            allowed = bool(record and encoded and valid and record["enabled"] and not locked)
+            allowed = bool(
+                record
+                and snapshot
+                and encoded
+                and valid
+                and record["id"] == snapshot["id"]
+                and record["kind"] == "human"
+                and record["password_hash"] == encoded
+                and record["enabled"]
+                and not locked
+            )
             identity = record["id"] if record else None
             connection.execute(
                 insert(auth_event).values(
@@ -100,8 +122,8 @@ class AuthStore:
                 return None
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             values = {"failed_attempts": 0, "locked_until": None}
-            if PASSWORDS.check_needs_rehash(encoded):
-                values["password_hash"] = PASSWORDS.hash(password)
+            if replacement is not None:
+                values["password_hash"] = replacement
             connection.execute(update(principal).where(principal.c.id == identity).values(**values))
             # Amortize expired-session retention without a scheduler or unbounded request work.
             expired = (
