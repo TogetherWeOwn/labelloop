@@ -55,8 +55,9 @@ def test_click_binds_every_dry_run_field(change: dict[str, Any]) -> None:
     approval = SpendApproval("admin", request().digest)
     altered = request(**change)
     assert altered.digest != approval.request_digest
-    with pytest.raises(ValueError):
-        gate().reserve(altered, approval=approval)
+    ledger = gate(project_id=altered.project_id)
+    with pytest.raises(ValueError, match="approval does not describe this dry run"):
+        ledger.reserve(altered, approval=approval)
 
 
 @pytest.mark.parametrize(
@@ -157,9 +158,13 @@ def test_cancellation_only_releases_unsent_reservations_without_reusing_ids() ->
         ledger.dispatch("one").cancel("one")
 
 
-def test_402_pauses_all_paid_stages_and_never_redispatches() -> None:
-    ledger = gate().reserve(request()).reserve(request(operation_id="two"))
-    paused = ledger.dispatch("one").insufficient_credits("one")
+@pytest.mark.parametrize("unconfirmed", [False, True])
+def test_402_pauses_all_paid_stages_and_never_redispatches(unconfirmed: bool) -> None:
+    ledger = gate().reserve(request()).reserve(request(operation_id="two")).dispatch("one")
+    if unconfirmed:
+        ledger = ledger.unconfirmed("one")
+    paused = ledger.insufficient_credits("one")
+    assert paused.entry("one").state == "insufficient_credits"
     assert paused.pause_reason == "insufficient_credits"
     assert paused.monthly_exposure("2026-11") == 80
     assert paused.insufficient_credits("one") is paused

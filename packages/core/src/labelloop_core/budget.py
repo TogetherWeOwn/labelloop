@@ -296,7 +296,7 @@ class BudgetGate:
         entry = self.entry(operation_id)
         if entry.state == "insufficient_credits":
             return self
-        if entry.state != "dispatched":
+        if entry.state not in {"dispatched", "unconfirmed"}:
             raise BudgetRefused("operation_not_dispatched")
         return self._replace(replace(entry, state="insufficient_credits"), "insufficient_credits")
 
