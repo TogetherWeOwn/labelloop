@@ -148,6 +148,19 @@ jobs:
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
       - run: pnpm --dir apps/web build
+      - run: pnpm --dir apps/web build:platform-fixture
+        env:
+          VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
+          VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
+      - run: pnpm --dir apps/web exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/web test:platform-browser
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: platform-ui-evidence
+          path: apps/web/platform-evidence/
+          if-no-files-found: error
+          retention-days: 7
 
   dev-stack:
     needs: [changes, full-run]
