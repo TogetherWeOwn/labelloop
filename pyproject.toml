@@ -56,6 +56,17 @@ line-length = 100
 src = ["packages/*/src", "apps/api/src", "workers/*/src"]
 extend-exclude = ["*_violation.py"]
 
+[tool.ruff.lint.isort]
+known-first-party = [
+  "labelloop_api",
+  "labelloop_compiler",
+  "labelloop_core",
+  "labelloop_llm",
+  "labelloop_platform",
+  "labelloop_worker_core",
+  "labelloop_worker_ml",
+]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 

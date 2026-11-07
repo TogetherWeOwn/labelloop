@@ -17,11 +17,14 @@ from PIL import Image, ImageOps
 HERE = Path(__file__).resolve().parent
 
 
-def def response(url: str) -> bytes:
-    request = Request(url, headers={
-        "User-Agent": "labelloop-fixture-preparation/1.0 "
-        "(https://github.com/TogetherWeOwn/labelloop)"
-    })
+def response(url: str) -> bytes:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "labelloop-fixture-preparation/1.0 "
+            "(https://github.com/TogetherWeOwn/labelloop)"
+        },
+    )
     with urlopen(request, timeout=30) as reply:
         return reply.read()
 
@@ -57,11 +60,13 @@ def coco() -> None:
         item["original_source_page"] = record["flickr_url"].replace("http://", "https://")
         item["licence_id"] = record["license"]
         item["original_creator"] = "See the Flickr source page for the image creator"
-        item["objects"] = sorted({
-            categories[entry["category_id"]]
-            for entry in annotations["annotations"]
-            if entry["image_id"] == item["coco_id"]
-        })
+        item["objects"] = sorted(
+            {
+                categories[entry["category_id"]]
+                for entry in annotations["annotations"]
+                if entry["image_id"] == item["coco_id"]
+            }
+        )
         data = resize(response(item["source_url"]))
         item["sha256"] = hashlib.sha256(data).hexdigest()
         (destination / item["file"]).write_bytes(data)

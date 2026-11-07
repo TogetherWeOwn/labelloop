@@ -49,15 +49,14 @@ def main() -> None:
         if baseline.returncode != 0:
             raise SystemExit("The real import contract failed its baseline")
 
-        (root / "labelloop_core" / "violation.py").write_text(
-            "import ultralytics\nimport ultralytics_platform\n"
-        )
+        (root / "labelloop_core" / "__init__.py").write_text("import ultralytics\n")
+        (root / "labelloop_core" / "violation.py").write_text("import ultralytics_platform\n")
         failing = run(root)
         print("=== Deliberately violating imports ===")
         print(failing.stdout + failing.stderr)
         output = failing.stdout + failing.stderr
         expected = (
-            "labelloop_core.violation -> ultralytics",
+            "labelloop_core -> ultralytics",
             "labelloop_core.violation -> ultralytics_platform",
         )
         if failing.returncode != 1 or not all(chain in output for chain in expected):

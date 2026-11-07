@@ -33,7 +33,7 @@ on:
   # was already linted on the PR head).
   merge_group:
   push:
-    branches: [ $default-branch ]
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -169,14 +169,11 @@ jobs:
               title = (os.environ.get("TITLE") or "").strip()
               body = os.environ.get("BODY") or ""
               author = os.environ.get("AUTHOR") or ""
-              if author.endswith("[bot]") and author.startswith(("dependabot", "renovate")):
-                  if header_errors(title):
-                      print(f"::warning::{author} title '{title}' is not conventional.")
-                  sys.exit(0)
+              trusted_bot = author.endswith("[bot]") and author.startswith(("dependabot", "renovate"))
               errs = header_errors(title)
               if errs:
-                  failed = True
-                  print(f"::error title=PR title::'{title}': {'; '.join(errs)}. {HELP}")
+                  failed = not trusted_bot
+                  print(f"::{'warning' if trusted_bot else 'error'} title=PR title::'{title}': {'; '.join(errs)}. {HELP}")
               text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
               if len(re.sub(r"\s", "", text)) < 40:
                   if strict:

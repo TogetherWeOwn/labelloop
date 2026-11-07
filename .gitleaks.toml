@@ -1,0 +1,6 @@
+title = "Labelloop secret scanning"
+
+# The checked-in example intentionally contains public, local-only development
+# values. This path narrow exemption does not suppress any other file or secret.
+[allowlist]
+paths = ['''^\.env\.example$|^.env.example$''']

@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
 from labelloop_api.main import app
 
 
@@ -14,6 +15,16 @@ def test_readiness() -> None:
     with (
         patch("labelloop_api.main.psycopg.connect") as connect,
         patch("labelloop_api.main.Minio") as minio,
+        patch.dict(
+            "os.environ",
+            {
+                "DATABASE_URL": "postgresql://test",
+                "S3_ENDPOINT": "minio:9000",
+                "S3_ACCESS_KEY": "test-only",
+                "S3_SECRET_KEY": "test-only",
+                "S3_BUCKET": "test",
+            },
+        ),
     ):
         connect.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = (
             "vector",

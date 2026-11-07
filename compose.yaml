@@ -5,12 +5,13 @@ x-python-dev: &python-dev
     context: .
     args:
       UV_GROUPS: ${UV_GROUPS:-runtime}
-  environment: &runtime-environment
+  environment:
     DATABASE_URL: postgresql://${POSTGRES_USER:-labelloop}:${POSTGRES_PASSWORD:-labelloop-local-only}@postgres:5432/${POSTGRES_DB:-labelloop}
     S3_ENDPOINT: minio:9000
     S3_ACCESS_KEY: ${S3_ACCESS_KEY:-labelloop-local-only}
     S3_SECRET_KEY: ${S3_SECRET_KEY:-labelloop-local-secret}
     S3_BUCKET: ${S3_BUCKET:-labelloop}
+    PYTHONPATH: /app/packages/core/src:/app/packages/compiler/src:/app/packages/platform/src:/app/packages/llm/src:/app/apps/api/src:/app/workers/core/src:/app/workers/ml/src
   depends_on:
     postgres:
       condition: service_healthy
@@ -26,8 +27,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-labelloop}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-labelloop-local-only}
       POSTGRES_DB: ${POSTGRES_DB:-labelloop}
+    # Local-only defaults never listen on a development host's external interfaces.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./apps/api/migrations:/docker-entrypoint-initdb.d:ro
@@ -45,8 +47,8 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-labelloop-local-only}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-labelloop-local-secret}
     ports:
-      - "${S3_PORT:-9000}:9000"
-      - "${S3_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -57,9 +59,9 @@ services:
 
   api:
     <<: *python-dev
-    command: uv run --no-sync uvicorn labelloop_api.main:app --host 0.0.0.0 --port 8000
+    command: uv run --no-sync --no-project uvicorn labelloop_api.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
       interval: 3s
@@ -68,7 +70,7 @@ services:
 
   worker-core:
     <<: *python-dev
-    command: uv run --no-sync labelloop-worker-core
+    command: ["python", "-c", "import signal; print({'status': 'ready', 'worker': 'core'}, flush=True); signal.pause()"]
 
   worker-ml:
     <<: *python-dev
@@ -76,7 +78,7 @@ services:
       context: .
       args:
         UV_GROUPS: ml
-    command: uv run --no-sync labelloop-worker-ml
+    command: ["python", "-c", "import signal; from labelloop_worker_ml.main import runtime_version; print({'status': 'ready', 'worker': 'ml', 'ultralytics': runtime_version()}, flush=True); signal.pause()"]
     cpus: 2.0
     mem_limit: 4g
 
@@ -87,12 +89,12 @@ services:
     environment:
       API_PROXY_TARGET: http://api:8000
     ports:
-      - "${WEB_PORT:-5173}:5173"
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
     volumes:
       - ./apps/web:/app/apps/web
       - web-node-modules:/app/apps/web/node_modules
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 3s
       timeout: 5s
       retries: 30

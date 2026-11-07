@@ -19,7 +19,9 @@ def healthz() -> dict[str, str]:
 def readyz() -> dict[str, str]:
     """Check local dependencies; the SQL file enables the extension on a new volume."""
     with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=3) as connection:
-        result = connection.execute("SELECT extname FROM pg_extension WHERE extname = 'vector'").fetchone()
+        result = connection.execute(
+            "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+        ).fetchone()
         if result is None:
             raise RuntimeError("pgvector is not enabled")
     storage = Minio(
@@ -31,7 +33,7 @@ def readyz() -> dict[str, str]:
     bucket = os.environ["S3_BUCKET"]
     if not storage.bucket_exists(bucket):
         storage.make_bucket(bucket)
-    storage.list_objects(bucket, max_keys=1)
+    next(iter(storage.list_objects(bucket)), None)
     return {"status": "ready", "storage": "connected", "database": "connected"}
 
 

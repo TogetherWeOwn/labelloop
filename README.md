@@ -32,7 +32,7 @@ make dev
 
 Workers are placeholders and do not dequeue jobs or train models. Source directories are bind-mounted for iterative development; changes to dependencies or container definitions require `docker compose up --build --detach --wait`. No production image, account or deployment is configured.
 
-The `.env.example` values are intentionally public **local-only** credentials. Supply separate credentials for any other environment. Export `${S3_PORT}` or `${S3_CONSOLE_PORT}` to remap the MinIO services. Use `make down` to stop the stack, or `docker compose down --volumes` to also remove its development database/object-storage volumes.
+The `.env.example` values are intentionally public **local-only** credentials. Supply separate credentials and configure appropriately for any other environment; Compose publishes its development ports to loopback only. Use `make down` to stop the stack, or `docker compose down --volumes` to also remove the development data volumes.
 
 ## Monorepo
 
