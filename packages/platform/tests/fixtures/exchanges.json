@@ -1,0 +1,39 @@
+{
+  "provenance": "Offline sanitized contract examples from ultralytics/sdk OpenAPI 0.1.107; not live account recordings.",
+  "gpu": {"status": 200, "json": {}},
+  "signed_upload": {
+    "status": 200,
+    "json": {
+      "sessionId": "fixture-session",
+      "uploadUrl": "https://fixture-storage.example/dataset.zip?signature=fixture-storage-signature",
+      "expiresAt": "2026-11-07T12:00:00Z",
+      "headers": {"Content-Type": "application/zip"}
+    }
+  },
+  "ingest": {"status": 201, "json": {"jobId": "fixture-job", "status": "queued"}},
+  "rate_limit": {
+    "status": 429,
+    "headers": {"Retry-After": "120"},
+    "json": {"error": "fixture-platform-bearer-not-a-credential"}
+  },
+  "paid_paused": {
+    "status": 402,
+    "json": {"error": "fixture-platform-bearer-not-a-credential"}
+  },
+  "conflict": {
+    "status": 409,
+    "json": {"error": "fixture-platform-bearer-not-a-credential"}
+  },
+  "unavailable": {"status": 503, "json": {"error": "temporarily unavailable"}},
+  "malformed": {
+    "status": 200,
+    "headers": {"Content-Type": "application/json"},
+    "text": "{fixture-platform-bearer-not-a-credential"
+  },
+  "redirect": {
+    "status": 307,
+    "headers": {"Location": "https://untrusted.example/fixture-platform-bearer-not-a-credential"}
+  },
+  "storage_created": {"status": 200},
+  "storage_duplicate": {"status": 412}
+}

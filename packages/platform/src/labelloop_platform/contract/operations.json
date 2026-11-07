@@ -1,0 +1,3439 @@
+{
+  "cancel_training": {
+    "category": "training",
+    "method": "DELETE",
+    "operation_id": "delete_api_models_owner_project_model_training",
+    "parameters": [
+      {
+        "description": "Project owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Project name",
+        "in": "path",
+        "name": "project",
+        "required": true,
+        "schema": {
+          "example": "yolo26",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Model name",
+        "in": "path",
+        "name": "model",
+        "required": true,
+        "schema": {
+          "example": "yolo26n",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/models/{owner}/{project}/{model}/training",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CancelTrainingResponse"
+            }
+          }
+        },
+        "description": "Training cancelled"
+      }
+    }
+  },
+  "compare_versions": {
+    "category": "default",
+    "method": "GET",
+    "operation_id": "get_api_datasets_owner_dataset_versions_compare",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Version compared from",
+        "in": "query",
+        "name": "base",
+        "required": true,
+        "schema": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      {
+        "description": "Version compared to",
+        "in": "query",
+        "name": "head",
+        "required": true,
+        "schema": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      {
+        "description": "Resume after a previous page's nextCursor",
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "maxLength": 128,
+          "pattern": "^\\d+:\\d+$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Return this image as each version stores it instead of the change list",
+        "in": "query",
+        "name": "hash",
+        "required": false,
+        "schema": {
+          "pattern": "^[a-f\\d]{32}$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/versions/compare",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DatasetVersionComparison"
+            }
+          }
+        },
+        "description": "Version comparison"
+      }
+    }
+  },
+  "complete_upload": {
+    "category": "upload",
+    "method": "POST",
+    "operation_id": "post_api_upload_complete",
+    "parameters": [],
+    "path": "/api/upload/complete",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "Mark an upload session complete",
+            "properties": {
+              "checksum": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "md5": {
+                "description": "Expected uploaded object MD5 digest in hexadecimal",
+                "maxLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "Upload session ID from signed-url response",
+                "example": "507f1f77bcf86cd799439011",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UploadCompleteResponse"
+            }
+          }
+        },
+        "description": "Upload confirmed"
+      }
+    }
+  },
+  "create_dataset": {
+    "category": "default",
+    "method": "POST",
+    "operation_id": "post_api_datasets",
+    "parameters": [],
+    "path": "/api/datasets",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "API request for creating a new dataset",
+            "properties": {
+              "blurFaces": {
+                "description": "Automatically blur faces in uploaded images",
+                "type": "boolean"
+              },
+              "classNames": {
+                "items": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                  "type": "string"
+                },
+                "maxItems": 25000,
+                "type": "array"
+              },
+              "dataset": {
+                "description": "Dataset name used in Platform URLs",
+                "example": "coco8",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              "format": {
+                "default": "yolo",
+                "description": "Dataset annotation format",
+                "enum": [
+                  "yolo",
+                  "coco",
+                  "raw",
+                  "ndjson"
+                ],
+                "type": "string"
+              },
+              "imageCount": {
+                "default": 0,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "license": {
+                "description": "Dataset license identifier",
+                "enum": [
+                  "None",
+                  "CC0-1.0",
+                  "PDM-1.0",
+                  "CC-BY-2.5",
+                  "CC-BY-3.0",
+                  "CC-BY-4.0",
+                  "CC-BY-NC-2.0",
+                  "CC-BY-NC-3.0",
+                  "CC-BY-NC-4.0",
+                  "CC-BY-SA-3.0",
+                  "CC-BY-SA-4.0",
+                  "CC-BY-NC-SA-3.0",
+                  "CC-BY-NC-SA-4.0",
+                  "CC-BY-ND-4.0",
+                  "CC-BY-NC-ND-2.0",
+                  "CC-BY-NC-ND-4.0",
+                  "Apache-2.0",
+                  "MIT",
+                  "BSD-3-Clause",
+                  "AGPL-3.0",
+                  "GPL-2.0",
+                  "GPL-3.0",
+                  "LGPL-3.0",
+                  "ODbL-1.0",
+                  "DbCL-1.0",
+                  "Research-Only",
+                  "Other"
+                ],
+                "type": "string"
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MetadataValue"
+                },
+                "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                "propertyNames": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "type": "object",
+                "x-max-serialized-characters": 500000
+              },
+              "name": {
+                "description": "Display name",
+                "example": "COCO8",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Workspace owner",
+                "example": "ultralytics",
+                "maxLength": 32,
+                "minLength": 4,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "tags": {
+                "items": {
+                  "maxLength": 50,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "task": {
+                "default": "detect",
+                "description": "Dataset task type",
+                "enum": [
+                  "detect",
+                  "segment",
+                  "semantic",
+                  "depth",
+                  "classify",
+                  "pose",
+                  "obb"
+                ],
+                "type": "string"
+              },
+              "visibility": {
+                "description": "Resource visibility",
+                "enum": [
+                  "public",
+                  "private"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "dataset",
+              "name"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "201": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateDatasetResponse"
+            }
+          }
+        },
+        "description": "Dataset created"
+      }
+    }
+  },
+  "create_model": {
+    "category": "default",
+    "method": "POST",
+    "operation_id": "post_api_models",
+    "parameters": [],
+    "path": "/api/models",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "anyOf": [
+              {
+                "properties": {
+                  "completedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "docs": {
+                    "description": "Documentation URL from .pt file",
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "environment": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "epochs": {
+                    "type": "number"
+                  },
+                  "metadata": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "abs_rel": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "accuracy_top1": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "accuracy_top5": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "delta1": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "mAP50": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "mAP50-95": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "miou": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "pixel_acc": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "precision": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "recall": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "rmse": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "silog": {
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "model": {
+                    "description": "Model name used in Platform URLs",
+                    "example": "yolo26n",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                    "type": "string"
+                  },
+                  "owner": {
+                    "description": "Project owner",
+                    "example": "ultralytics",
+                    "maxLength": 32,
+                    "minLength": 4,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "project": {
+                    "description": "Project name",
+                    "example": "yolo26",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "task": {
+                    "description": "YOLO task type",
+                    "enum": [
+                      "detect",
+                      "segment",
+                      "semantic",
+                      "depth",
+                      "classify",
+                      "pose",
+                      "obb"
+                    ],
+                    "type": "string"
+                  },
+                  "trainArgs": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "trainResults": {
+                    "items": {
+                      "properties": {
+                        "epoch": {
+                          "type": "number"
+                        },
+                        "fitness": {
+                          "type": "number"
+                        },
+                        "metrics": {
+                          "additionalProperties": {
+                            "type": "number"
+                          },
+                          "propertyNames": {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "system": {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "timestamp": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "maxItems": 10000,
+                    "type": "array"
+                  },
+                  "version": {
+                    "maxLength": 50,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project",
+                  "model"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "completedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "docs": {
+                    "description": "Documentation URL from .pt file",
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "environment": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "epochs": {
+                    "type": "number"
+                  },
+                  "metadata": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "abs_rel": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "accuracy_top1": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "accuracy_top5": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "delta1": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "mAP50": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "mAP50-95": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "miou": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "pixel_acc": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "precision": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "recall": {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "rmse": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "silog": {
+                        "minimum": 0,
+                        "type": "number"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "owner": {
+                    "description": "Project owner",
+                    "example": "ultralytics",
+                    "maxLength": 32,
+                    "minLength": 4,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "project": {
+                    "description": "Project name",
+                    "example": "yolo26",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "task": {
+                    "description": "YOLO task type",
+                    "enum": [
+                      "detect",
+                      "segment",
+                      "semantic",
+                      "depth",
+                      "classify",
+                      "pose",
+                      "obb"
+                    ],
+                    "type": "string"
+                  },
+                  "trainArgs": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "trainResults": {
+                    "items": {
+                      "properties": {
+                        "epoch": {
+                          "type": "number"
+                        },
+                        "fitness": {
+                          "type": "number"
+                        },
+                        "metrics": {
+                          "additionalProperties": {
+                            "type": "number"
+                          },
+                          "propertyNames": {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "system": {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "timestamp": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "maxItems": 10000,
+                    "type": "array"
+                  },
+                  "version": {
+                    "maxLength": 50,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "API request for creating a new model"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "201": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateModelResponse"
+            }
+          }
+        },
+        "description": "Model created"
+      }
+    }
+  },
+  "create_project": {
+    "category": "default",
+    "method": "POST",
+    "operation_id": "post_api_projects",
+    "parameters": [],
+    "path": "/api/projects",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "API request for creating a new project",
+            "properties": {
+              "description": {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              "license": {
+                "description": "Project/model license identifier",
+                "enum": [
+                  "None",
+                  "Apache-2.0",
+                  "MIT",
+                  "BSD-3-Clause",
+                  "AGPL-3.0",
+                  "GPL-3.0",
+                  "LGPL-3.0",
+                  "MPL-2.0",
+                  "EUPL-1.1",
+                  "Unlicense",
+                  "CC0-1.0",
+                  "Ultralytics-Enterprise",
+                  "Other"
+                ],
+                "type": "string"
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MetadataValue"
+                },
+                "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                "propertyNames": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "type": "object",
+                "x-max-serialized-characters": 500000
+              },
+              "name": {
+                "description": "Display name",
+                "example": "Inspection",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                "type": "string"
+              },
+              "owner": {
+                "description": "Workspace owner",
+                "example": "ultralytics",
+                "maxLength": 32,
+                "minLength": 4,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "project": {
+                "description": "Project name used in Platform URLs",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "tags": {
+                "items": {
+                  "maxLength": 50,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "visibility": {
+                "description": "Resource visibility",
+                "enum": [
+                  "public",
+                  "private"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "project",
+              "name"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "201": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateProjectResponse"
+            }
+          }
+        },
+        "description": "Project created"
+      }
+    }
+  },
+  "gpu_availability": {
+    "category": "training",
+    "method": "GET",
+    "operation_id": "get_api_training_gpu_availability",
+    "parameters": [
+      {
+        "description": "Include managed training capacity",
+        "in": "query",
+        "name": "managed",
+        "required": false,
+        "schema": {
+          "default": "false",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/training/gpu-availability",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GpuAvailabilityResponse"
+            }
+          }
+        },
+        "description": "GPU stock status by GPU ID"
+      }
+    }
+  },
+  "ingest": {
+    "category": "upload",
+    "method": "POST",
+    "operation_id": "post_api_datasets_owner_dataset_ingest",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/ingest",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "anyOf": [
+              {
+                "properties": {
+                  "classMapping": {
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "maximum": 24999,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "maxLength": 100,
+                          "minLength": 1,
+                          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "description": "Mapping from incoming class names to this dataset",
+                    "maxProperties": 25000,
+                    "propertyNames": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "conflictPolicy": {
+                    "description": "How to handle filename or content conflicts",
+                    "enum": [
+                      "skip",
+                      "keep_both",
+                      "replace"
+                    ],
+                    "type": "string"
+                  },
+                  "imageMetadata": {
+                    "additionalProperties": {
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/MetadataValue"
+                      },
+                      "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                      "propertyNames": {
+                        "maxLength": 128,
+                        "type": "string"
+                      },
+                      "type": "object",
+                      "x-max-serialized-characters": 500000
+                    },
+                    "description": "Custom metadata keyed by each image's archive-relative path or NDJSON file value. Paths are limited to 1,024 characters, top-level metadata keys to 128 characters, and the map to 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 1024,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "reference": {
+                    "not": {}
+                  },
+                  "sessionId": {
+                    "description": "Upload session ID from signed-url response",
+                    "example": "507f1f77bcf86cd799439011",
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  "sourceUrl": {
+                    "not": {}
+                  },
+                  "targetSplit": {
+                    "description": "Target split for new images (overrides archive structure)",
+                    "enum": [
+                      "train",
+                      "val",
+                      "test"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sessionId"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "classMapping": {
+                    "not": {}
+                  },
+                  "conflictPolicy": {
+                    "description": "How to handle filename or content conflicts",
+                    "enum": [
+                      "skip",
+                      "keep_both",
+                      "replace"
+                    ],
+                    "type": "string"
+                  },
+                  "imageMetadata": {
+                    "additionalProperties": {
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/MetadataValue"
+                      },
+                      "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                      "propertyNames": {
+                        "maxLength": 128,
+                        "type": "string"
+                      },
+                      "type": "object",
+                      "x-max-serialized-characters": 500000
+                    },
+                    "description": "Custom metadata keyed by each image's archive-relative path or NDJSON file value. Paths are limited to 1,024 characters, top-level metadata keys to 128 characters, and the map to 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 1024,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  },
+                  "reference": {
+                    "not": {}
+                  },
+                  "sessionId": {
+                    "not": {}
+                  },
+                  "sourceUrl": {
+                    "description": "Remote dataset archive or NDJSON URL",
+                    "format": "uri",
+                    "maxLength": 4096,
+                    "pattern": "^[hH][tT][tT][pP][sS]?:\\/\\/[^\\s/?#]+\\/[^\\s?#]*(?:\\.[zZ][iI][pP]|\\.[tT][aA][rR]\\.[gG][zZ]|\\.[tT][gG][zZ]|\\.[tT][aA][rR]|\\.[nN][dD][jJ][sS][oO][nN])(?:[?#].*)?$",
+                    "type": "string"
+                  },
+                  "targetSplit": {
+                    "description": "Target split for new images (overrides archive structure)",
+                    "enum": [
+                      "train",
+                      "val",
+                      "test"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sourceUrl"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "classMapping": {
+                    "not": {}
+                  },
+                  "conflictPolicy": {
+                    "description": "How to handle filename or content conflicts",
+                    "enum": [
+                      "skip",
+                      "keep_both",
+                      "replace"
+                    ],
+                    "type": "string"
+                  },
+                  "imageMetadata": {
+                    "not": {}
+                  },
+                  "reference": {
+                    "description": "Connected cloud or On Premise source",
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "integrationId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "prefix": {
+                            "maxLength": 1024,
+                            "pattern": "^(?:\\S(?:.*\\S)?)?$",
+                            "type": "string"
+                          },
+                          "provider": {
+                            "const": "cloud",
+                            "type": "string"
+                          },
+                          "target": {
+                            "maxLength": 222,
+                            "minLength": 1,
+                            "pattern": "^\\S(?:.*\\S)?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "integrationId",
+                          "target"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "keyId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "prefix": {
+                            "maxLength": 1024,
+                            "pattern": "^(?:\\S(?:.*\\S)?)?$",
+                            "type": "string"
+                          },
+                          "provider": {
+                            "const": "local",
+                            "type": "string"
+                          },
+                          "root": {
+                            "maxLength": 222,
+                            "minLength": 1,
+                            "pattern": "^\\S(?:.*\\S)?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "keyId",
+                          "root"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "sessionId": {
+                    "not": {}
+                  },
+                  "sourceUrl": {
+                    "not": {}
+                  },
+                  "targetSplit": {
+                    "description": "Target split for new images (overrides archive structure)",
+                    "enum": [
+                      "train",
+                      "val",
+                      "test"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reference"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "classMapping": {
+                    "not": {}
+                  },
+                  "conflictPolicy": {
+                    "description": "How to handle filename or content conflicts",
+                    "enum": [
+                      "skip",
+                      "keep_both",
+                      "replace"
+                    ],
+                    "type": "string"
+                  },
+                  "imageMetadata": {
+                    "not": {}
+                  },
+                  "reference": {
+                    "not": {}
+                  },
+                  "sessionId": {
+                    "not": {}
+                  },
+                  "sourceUrl": {
+                    "not": {}
+                  },
+                  "targetSplit": {
+                    "description": "Target split for new images (overrides archive structure)",
+                    "enum": [
+                      "train",
+                      "val",
+                      "test"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            ],
+            "description": "Input for dataset ingest job"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "201": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/IngestDatasetResponse"
+            }
+          }
+        },
+        "description": "Ingest queued"
+      }
+    }
+  },
+  "list_images": {
+    "category": "default",
+    "method": "GET",
+    "operation_id": "get_api_datasets_owner_dataset_images",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Maximum images to return",
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "default": 50,
+          "maximum": 5000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      {
+        "description": "Images to skip",
+        "in": "query",
+        "name": "offset",
+        "required": false,
+        "schema": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      {
+        "description": "Last image ID from the previous page",
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "example": "507f1f77bcf86cd799439011",
+          "maxLength": 24,
+          "minLength": 24,
+          "pattern": "^[0-9a-fA-F]{24}$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Include the total matching image count",
+        "in": "query",
+        "name": "includeTotal",
+        "required": false,
+        "schema": {
+          "default": "true",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset split",
+        "in": "query",
+        "name": "split",
+        "required": false,
+        "schema": {
+          "enum": [
+            "train",
+            "val",
+            "test"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Filter by processing error state",
+        "in": "query",
+        "name": "hasError",
+        "required": false,
+        "schema": {
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Filter by annotation state",
+        "in": "query",
+        "name": "hasLabel",
+        "required": false,
+        "schema": {
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Comma-separated class IDs; empty matches no images",
+        "in": "query",
+        "name": "classIds",
+        "required": false,
+        "schema": {
+          "maxLength": 1000,
+          "pattern": "^(?:\\d+(?:,\\d+)*)?$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Image name, class name or metadata search",
+        "in": "query",
+        "name": "search",
+        "required": false,
+        "schema": {
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      {
+        "description": "Hybrid search: name, class and metadata matches, then images that look like it, by relevance",
+        "in": "query",
+        "name": "q",
+        "required": false,
+        "schema": {
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      {
+        "description": "Sort order",
+        "in": "query",
+        "name": "sort",
+        "required": false,
+        "schema": {
+          "default": "newest",
+          "enum": [
+            "newest",
+            "oldest",
+            "name-asc",
+            "name-desc",
+            "height-asc",
+            "height-desc",
+            "width-asc",
+            "width-desc",
+            "size-asc",
+            "size-desc",
+            "labels-desc",
+            "labels-asc"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Include signed thumbnail URLs",
+        "in": "query",
+        "name": "includeThumbnails",
+        "required": false,
+        "schema": {
+          "default": "true",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Include signed full-size image URLs",
+        "in": "query",
+        "name": "includeImageUrls",
+        "required": false,
+        "schema": {
+          "default": "false",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      },
+      {
+        "description": "Include capped preview annotations",
+        "in": "query",
+        "name": "includeLabels",
+        "required": false,
+        "schema": {
+          "default": "false",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/images",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ListDatasetImagesResponse"
+            }
+          }
+        },
+        "description": "Dataset images"
+      }
+    }
+  },
+  "model_files": {
+    "category": "download",
+    "method": "GET",
+    "operation_id": "get_api_models_owner_project_model_files",
+    "parameters": [
+      {
+        "description": "Project owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Project name",
+        "in": "path",
+        "name": "project",
+        "required": true,
+        "schema": {
+          "example": "yolo26",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Model name",
+        "in": "path",
+        "name": "model",
+        "required": true,
+        "schema": {
+          "example": "yolo26n",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/models/{owner}/{project}/{model}/files",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ModelFilesResponse"
+            }
+          }
+        },
+        "description": "Model files"
+      }
+    }
+  },
+  "predict_image": {
+    "category": "predict",
+    "method": "POST",
+    "operation_id": "post_api_images_imageId_predict",
+    "parameters": [
+      {
+        "description": "Image ID",
+        "in": "path",
+        "name": "imageId",
+        "required": true,
+        "schema": {
+          "example": "507f1f77bcf86cd799439011",
+          "maxLength": 24,
+          "minLength": 24,
+          "pattern": "^[0-9a-fA-F]{24}$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/images/{imageId}/predict",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "Input for dataset auto-annotation prediction",
+            "properties": {
+              "classMapping": {
+                "description": "Dataset class index for each model class, or null to drop it",
+                "items": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxItems": 25000,
+                "type": "array"
+              },
+              "confidence": {
+                "default": 0.25,
+                "description": "Confidence threshold",
+                "maximum": 1,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              "iou": {
+                "default": 0.7,
+                "description": "IoU threshold for non-maximum suppression",
+                "maximum": 0.95,
+                "minimum": 0,
+                "type": "number"
+              },
+              "modelId": {
+                "anyOf": [
+                  {
+                    "description": "Fully qualified model URI",
+                    "example": "ul://ultralytics/yolo26/yolo26n",
+                    "maxLength": 256,
+                    "pattern": "^ul:\\/\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                    "type": "string"
+                  },
+                  {
+                    "enum": [
+                      "qwen",
+                      "gemma",
+                      "nemotron",
+                      "moondream",
+                      "wevisone",
+                      "florence2",
+                      "owlv2",
+                      "yoloe26x",
+                      "sam3",
+                      "sam3.1",
+                      "groundingdino",
+                      "gpt-6-astra",
+                      "gpt-6.1-sol",
+                      "gpt-6.1-terra",
+                      "claude-fable-5-1",
+                      "claude-opus-5-5",
+                      "claude-sonnet-5-5",
+                      "gemini-4-argon",
+                      "grok-4.7",
+                      "kimi-k3",
+                      "kimi-k3.1-pro",
+                      "muse-wonder-1.0",
+                      "muse-spark-1.3",
+                      "mimo-v2.6-pro",
+                      "qwen3.8-max",
+                      "gpt-6-luna",
+                      "claude-haiku-5-5",
+                      "gemini-3.8-flash",
+                      "gemini-3.5-flash-lite",
+                      "glm-5.3-flash",
+                      "deepseek-flash",
+                      "mimo-v2.6-flash",
+                      "minimax-m3.1-flash"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "visualPrompts": {
+                "description": "Same-image seed labels (bbox, segments, or obb) for yoloe26x detection, segmentation or mask-derived OBB; classId is the dataset class index",
+                "items": {
+                  "properties": {
+                    "bbox": {
+                      "description": "Bounding box [x_center, y_center, width, height] normalized 0-1",
+                      "items": {
+                        "not": {}
+                      },
+                      "minItems": 4,
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "classId": {
+                      "description": "Class index (0-based)",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "obb": {
+                      "description": "Oriented bounding box corners",
+                      "items": {
+                        "not": {}
+                      },
+                      "minItems": 8,
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "segments": {
+                      "description": "Segmentation points, normalized 0-1",
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 10000,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "classId"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "modelId"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ImagePredictionResponse"
+            }
+          }
+        },
+        "description": "Predictions generated"
+      }
+    }
+  },
+  "read_batch": {
+    "category": "predict",
+    "method": "GET",
+    "operation_id": "get_api_datasets_owner_dataset_predict_batch",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/predict/batch",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BatchPredictStatusResponse"
+            }
+          }
+        },
+        "description": "Run status"
+      }
+    }
+  },
+  "read_dataset": {
+    "category": "default",
+    "method": "GET",
+    "operation_id": "get_api_datasets_owner_dataset",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DatasetDetailResponse"
+            }
+          }
+        },
+        "description": "Dataset details"
+      }
+    }
+  },
+  "read_export": {
+    "category": "export",
+    "method": "GET",
+    "operation_id": "get_api_datasets_owner_dataset_export",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Saved version number",
+        "in": "query",
+        "name": "v",
+        "required": false,
+        "schema": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/export",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DatasetExportResponse"
+            }
+          }
+        },
+        "description": "Signed dataset export URL"
+      }
+    }
+  },
+  "read_image": {
+    "category": "default",
+    "method": "GET",
+    "operation_id": "get_api_images_imageId",
+    "parameters": [
+      {
+        "description": "Image ID",
+        "in": "path",
+        "name": "imageId",
+        "required": true,
+        "schema": {
+          "example": "507f1f77bcf86cd799439011",
+          "maxLength": 24,
+          "minLength": 24,
+          "pattern": "^[0-9a-fA-F]{24}$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/images/{imageId}",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Image"
+            }
+          }
+        },
+        "description": "Image details"
+      }
+    }
+  },
+  "read_model": {
+    "category": "default",
+    "method": "GET",
+    "operation_id": "get_api_models_owner_project_model",
+    "parameters": [
+      {
+        "description": "Project owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Project name",
+        "in": "path",
+        "name": "project",
+        "required": true,
+        "schema": {
+          "example": "yolo26",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Model name",
+        "in": "path",
+        "name": "model",
+        "required": true,
+        "schema": {
+          "example": "yolo26n",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Return per-image validation analysis instead of model details",
+        "in": "query",
+        "name": "analysis",
+        "required": false,
+        "schema": {
+          "enum": [
+            "1"
+          ],
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/models/{owner}/{project}/{model}",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ModelDetailResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/ModelAnalysisResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "Model details or validation analysis"
+      }
+    }
+  },
+  "read_training": {
+    "category": "training",
+    "method": "GET",
+    "operation_id": "get_api_models_owner_project_model_training",
+    "parameters": [
+      {
+        "description": "Project owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Project name",
+        "in": "path",
+        "name": "project",
+        "required": true,
+        "schema": {
+          "example": "yolo26",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Model name",
+        "in": "path",
+        "name": "model",
+        "required": true,
+        "schema": {
+          "example": "yolo26n",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/models/{owner}/{project}/{model}/training",
+    "request": null,
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TrainingProgressResponse"
+            }
+          }
+        },
+        "description": "Training progress"
+      }
+    }
+  },
+  "replace_labels": {
+    "category": "default",
+    "method": "PATCH",
+    "operation_id": "patch_api_images_imageId",
+    "parameters": [
+      {
+        "description": "Image ID",
+        "in": "path",
+        "name": "imageId",
+        "required": true,
+        "schema": {
+          "example": "507f1f77bcf86cd799439011",
+          "maxLength": 24,
+          "minLength": 24,
+          "pattern": "^[0-9a-fA-F]{24}$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/images/{imageId}",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "Replace labels for an image",
+                "example": {
+                  "labels": [
+                    {
+                      "bbox": [
+                        0.45566,
+                        0.45072,
+                        0.29691,
+                        0.24404
+                      ],
+                      "classId": 0,
+                      "keypoints": [
+                        0.1,
+                        0.2,
+                        0.3,
+                        0.4
+                      ]
+                    }
+                  ]
+                },
+                "properties": {
+                  "labels": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bbox": {
+                          "description": "Bounding box [x_center, y_center, width, height] normalized 0-1",
+                          "items": {
+                            "not": {}
+                          },
+                          "minItems": 4,
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ],
+                          "type": "array"
+                        },
+                        "classId": {
+                          "description": "Class index (0-based)",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "keypoints": {
+                          "description": "One consistent flat shape of normalized [x, y] pairs or [x, y, visibility] triples; visibility conventionally uses 0, 1, or 2",
+                          "example": [
+                            0.1,
+                            0.2,
+                            0.3,
+                            0.4
+                          ],
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 10000,
+                          "type": "array"
+                        },
+                        "obb": {
+                          "description": "Oriented bounding box corners",
+                          "items": {
+                            "not": {}
+                          },
+                          "minItems": 8,
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ],
+                          "type": "array"
+                        },
+                        "segments": {
+                          "description": "Segmentation points, normalized 0-1",
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 10000,
+                          "type": "array"
+                        },
+                        "skeletonId": {
+                          "description": "Skeleton template ID for pose keypoint connections",
+                          "maxLength": 128,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "classId"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 10000,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "labels"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Replace custom metadata for an image",
+                "properties": {
+                  "metadata": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/MetadataValue"
+                    },
+                    "description": "Custom JSON metadata with keys limited to 128 characters and at most 500,000 serialized characters.",
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "x-max-serialized-characters": 500000
+                  }
+                },
+                "required": [
+                  "metadata"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UpdateImageResponse"
+            }
+          }
+        },
+        "description": "Image updated"
+      }
+    }
+  },
+  "save_export": {
+    "category": "export",
+    "method": "POST",
+    "operation_id": "post_api_datasets_owner_dataset_export",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/export",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "Create a dataset version with an optional description",
+            "properties": {
+              "description": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "download": {
+                "default": true,
+                "description": "Return a signed NDJSON download URL; false saves the version without preparing a download",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        }
+      },
+      "required": false
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateDatasetVersionResponse"
+            }
+          }
+        },
+        "description": "Dataset version created"
+      }
+    }
+  },
+  "signed_upload": {
+    "category": "upload",
+    "method": "POST",
+    "operation_id": "post_api_upload_signed_url",
+    "parameters": [],
+    "path": "/api/upload/signed-url",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "Request body for generating a signed upload URL",
+            "oneOf": [
+              {
+                "properties": {
+                  "assetId": {
+                    "example": "507f1f77bcf86cd799439011",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "assetType": {
+                    "const": "datasets",
+                    "type": "string"
+                  },
+                  "contentType": {
+                    "description": "File MIME type",
+                    "example": "application/zip",
+                    "maxLength": 50,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "filename": {
+                    "example": "dataset.zip",
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "(?:\\.[zZ][iI][pP]|\\.[tT][aA][rR]\\.[gG][zZ]|\\.[tT][gG][zZ]|\\.[tT][aA][rR]|\\.[nN][dD][jJ][sS][oO][nN])$",
+                    "type": "string"
+                  },
+                  "totalBytes": {
+                    "description": "File size in bytes",
+                    "example": 1048576,
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "assetId",
+                  "contentType",
+                  "totalBytes",
+                  "assetType",
+                  "filename"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "assetId": {
+                    "example": "507f1f77bcf86cd799439011",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "assetType": {
+                    "const": "models",
+                    "type": "string"
+                  },
+                  "contentType": {
+                    "description": "File MIME type",
+                    "example": "application/zip",
+                    "maxLength": 50,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "filename": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "totalBytes": {
+                    "description": "File size in bytes",
+                    "example": 1048576,
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "assetId",
+                  "contentType",
+                  "totalBytes",
+                  "assetType",
+                  "filename"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UploadSignedUrlResponse"
+            }
+          }
+        },
+        "description": "Upload URL ready"
+      }
+    }
+  },
+  "start_batch": {
+    "category": "predict",
+    "method": "POST",
+    "operation_id": "post_api_datasets_owner_dataset_predict_batch",
+    "parameters": [
+      {
+        "description": "Dataset owner",
+        "in": "path",
+        "name": "owner",
+        "required": true,
+        "schema": {
+          "example": "ultralytics",
+          "maxLength": 32,
+          "minLength": 4,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      {
+        "description": "Dataset name",
+        "in": "path",
+        "name": "dataset",
+        "required": true,
+        "schema": {
+          "example": "coco8",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      }
+    ],
+    "path": "/api/datasets/{owner}/{dataset}/predict/batch",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "anyOf": [
+              {
+                "properties": {
+                  "classMapping": {
+                    "description": "Dataset class index for each model class, or null to drop it",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "maxItems": 25000,
+                    "type": "array"
+                  },
+                  "confidence": {
+                    "default": 0.25,
+                    "description": "Confidence threshold",
+                    "maximum": 1,
+                    "minimum": 0.01,
+                    "type": "number"
+                  },
+                  "includeAnnotated": {
+                    "default": false,
+                    "description": "Also annotate images that already have labels",
+                    "type": "boolean"
+                  },
+                  "iou": {
+                    "default": 0.7,
+                    "description": "IoU threshold for non-maximum suppression",
+                    "maximum": 0.95,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "modelId": {
+                    "anyOf": [
+                      {
+                        "description": "Fully qualified model URI",
+                        "example": "ul://ultralytics/yolo26/yolo26n",
+                        "maxLength": 256,
+                        "pattern": "^ul:\\/\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\/(?![^/]*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "qwen",
+                          "gemma",
+                          "nemotron",
+                          "moondream",
+                          "wevisone",
+                          "florence2",
+                          "owlv2",
+                          "yoloe26x",
+                          "sam3",
+                          "sam3.1",
+                          "groundingdino",
+                          "gpt-6-astra",
+                          "gpt-6.1-sol",
+                          "gpt-6.1-terra",
+                          "claude-fable-5-1",
+                          "claude-opus-5-5",
+                          "claude-sonnet-5-5",
+                          "gemini-4-argon",
+                          "grok-4.7",
+                          "kimi-k3",
+                          "kimi-k3.1-pro",
+                          "muse-wonder-1.0",
+                          "muse-spark-1.3",
+                          "mimo-v2.6-pro",
+                          "qwen3.8-max",
+                          "gpt-6-luna",
+                          "claude-haiku-5-5",
+                          "gemini-3.8-flash",
+                          "gemini-3.5-flash-lite",
+                          "glm-5.3-flash",
+                          "deepseek-flash",
+                          "mimo-v2.6-flash",
+                          "minimax-m3.1-flash"
+                        ],
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "operation": {
+                    "const": "annotate",
+                    "type": "string"
+                  },
+                  "visualPrompts": {
+                    "not": {}
+                  }
+                },
+                "required": [
+                  "modelId"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "boxScale": {
+                    "default": 1,
+                    "description": "Scale face boxes around their centers",
+                    "maximum": 1.5,
+                    "minimum": 0.5,
+                    "type": "number"
+                  },
+                  "confidence": {
+                    "default": 0.25,
+                    "description": "Confidence threshold",
+                    "maximum": 1,
+                    "minimum": 0.01,
+                    "type": "number"
+                  },
+                  "imageId": {
+                    "description": "Blur one image; omit for the entire dataset",
+                    "example": "507f1f77bcf86cd799439011",
+                    "maxLength": 24,
+                    "minLength": 24,
+                    "pattern": "^[0-9a-fA-F]{24}$",
+                    "type": "string"
+                  },
+                  "operation": {
+                    "const": "blur",
+                    "type": "string"
+                  },
+                  "preview": {
+                    "description": "Preview up to six images without changing pixels or creating a version",
+                    "type": "boolean"
+                  },
+                  "previewJobId": {
+                    "description": "Apply this completed preview without processing its images again",
+                    "example": "507f1f77bcf86cd799439011",
+                    "maxLength": 24,
+                    "minLength": 24,
+                    "pattern": "^[0-9a-fA-F]{24}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Auto-annotate images or preview and apply face blurring"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "202": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/StartBatchPredictResponse"
+            }
+          }
+        },
+        "description": "Image processing queued"
+      }
+    }
+  },
+  "start_training": {
+    "category": "training",
+    "method": "POST",
+    "operation_id": "post_api_training_start",
+    "parameters": [],
+    "path": "/api/training/start",
+    "request": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "description": "Start a cloud training job",
+            "properties": {
+              "captureDatasetVersion": {
+                "default": false,
+                "description": "Save an immutable dataset version for this run",
+                "type": "boolean"
+              },
+              "gpuType": {
+                "default": "rtx-4090",
+                "description": "Cloud GPU to use",
+                "enum": [
+                  "rtx-2000-ada",
+                  "rtx-a4500",
+                  "rtx-a5000",
+                  "rtx-4000-ada",
+                  "l4",
+                  "a40",
+                  "rtx-3090",
+                  "rtx-a6000",
+                  "rtx-pro-4000",
+                  "rtx-pro-4500",
+                  "rtx-4090",
+                  "rtx-6000-ada",
+                  "l40s",
+                  "rtx-pro-5000",
+                  "rtx-5090",
+                  "l40",
+                  "a100-80gb-pcie",
+                  "a100-80gb-sxm",
+                  "rtx-pro-6000",
+                  "h100-pcie",
+                  "h100-nvl",
+                  "h100-sxm",
+                  "h200-nvl",
+                  "h200-sxm",
+                  "b200",
+                  "b300"
+                ],
+                "type": "string"
+              },
+              "modelId": {
+                "description": "Model ID to train",
+                "example": "507f1f77bcf86cd799439011",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "trainArgs": {
+                "additionalProperties": {},
+                "description": "YOLO training arguments",
+                "properties": {
+                  "amp": {
+                    "default": true,
+                    "description": "Controls training precision: true/fp16 uses checked FP16 AMP, bf16 uses BF16, and false/fp32 uses full precision. Keep true unless hardware support or numerical stability requires a change.",
+                    "type": [
+                      "boolean",
+                      "string"
+                    ]
+                  },
+                  "angle": {
+                    "default": 1,
+                    "description": "Balances OBB rotation accuracy against box and class losses. Keep it near the default; raise it only when validation boxes are well placed but poorly angled.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "auto_augment": {
+                    "anyOf": [
+                      {
+                        "default": "randaugment",
+                        "enum": [
+                          "randaugment",
+                          "autoaugment",
+                          "augmix"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Chooses a classification augmentation policy. Keep randaugment for a strong general baseline; use null to disable it and activate the hsv color-jitter settings instead."
+                  },
+                  "batch": {
+                    "default": -1,
+                    "description": "Sets images per batch: -1 targets about 60% GPU memory, a value between 0 and 1 sets a memory fraction, and a positive integer fixes the image count. Keep -1 unless reproducing runs.",
+                    "type": "number"
+                  },
+                  "bgr": {
+                    "default": 0,
+                    "description": "Sets the chance of reversing RGB and BGR channels. Leave 0 for normal pipelines; enable only when deployment data may genuinely use either channel order.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "box": {
+                    "default": 7.5,
+                    "description": "Balances box localization against the other loss terms. Keep it near the default; raise it only when validation boxes are imprecise and class predictions are already strong.",
+                    "maximum": 50,
+                    "minimum": 1,
+                    "type": "number"
+                  },
+                  "cache": {
+                    "default": "false",
+                    "description": "Controls decoded-image caching. Leave false when memory is limited; use ram for fastest repeated reads or disk when storage is fast and RAM is insufficient.",
+                    "enum": [
+                      "ram",
+                      "disk",
+                      "false"
+                    ],
+                    "type": "string"
+                  },
+                  "channels_last": {
+                    "description": "Uses NHWC memory layout on CUDA when true; null/false keeps standard NCHW, and CPU or MPS ignores true. Leave null unless a CUDA benchmark shows a speedup.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "classes": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Filter by class indices"
+                  },
+                  "close_mosaic": {
+                    "default": 10,
+                    "description": "Turns off mosaic, MixUp, CutMix, and copy-paste for the final N epochs. Keep 10 for a natural-image finish; use 0 to keep them active throughout.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "cls": {
+                    "default": 0.5,
+                    "description": "Balances class prediction against localization losses. Keep it near the default; raise it when validation boxes are good but classes are often confused.",
+                    "maximum": 4,
+                    "minimum": 0.1,
+                    "type": "number"
+                  },
+                  "cls_pw": {
+                    "default": 0,
+                    "description": "Controls frequency-based class weighting: 0 disables it and 1 applies full weighting. Leave it at 0 unless validation shows minority classes are consistently ignored.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "cls_remap": {
+                    "default": true,
+                    "description": "Matches pretrained head rows to the new dataset by class name. Keep it enabled for fine-tuning; disable only to use ordinary shape-based checkpoint loading instead.",
+                    "type": "boolean"
+                  },
+                  "compile": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "enum": [
+                          "default",
+                          "reduce-overhead",
+                          "max-autotune",
+                          "max-autotune-no-cudagraphs"
+                        ],
+                        "type": "string"
+                      }
+                    ],
+                    "default": false,
+                    "description": "Uses torch.compile with the Inductor backend. Leave it off for quickest startup and widest compatibility; enable it for longer runs where compile cost may repay in throughput."
+                  },
+                  "copy_paste": {
+                    "default": 0,
+                    "description": "Controls how many eligible objects are pasted in flip mode, and also the apply probability in mixup mode. Leave 0 unless rare-object or occlusion coverage needs help.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "copy_paste_mode": {
+                    "default": "flip",
+                    "description": "Chooses the copy-paste source: flip mirrors objects within the same image, while mixup draws objects from another image. This matters only when copy_paste is above 0.",
+                    "enum": [
+                      "flip",
+                      "mixup"
+                    ],
+                    "type": "string"
+                  },
+                  "cos_lr": {
+                    "default": false,
+                    "description": "Decays learning rate on a cosine curve from lr0 toward lr0 × lrf. Leave it off for the standard schedule; enable it when a smoother late-training decay validates better.",
+                    "type": "boolean"
+                  },
+                  "cutmix": {
+                    "default": 0,
+                    "description": "Sets the chance of replacing a region with a patch from another image. Leave 0 unless occlusion robustness is needed; start low and verify validation quality.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "data": {
+                    "description": "Dataset path or ul:// URI",
+                    "example": "ul://jane-doe/datasets/coco8",
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "degrees": {
+                    "default": 0,
+                    "description": "Rotates images randomly from -degrees to +degrees. Leave 0 when orientation matters; otherwise match the largest realistic rotation in deployment.",
+                    "maximum": 180,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "deterministic": {
+                    "default": true,
+                    "description": "Requests deterministic algorithms for more reproducible runs. Keep it enabled for comparisons; disable only when throughput matters more than repeatability.",
+                    "type": "boolean"
+                  },
+                  "device": {
+                    "default": "auto",
+                    "description": "Selects training hardware. Leave auto to use the assigned accelerator; choose a specific device only when running locally and controlling placement yourself.",
+                    "enum": [
+                      "0",
+                      "auto",
+                      "cpu",
+                      "mps"
+                    ],
+                    "type": "string"
+                  },
+                  "dfl": {
+                    "default": 1.5,
+                    "description": "Balances box-distance regression against other losses: DFL for reg_max > 1, otherwise normalized L1. Keep it near the default; tune only when box edges lag on validation.",
+                    "maximum": 12,
+                    "minimum": 0.4,
+                    "type": "number"
+                  },
+                  "dgrad": {
+                    "default": 0.5,
+                    "description": "Weights errors in depth gradients and surface boundaries. Keep it near the default; raise it for blurry validation edges, watching for noisier depth surfaces.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "dlam": {
+                    "default": 1,
+                    "description": "Sets SILog's variance focus: 1 is fully scale-invariant and 0 becomes log-RMSE. Leave it at 1 unless absolute depth scale matters to the dataset.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "dlog": {
+                    "default": 1,
+                    "description": "Weights SILog, the primary relative-depth loss. Keep it near the default; change it only when validation shows depth accuracy needs rebalancing against edge quality.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "dropout": {
+                    "default": 0,
+                    "description": "Drops this fraction of classification-head activations during training. Leave 0 unless validation overfits; then try a small value before stronger regularization.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "epochs": {
+                    "description": "Sets the maximum full passes over the training set. Keep 100 as a baseline; increase it if validation is still improving, while patience can stop a plateau early.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "erasing": {
+                    "default": 0.4,
+                    "description": "Sets the chance of erasing a random region in classification images. Reduce it when small details define the class; raise it cautiously for occlusion robustness.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "fliplr": {
+                    "default": 0.5,
+                    "description": "Sets the chance of a left-right flip. Keep 0.5 for direction-neutral objects; use 0 when handedness, text, traffic direction, or left/right labels matter.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "flipud": {
+                    "default": 0,
+                    "description": "Sets the chance of an upside-down training image. Leave 0 when orientation matters; raise it only when vertical flips are plausible in deployment.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "fraction": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "items": false,
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      {
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "type": "array"
+                      }
+                    ],
+                    "default": 1,
+                    "description": "Limits dataset size. Test images download only when used for validation. Leave 1 for all selected images; use a 0–1 ratio or integer above 1 for a count. A [train, val, test] list controls each split, and only test accepts 0 for none."
+                  },
+                  "freeze": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                {
+                                  "maxLength": 100,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Freezes the first N layers, or a list of layer indices/module names, so their weights do not update. Leave null for full fine-tuning; freeze early layers for small datasets."
+                  },
+                  "hsv_h": {
+                    "default": 0.015,
+                    "description": "Randomly shifts hue by up to this fraction of the color wheel. Keep it small when color identifies a class; for classification it applies only when auto_augment is null.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "hsv_s": {
+                    "default": 0.7,
+                    "description": "Randomly changes color saturation by up to this fraction. Reduce it when saturation is meaningful; for classification it applies only when auto_augment is null.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "hsv_v": {
+                    "default": 0.4,
+                    "description": "Randomly changes image brightness by up to this fraction. Reduce it for fixed-exposure imagery; for classification it applies only when auto_augment is null.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "imgsz": {
+                    "default": 640,
+                    "description": "Sets the target input size: square batches normally, or the long-side size with rect=true. Keep the model default; increase it for small details or decrease it to save memory and time.",
+                    "maximum": 4096,
+                    "minimum": 32,
+                    "type": "integer"
+                  },
+                  "iou": {
+                    "default": 0.7,
+                    "description": "Sets the IoU threshold for non-maximum suppression during validation. Keep 0.7 for normal evaluation; lower it when duplicate overlapping detections dominate.",
+                    "maximum": 0.9,
+                    "minimum": 0.1,
+                    "type": "number"
+                  },
+                  "kobj": {
+                    "default": 1,
+                    "description": "Balances keypoint visibility/objectness against the other pose losses. Keep it near the default; raise it when visible and occluded keypoints are poorly distinguished.",
+                    "maximum": 10,
+                    "minimum": 0.5,
+                    "type": "number"
+                  },
+                  "lr0": {
+                    "default": 0.01,
+                    "description": "Sets the optimizer step size after warmup. Optimizer=auto ignores it; otherwise lower it for unstable loss or raise it if learning barely moves. Adam-family rates are usually about 10× lower than SGD.",
+                    "maximum": 0.1,
+                    "minimum": 1e-05,
+                    "type": "number"
+                  },
+                  "lrf": {
+                    "default": 0.01,
+                    "description": "Multiplies lr0 to set the learning rate at the final epoch. Leave it alone for standard fine-tuning; lower values make final updates gentler, while 1 keeps a constant rate.",
+                    "maximum": 1,
+                    "minimum": 0.01,
+                    "type": "number"
+                  },
+                  "mask_ratio": {
+                    "default": 4,
+                    "description": "Downsamples training masks by this factor. Keep 4 for most datasets; lower it for finer boundaries at higher memory cost, or raise it to save memory.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_det": {
+                    "default": 300,
+                    "description": "Caps detections retained per image during training validation. Keep 300 unless images legitimately contain more objects; raising it increases NMS, memory, and metric work.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "mixup": {
+                    "default": 0,
+                    "description": "Sets the chance of blending two images and their labels. Leave 0 unless validation benefits from stronger regularization; start low because blended scenes can be unrealistic.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "model": {
+                    "description": "Base model path or ul:// URI",
+                    "example": "yolo26n.pt",
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "momentum": {
+                    "default": 0.937,
+                    "description": "Carries past gradients into each update as SGD momentum or Adam beta1. Optimizer=auto ignores it; otherwise raise it to smooth noisy updates or lower it if optimization overshoots.",
+                    "maximum": 0.98,
+                    "minimum": 0.6,
+                    "type": "number"
+                  },
+                  "mosaic": {
+                    "default": 1,
+                    "description": "Sets the chance of combining four images into one training sample. Keep it high for varied scenes and small objects; reduce it when synthetic layouts hurt realism.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "multi_scale": {
+                    "default": 0,
+                    "description": "Varies each batch from imgsz × (1-range) to imgsz × (1+range). Leave 0 for stable speed; use a modest value when deployment object scales vary widely.",
+                    "maximum": 0.9,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "name": {
+                    "description": "Run name for callbacks",
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "nbs": {
+                    "default": 64,
+                    "description": "Normalizes loss, weight decay, and gradient accumulation independently of the actual batch size. Leave 64 unless intentionally retuning optimization scaling.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "optimizer": {
+                    "default": "auto",
+                    "description": "Selects the algorithm that updates model weights. Keep the displayed default for most runs; choose another only to reproduce an experiment or tune its learning-rate and momentum settings.",
+                    "enum": [
+                      "auto",
+                      "SGD",
+                      "MuSGD",
+                      "Adam",
+                      "AdamW",
+                      "NAdam",
+                      "RAdam",
+                      "RMSProp",
+                      "Adamax"
+                    ],
+                    "type": "string"
+                  },
+                  "overlap_mask": {
+                    "default": true,
+                    "description": "Merges all instances into one training mask, drawing smaller objects over larger overlaps. Keep it enabled for lower memory use; disable only when separate masks are required.",
+                    "type": "boolean"
+                  },
+                  "patience": {
+                    "default": 100,
+                    "description": "Stops after this many epochs without validation improvement. Keep 100 for long runs, lower it to save compute, or use 0 to disable early stopping.",
+                    "maximum": 1000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "perspective": {
+                    "default": 0,
+                    "description": "Applies perspective warping to simulate viewpoint changes. Leave 0 unless deployment includes perspective variation; even 0.001 is strong enough for most datasets.",
+                    "maximum": 0.001,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "pose": {
+                    "default": 12,
+                    "description": "Balances keypoint location against box and class losses. Keep it near the default; raise it only when validation keypoints lag behind otherwise good detections.",
+                    "maximum": 50,
+                    "minimum": 1,
+                    "type": "number"
+                  },
+                  "pretrained": {
+                    "default": true,
+                    "description": "Loads the selected model's learned weights instead of random initialization. Keep it enabled for almost all training; disable only for a deliberate from-scratch experiment.",
+                    "type": "boolean"
+                  },
+                  "profile": {
+                    "default": false,
+                    "description": "Benchmarks ONNX and TensorRT inference for supported training loggers. Leave it off unless those deployment-speed measurements are needed because profiling adds time.",
+                    "type": "boolean"
+                  },
+                  "project": {
+                    "description": "Project name for callbacks",
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "rect": {
+                    "default": false,
+                    "description": "Groups similar aspect ratios to reduce padding. Leave it off for normal randomized training; enable it for unusually wide/tall datasets when efficiency matters more than shape mixing.",
+                    "type": "boolean"
+                  },
+                  "resume": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "maxLength": 256,
+                        "type": "string"
+                      }
+                    ],
+                    "default": false,
+                    "description": "Restores model, optimizer, scheduler, and epoch state from the last checkpoint or a supplied checkpoint path. Leave false for a new run; use it only to continue an interrupted run."
+                  },
+                  "rle": {
+                    "default": 1,
+                    "description": "Controls the uncertainty-aware RLE keypoint loss on YOLO26/RLE-capable pose heads; other pose heads ignore it. Leave it at the default unless validation supports changing it.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "save_period": {
+                    "default": -1,
+                    "description": "Saves an extra checkpoint every N epochs. Leave -1 unless intermediate recovery points are needed; best.pt and last.pt are still saved.",
+                    "minimum": -1,
+                    "type": "integer"
+                  },
+                  "scale": {
+                    "anyOf": [
+                      {
+                        "maximum": 1,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "items": false,
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "number"
+                          },
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "number"
+                          }
+                        ],
+                        "type": "array"
+                      }
+                    ],
+                    "default": 0.5,
+                    "description": "Varies object scale: non-classification tasks use 1±scale or [min, max], while classification crops from 1-scale to full area. Keep the default unless deployment scales differ substantially."
+                  },
+                  "seed": {
+                    "default": 0,
+                    "description": "Seeds data order, initialization, and other random operations. Leave it fixed when comparing settings; change it only to measure variation across repeated runs.",
+                    "maximum": 2147483647,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "shear": {
+                    "default": 0,
+                    "description": "Shears images randomly from -shear to +shear degrees. Leave 0 unless slanted viewpoints are realistic; large values visibly distort object geometry.",
+                    "maximum": 180,
+                    "minimum": -180,
+                    "type": "number"
+                  },
+                  "single_cls": {
+                    "default": false,
+                    "description": "Maps every dataset category to one class. Leave it off when class identity matters; enable it only for class-agnostic object detection.",
+                    "type": "boolean"
+                  },
+                  "task": {
+                    "description": "YOLO task type",
+                    "enum": [
+                      "detect",
+                      "segment",
+                      "semantic",
+                      "depth",
+                      "classify",
+                      "pose",
+                      "obb"
+                    ],
+                    "type": "string"
+                  },
+                  "time": {
+                    "anyOf": [
+                      {
+                        "maximum": 720,
+                        "minimum": 0.1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Stops training after this many hours and overrides epochs. Leave null unless the run has a fixed time budget; validation still runs at normal epoch boundaries."
+                  },
+                  "translate": {
+                    "default": 0.1,
+                    "description": "Shifts images horizontally and vertically by up to this fraction. Keep it modest; larger values improve position tolerance but crop more objects at image edges.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "val": {
+                    "default": true,
+                    "description": "Runs validation each epoch for metrics, best.pt selection, and early stopping. Keep it enabled; false skips routine validation but still validates at the final or stopping epoch.",
+                    "type": "boolean"
+                  },
+                  "warmup_bias_lr": {
+                    "default": 0.1,
+                    "description": "Sets the bias learning rate during warmup. Leave it alone unless tuning early optimization; optimizer=auto overrides it to 0, so select an optimizer first.",
+                    "maximum": 0.2,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "warmup_epochs": {
+                    "default": 3,
+                    "description": "Ramps learning rate and momentum into their configured values over the first N epochs. Keep 3 for most runs; use longer warmup only when early loss is unstable.",
+                    "maximum": 5,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "warmup_momentum": {
+                    "default": 0.8,
+                    "description": "Sets momentum at the start of warmup before it rises to momentum. Leave it near the default; lower it only when the first batches produce unstable updates.",
+                    "maximum": 0.95,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "weight_decay": {
+                    "default": 0.0005,
+                    "description": "Penalizes large weights to reduce overfitting. Leave it near the default; increase it when train quality greatly exceeds validation quality, or decrease it if both underfit.",
+                    "maximum": 0.001,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "workers": {
+                    "default": 8,
+                    "description": "Sets data-loader processes per distributed rank. Keep 8 unless loading starves the GPU; raise it gradually, or lower it for limited CPU/RAM and Windows stability.",
+                    "maximum": 64,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "model",
+                  "data",
+                  "epochs"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "modelId",
+              "trainArgs"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "required": true
+    },
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TrainingStartResponse"
+            }
+          }
+        },
+        "description": "Training started"
+      }
+    }
+  }
+}
