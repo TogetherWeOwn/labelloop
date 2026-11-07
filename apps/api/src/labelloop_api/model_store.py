@@ -91,6 +91,7 @@ def variant_context(connection: sa.Connection, variant_id: object) -> sa.RowMapp
                 preprocessing_recipe.c.id.label("recipe_id"),
                 preprocessing_recipe.c.recipe_key,
                 preprocessing_recipe.c.policy,
+                preprocessing_recipe.c.immutable.label("recipe_immutable"),
             )
             .select_from(
                 yolo_dataset_variant.join(canonical_dataset_release)
@@ -113,7 +114,9 @@ def save_training(
 ) -> None:
     context = variant_context(connection, variant_id)
     request = result.request
-    if not all(context[key] for key in ("frozen", "validated", "non_empty_val")) or (
+    if not all(
+        context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
+    ) or (
         request.project_id,
         request.dataset_release_id,
         request.recipe_id,
@@ -157,13 +160,21 @@ def save_training(
     with connection.begin_nested():
         run_id = connection.execute(
             sa.insert(db.training_run).values(
-                run_key=request.run_id, variant_id=variant_id, record=json_record(result)
+                run_key=request.run_id,
+                variant_id=variant_id,
+                input_manifest=manifest,
+                record=json_record(result),
             )
         ).inserted_primary_key[0]
         connection.execute(
             sa.insert(db.evaluation_run),
             [
-                {"run_key": report.run_id, "training_run_id": run_id, "record": json_record(report)}
+                {
+                    "run_key": report.run_id,
+                    "training_run_id": run_id,
+                    "variant_id": variant_id,
+                    "record": json_record(report),
+                }
                 for report in reports
             ],
         )
@@ -186,14 +197,21 @@ def save_model(
     context = variant_context(connection, run["variant_id"])
     result = run["record"]
     request = result["request"]
+    inputs = run["input_manifest"]
+    if (
+        context["file_manifest"] != inputs
+        or context["policy"] != inputs["recipe"]
+        or context["class_map"] != inputs["class_map"]
+    ):
+        raise ValueError("model inputs changed since persisted training")
     if (
         (release.project_id, release.recipe_id) != (context["project_key"], context["recipe_key"])
         or release.weights_sha256 != result["selected"]["sha256"]
         or release.class_map_sha256 != request["class_map_sha256"]
         or asdict(release.policy) != request["policy"]
-        or release.preprocessing_sha256 != record_digest(context["policy"])
+        or release.preprocessing_sha256 != record_digest(inputs["recipe"])
         or release.class_ids
-        != tuple(sorted(context["class_map"], key=context["class_map"].__getitem__))
+        != tuple(sorted(inputs["class_map"], key=inputs["class_map"].__getitem__))
         or release.ultralytics_version != result["ultralytics_version"]
         or release.torch_version != result["torch_version"]
         or result["selected"]["evaluation_run_id"] not in release.evaluation_run_ids
@@ -244,13 +262,75 @@ def save_model(
         )
 
 
+def save_evaluation(
+    connection: sa.Connection, *, model_key: str, variant_id: object, report: EvaluationReport
+) -> None:
+    """Append an evaluation of an existing checkpoint on a separately frozen release.
+
+    This never changes training selection or the immutable initial model payload.
+    Additional linked evidence is included when loading the release and in promotion events.
+    """
+    row = (
+        connection.execute(
+            sa.select(db.model_release).where(db.model_release.c.release_key == model_key)
+        )
+        .mappings()
+        .one()
+    )
+    release = decode_release(row["record"])
+    context = variant_context(connection, variant_id)
+    if (
+        not all(
+            context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
+        )
+        or (context["project_key"], context["recipe_key"])
+        != (release.project_id, release.recipe_id)
+        or report.dataset_release_id != context["release_key"]
+        or report.recipe_id != release.recipe_id
+        or report.weights_sha256 != release.weights_sha256
+        or report.class_map_sha256 != release.class_map_sha256
+        or context["file_manifest"]["file_hashes"]["class-map.json"] != release.class_map_sha256
+        or context["file_manifest"]["recipe"] != context["policy"]
+        or record_digest(context["policy"]) != release.preprocessing_sha256
+        or tuple(sorted(context["class_map"], key=context["class_map"].__getitem__))
+        != release.class_ids
+        or report.policy != release.policy
+        or set(report.overall.per_class) != set(release.class_ids)
+        or report.role not in {"development", "calibration", "locked_final_test"}
+    ):
+        raise ValueError("independent evaluation does not match the model and frozen release")
+    with connection.begin_nested():
+        evaluation_id = connection.execute(
+            sa.insert(db.evaluation_run).values(
+                run_key=report.run_id,
+                training_run_id=row["training_run_id"],
+                variant_id=variant_id,
+                record=json_record(report),
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            sa.insert(db.model_evaluation).values(model_id=row["id"], evaluation_id=evaluation_id)
+        )
+
+
 def load_release(connection: sa.Connection, model_id: object | None) -> ModelRelease | None:
     if model_id is None:
         return None
-    return decode_release(
+    value = connection.execute(
+        sa.select(db.model_release.c.record).where(db.model_release.c.id == model_id)
+    ).scalar_one()
+    linked = (
         connection.execute(
-            sa.select(db.model_release.c.record).where(db.model_release.c.id == model_id)
-        ).scalar_one()
+            sa.select(db.evaluation_run.c.run_key)
+            .join(db.model_evaluation)
+            .where(db.model_evaluation.c.model_id == model_id)
+        )
+        .scalars()
+        .all()
+    )
+    initial = value["evaluation_run_ids"]
+    return decode_release(
+        value | {"evaluation_run_ids": initial + sorted(set(linked) - set(initial))}
     )
 
 
@@ -350,7 +430,8 @@ def change_registry(
                 .mappings()
                 .one()
             )
-            candidate = decode_release(candidate_row["record"])
+            candidate = load_release(connection, candidate_row["id"])
+            assert candidate is not None
             if policy is None or evaluation_key is None:
                 raise ValueError("promotion requires explicit gates and persisted evaluation")
             incumbent = (

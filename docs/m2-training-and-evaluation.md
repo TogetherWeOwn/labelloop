@@ -137,6 +137,38 @@ revisions and duplicate evaluation identities, and checks append-only guards.
 The fixture's zero mAP target exercises wiring only; it is not a production
 quality threshold. Registry snapshots join the existing Actions audit artifacts.
 
+## Fresh-context review corrections
+
+One fresh-context read-only pass found three correctness gaps, all addressed in
+code with regressions awaiting Actions (not yet accepted by formal review):
+
+- Training now rejects unlisted files and symlinks, copies only the frozen file
+  allowlist, and hashes those actual copies. A late unlisted file cannot enter
+  the loader through a recursive directory copy. Real smoke negatives add an
+  unlisted image/label and a symlink and require rejection before run creation.
+- Training stores an immutable input-manifest snapshot. Model creation uses that
+  training-time recipe/class mapping and rejects any divergence in current
+  inputs. Database triggers prevent changing immutable recipes or validated
+  variant content, while retaining the mutable external Platform mapping field.
+- `save_evaluation` appends source-frame evidence for an existing model on another
+  frozen variant of the same project/recipe/class contract. These records and
+  model/evaluation links are append-only: the initial model payload is never
+  rewritten. Loaded descriptors and promotion-event snapshots include additional
+  linked evaluation IDs, allowing an incumbent and challenger trained on different
+  releases to be compared on a shared development release. A synthetic persistence
+  regression exercises that distinct-release lineage; it does not claim another
+  actual training run or independent final-test qualification.
+
+The next Actions head after the exporter audit repair passed the full 640 CPU,
+ONNX and PostgreSQL path, but the 320 comparison failed at the detection tolerance
+check. Its zero-confidence fixture policy hit max_det=300 inside a nearly tied
+random-score cohort. The smoke now uses explicit size-scaled confidence and a
+larger bound, asserts nonempty results strictly below that bound, and retains the
+same 0.01-pixel/1e-5 tolerances and exact class/count checks. This is a fixture
+stability correction, not permission to accept drifting real exports. Failed
+comparisons now preserve both detection arrays for diagnosis. Corrected 320 and
+640 results remain pending Actions.
+
 ## Remaining before milestone acceptance
 
 - Verify and repair the corrected CPU export and PostgreSQL smoke in Actions.

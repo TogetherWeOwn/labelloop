@@ -142,7 +142,23 @@ def export_and_compare(
             exported = exported[exported[:, 4] > policy.conf].copy()
             exported[:, :4] = exported[:, :4].clip(0, policy.imgsz)
             rows = native.boxes.data.cpu().numpy()
-            compare_detections(rows, exported)
+            try:
+                compare_detections(rows, exported)
+            except ValueError:
+                write_record(
+                    evidence,
+                    {
+                        "status": "failed",
+                        "sample": image.name,
+                        "weights_sha256": expected_weights_sha256,
+                        "policy": asdict(policy),
+                        "native": rows.tolist(),
+                        "exported": exported.tolist(),
+                        "coordinate_atol_px": 0.01,
+                        "confidence_atol": 1e-5,
+                    },
+                )
+                raise
             counts.append(len(rows))
     finally:
         hook.remove()

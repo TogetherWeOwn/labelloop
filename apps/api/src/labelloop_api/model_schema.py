@@ -28,12 +28,14 @@ training_run = record_table(
     "training_run",
     sa.Column("run_key", sa.String, unique=True, nullable=False),
     sa.Column("variant_id", UUID, sa.ForeignKey(yolo_dataset_variant.c.id), nullable=False),
+    sa.Column("input_manifest", sa.JSON, nullable=False),
     sa.Column("record", sa.JSON, nullable=False),
 )
 evaluation_run = record_table(
     "evaluation_run",
     sa.Column("run_key", sa.String, unique=True, nullable=False),
     sa.Column("training_run_id", UUID, sa.ForeignKey(training_run.c.id), nullable=False),
+    sa.Column("variant_id", UUID, sa.ForeignKey(yolo_dataset_variant.c.id), nullable=False),
     sa.Column("record", sa.JSON, nullable=False),
 )
 model_release = record_table(

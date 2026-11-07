@@ -178,8 +178,9 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         class_map_sha256=file_digest(dataset / "class-map.json"),
         split_assignment_version=fixture.release.assignment.assignment_version,
         initialization_sha256=file_digest(initialization),
-        # Exercise nonempty NMS output even after a single randomly initialized CPU epoch.
-        policy=InferencePolicy(side, conf=0.0),
+        # Keep the coarse head above threshold, without truncating nearly tied random scores.
+        # A zero threshold plus max_det=300 cut through a tied score cohort at 320.
+        policy=InferencePolicy(side, conf=0.005 * (320 / side) ** 2, max_det=1000),
         epochs=1,
         batch=2,
     )
@@ -190,6 +191,20 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         output=output,
         validation_images=validation_images,
     )
+    rogue_image = dataset / "images/train/unlisted.png"
+    rogue_label = dataset / "labels/train/unlisted.txt"
+    rogue_image.write_bytes((dataset / manifest["samples"][0]["image_path"]).read_bytes())
+    rogue_label.write_text("")
+    with pytest.raises(ValueError, match="membership differs"):
+        backend.train(request)
+    assert not output.exists()
+    rogue_image.unlink()
+    rogue_label.unlink()
+    rogue_image.symlink_to(dataset / manifest["samples"][0]["image_path"])
+    with pytest.raises(ValueError, match="membership differs"):
+        backend.train(request)
+    assert not output.exists()
+    rogue_image.unlink()
     result = backend.train(request)
     assert len(result.checkpoints) == 1
     assert result.selected == result.checkpoints[0]
@@ -231,7 +246,7 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     assert exported.static_input_signature == (1, 3, side, side)
     assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
     assert exported.sample_count == len(validation_images)
-    assert all(count > 0 for count in exported.detection_counts)
+    assert all(0 < count < request.policy.max_det for count in exported.detection_counts)
     import numpy as np
     import onnxruntime as ort
 

@@ -223,6 +223,11 @@ class LocalUltralyticsBackend:
         ):
             raise ValueError("class mapping must be contiguous and match the manifest")
         class_ids = tuple(sorted(class_map, key=class_map.__getitem__))
+        entries = tuple(self.dataset.rglob("*"))
+        if any(path.is_symlink() for path in entries) or {
+            path.relative_to(self.dataset).as_posix() for path in entries if path.is_file()
+        } != set(manifest["file_hashes"]) | {"manifest.json"}:
+            raise ValueError("compiled dataset membership differs from frozen manifest")
         for relative, expected in manifest["file_hashes"].items():
             path = (self.dataset / relative).resolve()
             if not path.is_relative_to(self.dataset) or file_digest(path) != expected:
@@ -243,7 +248,13 @@ class LocalUltralyticsBackend:
         self.output.mkdir(parents=True, exist_ok=False)
         # Ultralytics creates label caches: only its disposable run copy may be mutated.
         data_root = self.output / "dataset"
-        shutil.copytree(self.dataset, data_root)
+        # Copy only the frozen allowlist, then hash the actual copies before the loader sees them.
+        for relative, expected in manifest["file_hashes"].items():
+            destination = data_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.dataset / relative, destination)
+            if file_digest(destination) != expected:
+                raise ValueError("compiled dataset changed while copying frozen inputs")
         data = YAML.load(data_root / "data.yaml")
         data.pop("test", None)
         data["path"] = str(data_root)

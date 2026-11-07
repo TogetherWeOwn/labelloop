@@ -16,6 +16,7 @@ from labelloop_api.model_store import (
     decode_report,
     load_registry,
     record_digest,
+    save_evaluation,
     save_model,
     save_training,
 )
@@ -137,6 +138,28 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             variant_id = seed_variant(connection, request, manifest)
             untouched = load_registry(connection, request.project_id, other_recipe)
             save_training(connection, variant_id=variant_id, result=result, reports=reports)
+            for statement in (
+                sa.update(preprocessing_recipe)
+                .where(preprocessing_recipe.c.recipe_key == request.recipe_id)
+                .values(policy=manifest["recipe"] | {"padding_color": [0, 0, 0]}),
+                sa.update(preprocessing_recipe)
+                .where(preprocessing_recipe.c.recipe_key == request.recipe_id)
+                .values(immutable=False),
+                sa.update(yolo_dataset_variant)
+                .where(yolo_dataset_variant.c.id == variant_id)
+                .values(file_manifest={}),
+            ):
+                with connection.begin_nested() as transaction:
+                    with pytest.raises(sa.exc.DatabaseError, match="immutable"):
+                        connection.execute(statement)
+                    transaction.rollback()
+            with pytest.raises(ValueError, match="training lineage"):
+                save_model(
+                    connection,
+                    training_run_key=request.run_id,
+                    release=replace(model, preprocessing_sha256="f" * 64),
+                    export_evidence=asdict(exported),
+                )
             with pytest.raises(sa.exc.IntegrityError):
                 save_training(
                     connection,
@@ -251,6 +274,11 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     transaction.rollback()
         with engine.connect() as connection:
             assert load_registry(connection, request.project_id, request.recipe_id) == restored
+        with engine.begin() as connection:
+            common_evaluation = exercise_common_evaluation(
+                connection, result, exported, manifest, model, reports[0], common
+            )
+            assert load_registry(connection, request.project_id, other_recipe) == untouched
         (output / "registry-smoke.json").write_text(
             json.dumps(
                 {
@@ -258,6 +286,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     "raced": asdict(winner),
                     "restored": asdict(restored),
                     "other_recipe_unchanged": True,
+                    "common_evaluation": common_evaluation,
                 },
                 sort_keys=True,
                 indent=2,
@@ -266,3 +295,108 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
         )
     finally:
         engine.dispose()
+
+
+def exercise_common_evaluation(connection, result, exported, manifest, model, report, common):
+    """Synthetic persistence regression, not a second actual training/inference claim."""
+    import hashlib
+
+    request = result.request
+    next_manifest = manifest | {"release_id": request.dataset_release_id + "-synthetic-r2"}
+    next_request = replace(
+        request,
+        run_id=request.run_id + "-synthetic-r2",
+        dataset_release_id=next_manifest["release_id"],
+        dataset_manifest_sha256=hashlib.sha256(
+            (json.dumps(next_manifest, sort_keys=True, indent=2) + "\n").encode()
+        ).hexdigest(),
+    )
+    checkpoint = replace(result.selected, evaluation_run_id=next_request.run_id + "-eval")
+    next_result = replace(
+        result, request=next_request, checkpoints=(checkpoint,), selected=checkpoint
+    )
+    next_report = replace(
+        report,
+        run_id=checkpoint.evaluation_run_id,
+        dataset_release_id=next_request.dataset_release_id,
+    )
+    next_variant = seed_variant(connection, next_request, next_manifest)
+    save_training(connection, variant_id=next_variant, result=next_result, reports=(next_report,))
+    challenger = replace(
+        model,
+        release_id=model.release_id + "-synthetic-r2",
+        evaluation_run_ids=(next_report.run_id,),
+    )
+    save_model(
+        connection,
+        training_run_key=next_request.run_id,
+        release=challenger,
+        export_evidence=asdict(exported),
+    )
+    gate = PromotionPolicy(1, 0.0)
+    with pytest.raises(ValueError, match="frozen evaluation protocol"):
+        change_registry(
+            connection,
+            **common,
+            expected_revision=3,
+            candidate_key=challenger.release_id,
+            evaluation_key=next_report.run_id,
+            incumbent_evaluation_key=report.run_id,
+            policy=gate,
+        )
+    shared_manifest = manifest | {"release_id": request.dataset_release_id + "-common-development"}
+    shared_variant = seed_variant(
+        connection,
+        replace(request, dataset_release_id=shared_manifest["release_id"]),
+        shared_manifest,
+    )
+    incumbent_shared = replace(
+        report,
+        run_id=request.run_id + "-incumbent-common",
+        dataset_release_id=shared_manifest["release_id"],
+    )
+    challenger_shared = replace(
+        report,
+        run_id=request.run_id + "-challenger-common",
+        dataset_release_id=shared_manifest["release_id"],
+    )
+    with pytest.raises(ValueError, match="independent evaluation"):
+        save_evaluation(
+            connection,
+            model_key=model.release_id,
+            variant_id=shared_variant,
+            report=replace(incumbent_shared, weights_sha256="f" * 64),
+        )
+    save_evaluation(
+        connection, model_key=model.release_id, variant_id=shared_variant, report=incumbent_shared
+    )
+    save_evaluation(
+        connection,
+        model_key=challenger.release_id,
+        variant_id=shared_variant,
+        report=challenger_shared,
+    )
+    initial_payload = connection.execute(
+        sa.select(db.model_release.c.record).where(
+            db.model_release.c.release_key == model.release_id
+        )
+    ).scalar_one()
+    assert initial_payload["evaluation_run_ids"] == list(model.evaluation_run_ids)
+    selected = change_registry(
+        connection,
+        **common,
+        expected_revision=3,
+        candidate_key=challenger.release_id,
+        evaluation_key=challenger_shared.run_id,
+        incumbent_evaluation_key=incumbent_shared.run_id,
+        policy=gate,
+    )
+    assert selected.champion.release_id == challenger.release_id and selected.revision == 4
+    restored = change_registry(connection, **common, expected_revision=4)
+    assert restored.champion.release_id == model.release_id and restored.revision == 5
+    assert incumbent_shared.run_id in restored.champion.evaluation_run_ids
+    return {
+        "scope": "synthetic retraining lineage and shared-development persistence only; no second actual training claim",
+        "selected": asdict(selected),
+        "restored": asdict(restored),
+    }
