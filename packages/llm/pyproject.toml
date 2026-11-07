@@ -3,7 +3,10 @@ name = "labelloop-llm"
 version = "0.0.0"
 description = "Review model adapters and fixture probes"
 requires-python = ">=3.12,<3.13"
-dependencies = ["pydantic==2.13.0"]
+dependencies = ["pydantic==2.13.0", "labelloop-core"]
+
+[tool.uv.sources]
+labelloop-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
