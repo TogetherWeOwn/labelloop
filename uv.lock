@@ -349,6 +349,18 @@ wheels = [
 ]
 
 [[package]]
+name = "hypothesis"
+version = "6.148.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/5e/6a506e81d4dfefed2e838b6beaaae87b2e411dda3da0a3abf94099f194ae/hypothesis-6.148.7.tar.gz", hash = "sha256:b96e817e715c5b1a278411e3b9baf6d599d5b12207ba25e41a8f066929f6c2a6", size = 471199, upload-time = "2025-12-05T02:12:38.068Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/55/fa5607e4a4af96dfa0e7efd81bbd130735cedd21aac70b25e06191bff92f/hypothesis-6.148.7-py3-none-any.whl", hash = "sha256:94dbd58ebf259afa3bafb1d3bf5761ac1bde6f1477de494798cbf7960aabbdee", size = 538127, upload-time = "2025-12-05T02:12:35.54Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.20"
 source = { registry = "https://pypi.org/simple" }
@@ -426,6 +438,8 @@ dependencies = [
     { name = "alembic" },
     { name = "certifi" },
     { name = "fastapi" },
+    { name = "labelloop-compiler" },
+    { name = "labelloop-core" },
     { name = "minio" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -439,6 +453,8 @@ requires-dist = [
     { name = "alembic", specifier = "==1.18.4" },
     { name = "certifi", specifier = "==2026.10.23" },
     { name = "fastapi", specifier = "==0.135.1" },
+    { name = "labelloop-compiler", editable = "packages/compiler" },
+    { name = "labelloop-core", editable = "packages/core" },
     { name = "minio", specifier = "==7.2.20" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
     { name = "pydantic", specifier = "==2.13.0" },
@@ -452,12 +468,16 @@ name = "labelloop-compiler"
 version = "0.0.0"
 source = { editable = "packages/compiler" }
 dependencies = [
+    { name = "labelloop-core" },
+    { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "labelloop-core", editable = "packages/core" },
+    { name = "numpy", specifier = "==2.5.4" },
     { name = "opencv-python-headless", specifier = "==4.13.0.92" },
     { name = "pillow", specifier = "==12.2.0" },
 ]
@@ -466,6 +486,16 @@ requires-dist = [
 name = "labelloop-core"
 version = "0.0.0"
 source = { editable = "packages/core" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pillow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = "==2.5.4" },
+    { name = "pillow", specifier = "==12.2.0" },
+]
 
 [[package]]
 name = "labelloop-llm"
@@ -524,6 +554,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "hypothesis" },
     { name = "import-linter" },
     { name = "labelloop-api" },
     { name = "labelloop-compiler" },
@@ -551,6 +582,7 @@ runtime = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "hypothesis", specifier = "==6.148.7" },
     { name = "import-linter", specifier = "==2.16" },
     { name = "labelloop-api", editable = "apps/api" },
     { name = "labelloop-compiler", editable = "packages/compiler" },
@@ -1114,6 +1146,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/70/b3/c19426f783614d625699a4b247faf628ea9ab1db228674491767b417f9e1/setuptools-84.2.1.tar.gz", hash = "sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc", size = 1230289, upload-time = "2026-10-20T19:01:37.742Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl", hash = "sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2", size = 876263, upload-time = "2026-10-20T19:01:35.678Z" },
+]
+
+[[package]]
+name = "sortedcontainers"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
 ]
 
 [[package]]

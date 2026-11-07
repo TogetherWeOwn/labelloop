@@ -1,0 +1,813 @@
+{
+  "annotation_policy": "Fixture-only coarse visible rectangles; not independently adjudicated gold ground truth.",
+  "annotation_licence": "CC0-1.0 for fixture metadata only; image licences and attribution remain in manifest.json.",
+  "classes": [
+    {
+      "stable_id": "keyboard",
+      "name": "keyboard",
+      "definition": "Visible extent of computer keyboard hardware."
+    },
+    {
+      "stable_id": "keyboard_key_switch",
+      "name": "keyboard key switch",
+      "definition": "Visible loose switch or keypad hardware."
+    }
+  ],
+  "class_map": {
+    "keyboard": 0,
+    "keyboard_key_switch": 1
+  },
+  "images": [
+    {
+      "asset_id": "keyboard-01",
+      "file": "keyboard-01.jpg",
+      "normalized_sha256": "0fb7033f804389300a7fc7198713a5ef7f3bb6acdb528e53e2d84dec2e90121d",
+      "width": 160,
+      "height": 160,
+      "sha256": "0fb7033f804389300a7fc7198713a5ef7f3bb6acdb528e53e2d84dec2e90121d",
+      "objects": [
+        {
+          "object_id": "keyboard-01-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            53,
+            160,
+            108
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-01",
+        "sha256": "0fb7033f804389300a7fc7198713a5ef7f3bb6acdb528e53e2d84dec2e90121d",
+        "phash": 13886215420420375615,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-02",
+      "file": "keyboard-02.jpg",
+      "normalized_sha256": "eb29e00d4669edd10eac1a6589b134bd8c0bb96290784361a7cd8fbeaf0293e3",
+      "width": 160,
+      "height": 160,
+      "sha256": "eb29e00d4669edd10eac1a6589b134bd8c0bb96290784361a7cd8fbeaf0293e3",
+      "objects": [
+        {
+          "object_id": "keyboard-02-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            52,
+            160,
+            108
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-02",
+        "sha256": "eb29e00d4669edd10eac1a6589b134bd8c0bb96290784361a7cd8fbeaf0293e3",
+        "phash": 16895981489720264101,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-03",
+      "file": "keyboard-03.jpg",
+      "normalized_sha256": "e1c8185ee81253ddb86bfbd6505da5f3204fca59e92033a4d9bb0473adac15aa",
+      "width": 160,
+      "height": 160,
+      "sha256": "e1c8185ee81253ddb86bfbd6505da5f3204fca59e92033a4d9bb0473adac15aa",
+      "objects": [
+        {
+          "object_id": "keyboard-03-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            54,
+            34,
+            139,
+            78
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-03",
+        "sha256": "e1c8185ee81253ddb86bfbd6505da5f3204fca59e92033a4d9bb0473adac15aa",
+        "phash": 17298202956890339576,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-04",
+      "file": "keyboard-04.jpg",
+      "normalized_sha256": "b506d53e5357362b62b75d308cf3d6a782a4a5251bdd98221f843689891fa8d2",
+      "width": 160,
+      "height": 160,
+      "sha256": "b506d53e5357362b62b75d308cf3d6a782a4a5251bdd98221f843689891fa8d2",
+      "objects": [
+        {
+          "object_id": "keyboard-04-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            28,
+            160,
+            82
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-04",
+        "sha256": "b506d53e5357362b62b75d308cf3d6a782a4a5251bdd98221f843689891fa8d2",
+        "phash": 16960439328511672503,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-05",
+      "file": "keyboard-05.jpg",
+      "normalized_sha256": "e4f43e2211719cc17d1418d1f4936de4916b36a3a1b3a56c711327eef401c6a7",
+      "width": 160,
+      "height": 160,
+      "sha256": "e4f43e2211719cc17d1418d1f4936de4916b36a3a1b3a56c711327eef401c6a7",
+      "objects": [
+        {
+          "object_id": "keyboard-05-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            18,
+            160,
+            135
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-05",
+        "sha256": "e4f43e2211719cc17d1418d1f4936de4916b36a3a1b3a56c711327eef401c6a7",
+        "phash": 10756997887412139753,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-06",
+      "file": "keyboard-06.jpg",
+      "normalized_sha256": "e4eaec7357c86e6622af463623c00523366fdf4f7df89d8afcdafac37728c222",
+      "width": 160,
+      "height": 160,
+      "sha256": "e4eaec7357c86e6622af463623c00523366fdf4f7df89d8afcdafac37728c222",
+      "objects": [
+        {
+          "object_id": "keyboard-06-obj-1",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            59,
+            36,
+            76,
+            49
+          ],
+          "truncated_at_image_edge": false
+        },
+        {
+          "object_id": "keyboard-06-obj-2",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            81,
+            40,
+            101,
+            59
+          ],
+          "truncated_at_image_edge": false
+        },
+        {
+          "object_id": "keyboard-06-obj-3",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            59,
+            57,
+            81,
+            82
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-06",
+        "sha256": "e4eaec7357c86e6622af463623c00523366fdf4f7df89d8afcdafac37728c222",
+        "phash": 14301930096398181719,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard_key_switch": 3
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-07",
+      "file": "keyboard-07.jpg",
+      "normalized_sha256": "9d789e287656376320a8bf918432fc44c42ad9b02cadfcb5fa814e75afdec202",
+      "width": 160,
+      "height": 160,
+      "sha256": "9d789e287656376320a8bf918432fc44c42ad9b02cadfcb5fa814e75afdec202",
+      "objects": [
+        {
+          "object_id": "keyboard-07-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            51,
+            160,
+            107
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-07",
+        "sha256": "9d789e287656376320a8bf918432fc44c42ad9b02cadfcb5fa814e75afdec202",
+        "phash": 14211876926258888388,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-08",
+      "file": "keyboard-08.jpg",
+      "normalized_sha256": "8b313ca3d8e10324f0c791469ad791d4091be48072aa6924e6e8db2d72521d0c",
+      "width": 160,
+      "height": 160,
+      "sha256": "8b313ca3d8e10324f0c791469ad791d4091be48072aa6924e6e8db2d72521d0c",
+      "objects": [
+        {
+          "object_id": "keyboard-08-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            30,
+            59,
+            125,
+            104
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-08",
+        "sha256": "8b313ca3d8e10324f0c791469ad791d4091be48072aa6924e6e8db2d72521d0c",
+        "phash": 11247662183444489874,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-09",
+      "file": "keyboard-09.jpg",
+      "normalized_sha256": "3942e648f76efba9c7db38b079d35c61f7ae57c07694403af99043f65081d2db",
+      "width": 160,
+      "height": 160,
+      "sha256": "3942e648f76efba9c7db38b079d35c61f7ae57c07694403af99043f65081d2db",
+      "objects": [
+        {
+          "object_id": "keyboard-09-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            27,
+            160,
+            133
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-09",
+        "sha256": "3942e648f76efba9c7db38b079d35c61f7ae57c07694403af99043f65081d2db",
+        "phash": 13865386799071215992,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-10",
+      "file": "keyboard-10.jpg",
+      "normalized_sha256": "577c6edaa53cb851d88b3254bc71db749a67966360b39388140a6c795e2c7ebb",
+      "width": 160,
+      "height": 160,
+      "sha256": "577c6edaa53cb851d88b3254bc71db749a67966360b39388140a6c795e2c7ebb",
+      "objects": [
+        {
+          "object_id": "keyboard-10-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            25,
+            70,
+            135,
+            124
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-10",
+        "sha256": "577c6edaa53cb851d88b3254bc71db749a67966360b39388140a6c795e2c7ebb",
+        "phash": 16890914879173061226,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-11",
+      "file": "keyboard-11.jpg",
+      "normalized_sha256": "df87ae0668a57202c6ffc024ce98b67e728f16bdd042cc22305de5fde69a7699",
+      "width": 160,
+      "height": 160,
+      "sha256": "df87ae0668a57202c6ffc024ce98b67e728f16bdd042cc22305de5fde69a7699",
+      "objects": [
+        {
+          "object_id": "keyboard-11-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            69,
+            160,
+            91
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-11",
+        "sha256": "df87ae0668a57202c6ffc024ce98b67e728f16bdd042cc22305de5fde69a7699",
+        "phash": 9986156485062030442,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-12",
+      "file": "keyboard-12.jpg",
+      "normalized_sha256": "951fb4fcf788cd739d0ed256defe9679f3245f3f25ce2fa6765c0770378ed4d7",
+      "width": 160,
+      "height": 160,
+      "sha256": "951fb4fcf788cd739d0ed256defe9679f3245f3f25ce2fa6765c0770378ed4d7",
+      "objects": [
+        {
+          "object_id": "keyboard-12-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            52,
+            160,
+            111
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-12",
+        "sha256": "951fb4fcf788cd739d0ed256defe9679f3245f3f25ce2fa6765c0770378ed4d7",
+        "phash": 13845965044202221023,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-13",
+      "file": "keyboard-13.jpg",
+      "normalized_sha256": "464e715e4ad1f7f1aa843489aad86bbe8597b5fc3eeeb0733d7ff7ae4e18ef9b",
+      "width": 160,
+      "height": 160,
+      "sha256": "464e715e4ad1f7f1aa843489aad86bbe8597b5fc3eeeb0733d7ff7ae4e18ef9b",
+      "objects": [
+        {
+          "object_id": "keyboard-13-obj-1",
+          "class_id": "keyboard",
+          "box": [
+            0,
+            55,
+            160,
+            107
+          ],
+          "truncated_at_image_edge": true
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-13",
+        "sha256": "464e715e4ad1f7f1aa843489aad86bbe8597b5fc3eeeb0733d7ff7ae4e18ef9b",
+        "phash": 17808227746633317930,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard": 1
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-14",
+      "file": "keyboard-14.jpg",
+      "normalized_sha256": "e66bb400e7aa36302046d30aec3f8f6ef04e7606445ae1c492d722eed0c0e149",
+      "width": 160,
+      "height": 160,
+      "sha256": "e66bb400e7aa36302046d30aec3f8f6ef04e7606445ae1c492d722eed0c0e149",
+      "objects": [
+        {
+          "object_id": "keyboard-14-obj-1",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            18,
+            71,
+            70,
+            130
+          ],
+          "truncated_at_image_edge": false
+        },
+        {
+          "object_id": "keyboard-14-obj-2",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            80,
+            69,
+            137,
+            132
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-14",
+        "sha256": "e66bb400e7aa36302046d30aec3f8f6ef04e7606445ae1c492d722eed0c0e149",
+        "phash": 18029462207741544849,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard_key_switch": 2
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-15",
+      "file": "keyboard-15.jpg",
+      "normalized_sha256": "d28bfb9c5d23dcbdbeb1b9604c813096b935b8173ce07c852c9734e567905015",
+      "width": 160,
+      "height": 160,
+      "sha256": "d28bfb9c5d23dcbdbeb1b9604c813096b935b8173ce07c852c9734e567905015",
+      "objects": [
+        {
+          "object_id": "keyboard-15-obj-1",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            24,
+            59,
+            67,
+            128
+          ],
+          "truncated_at_image_edge": false
+        },
+        {
+          "object_id": "keyboard-15-obj-2",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            101,
+            64,
+            137,
+            119
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-15",
+        "sha256": "d28bfb9c5d23dcbdbeb1b9604c813096b935b8173ce07c852c9734e567905015",
+        "phash": 16846723984584325448,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard_key_switch": 2
+        }
+      }
+    },
+    {
+      "asset_id": "keyboard-16",
+      "file": "keyboard-16.jpg",
+      "normalized_sha256": "a00231e6c1de902fe8f58fe20f52e5004fe3a45346ad5ad49ca17682cfee967c",
+      "width": 160,
+      "height": 160,
+      "sha256": "a00231e6c1de902fe8f58fe20f52e5004fe3a45346ad5ad49ca17682cfee967c",
+      "objects": [
+        {
+          "object_id": "keyboard-16-obj-1",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            25,
+            65,
+            68,
+            132
+          ],
+          "truncated_at_image_edge": false
+        },
+        {
+          "object_id": "keyboard-16-obj-2",
+          "class_id": "keyboard_key_switch",
+          "box": [
+            82,
+            70,
+            139,
+            137
+          ],
+          "truncated_at_image_edge": false
+        }
+      ],
+      "evidence": {
+        "asset_id": "keyboard-16",
+        "sha256": "a00231e6c1de902fe8f58fe20f52e5004fe3a45346ad5ad49ca17682cfee967c",
+        "phash": 18388098118806721177,
+        "embedding": [],
+        "metadata": {},
+        "class_counts": {
+          "keyboard_key_switch": 2
+        }
+      }
+    }
+  ],
+  "split_assignment": {
+    "assignment_version": "union-find-grouped-stratified-v1-seed20261107",
+    "asset_splits": {
+      "keyboard-01": "train",
+      "keyboard-02": "train",
+      "keyboard-03": "train",
+      "keyboard-04": "train",
+      "keyboard-05": "val",
+      "keyboard-06": "val",
+      "keyboard-07": "val",
+      "keyboard-08": "train",
+      "keyboard-09": "train",
+      "keyboard-10": "train",
+      "keyboard-11": "train",
+      "keyboard-12": "train",
+      "keyboard-13": "val",
+      "keyboard-14": "val",
+      "keyboard-15": "val",
+      "keyboard-16": "val"
+    },
+    "group_splits": {
+      "group-0005": "val",
+      "group-0013": "val",
+      "group-0015": "val",
+      "group-0014": "val",
+      "group-0004": "val",
+      "group-0006": "val",
+      "group-0012": "val",
+      "group-0001": "train",
+      "group-0003": "train",
+      "group-0002": "train",
+      "group-0008": "train",
+      "group-0000": "train",
+      "group-0011": "train",
+      "group-0009": "train",
+      "group-0010": "train",
+      "group-0007": "train"
+    },
+    "group_ids": {
+      "keyboard-01": "group-0000",
+      "keyboard-02": "group-0001",
+      "keyboard-03": "group-0002",
+      "keyboard-04": "group-0003",
+      "keyboard-05": "group-0004",
+      "keyboard-06": "group-0005",
+      "keyboard-07": "group-0006",
+      "keyboard-08": "group-0007",
+      "keyboard-09": "group-0008",
+      "keyboard-10": "group-0009",
+      "keyboard-11": "group-0010",
+      "keyboard-12": "group-0011",
+      "keyboard-13": "group-0012",
+      "keyboard-14": "group-0013",
+      "keyboard-15": "group-0014",
+      "keyboard-16": "group-0015"
+    },
+    "seed": 20261107,
+    "algorithm": "union-find-grouped-stratified-v1",
+    "reasons": {
+      "group-0000": "seeded group-level class-count stratification",
+      "group-0001": "seeded group-level class-count stratification",
+      "group-0002": "seeded group-level class-count stratification",
+      "group-0003": "seeded group-level class-count stratification",
+      "group-0004": "seeded group-level class-count stratification",
+      "group-0005": "seeded group-level class-count stratification",
+      "group-0006": "seeded group-level class-count stratification",
+      "group-0007": "seeded group-level class-count stratification",
+      "group-0008": "seeded group-level class-count stratification",
+      "group-0009": "seeded group-level class-count stratification",
+      "group-0010": "seeded group-level class-count stratification",
+      "group-0011": "seeded group-level class-count stratification",
+      "group-0012": "seeded group-level class-count stratification",
+      "group-0013": "seeded group-level class-count stratification",
+      "group-0014": "seeded group-level class-count stratification",
+      "group-0015": "seeded group-level class-count stratification"
+    },
+    "locked": true
+  },
+  "evidence": [
+    {
+      "asset_id": "keyboard-01",
+      "sha256": "0fb7033f804389300a7fc7198713a5ef7f3bb6acdb528e53e2d84dec2e90121d",
+      "phash": 13886215420420375615,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-02",
+      "sha256": "eb29e00d4669edd10eac1a6589b134bd8c0bb96290784361a7cd8fbeaf0293e3",
+      "phash": 16895981489720264101,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-03",
+      "sha256": "e1c8185ee81253ddb86bfbd6505da5f3204fca59e92033a4d9bb0473adac15aa",
+      "phash": 17298202956890339576,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-04",
+      "sha256": "b506d53e5357362b62b75d308cf3d6a782a4a5251bdd98221f843689891fa8d2",
+      "phash": 16960439328511672503,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-05",
+      "sha256": "e4f43e2211719cc17d1418d1f4936de4916b36a3a1b3a56c711327eef401c6a7",
+      "phash": 10756997887412139753,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-06",
+      "sha256": "e4eaec7357c86e6622af463623c00523366fdf4f7df89d8afcdafac37728c222",
+      "phash": 14301930096398181719,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard_key_switch": 3
+      }
+    },
+    {
+      "asset_id": "keyboard-07",
+      "sha256": "9d789e287656376320a8bf918432fc44c42ad9b02cadfcb5fa814e75afdec202",
+      "phash": 14211876926258888388,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-08",
+      "sha256": "8b313ca3d8e10324f0c791469ad791d4091be48072aa6924e6e8db2d72521d0c",
+      "phash": 11247662183444489874,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-09",
+      "sha256": "3942e648f76efba9c7db38b079d35c61f7ae57c07694403af99043f65081d2db",
+      "phash": 13865386799071215992,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-10",
+      "sha256": "577c6edaa53cb851d88b3254bc71db749a67966360b39388140a6c795e2c7ebb",
+      "phash": 16890914879173061226,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-11",
+      "sha256": "df87ae0668a57202c6ffc024ce98b67e728f16bdd042cc22305de5fde69a7699",
+      "phash": 9986156485062030442,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-12",
+      "sha256": "951fb4fcf788cd739d0ed256defe9679f3245f3f25ce2fa6765c0770378ed4d7",
+      "phash": 13845965044202221023,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-13",
+      "sha256": "464e715e4ad1f7f1aa843489aad86bbe8597b5fc3eeeb0733d7ff7ae4e18ef9b",
+      "phash": 17808227746633317930,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard": 1
+      }
+    },
+    {
+      "asset_id": "keyboard-14",
+      "sha256": "e66bb400e7aa36302046d30aec3f8f6ef04e7606445ae1c492d722eed0c0e149",
+      "phash": 18029462207741544849,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard_key_switch": 2
+      }
+    },
+    {
+      "asset_id": "keyboard-15",
+      "sha256": "d28bfb9c5d23dcbdbeb1b9604c813096b935b8173ce07c852c9734e567905015",
+      "phash": 16846723984584325448,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard_key_switch": 2
+      }
+    },
+    {
+      "asset_id": "keyboard-16",
+      "sha256": "a00231e6c1de902fe8f58fe20f52e5004fe3a45346ad5ad49ca17682cfee967c",
+      "phash": 18388098118806721177,
+      "embedding": [],
+      "metadata": {},
+      "class_counts": {
+        "keyboard_key_switch": 2
+      }
+    }
+  ]
+}

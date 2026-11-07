@@ -11,6 +11,7 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.hypothesis/
 *.egg-info/
 
 # Web and coverage

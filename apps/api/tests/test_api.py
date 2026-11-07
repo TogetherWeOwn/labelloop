@@ -33,9 +33,10 @@ def test_readiness(development_environment: dict[str, str]) -> None:
         patch("labelloop_api.main.Minio") as minio,
         patch.dict("os.environ", development_environment),
     ):
-        connect.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = (
-            "vector",
-        )
+        connect.return_value.__enter__.return_value.execute.return_value.fetchone.side_effect = [
+            ("vector",),
+            (True,),
+        ]
         minio.return_value.bucket_exists.return_value = True
         response = TestClient(app, raise_server_exceptions=True).get("/readyz")
     assert response.status_code == 200

@@ -13,6 +13,8 @@ dependencies = [
   "psycopg[binary]==3.3.3",
   "minio==7.2.20",
   "uvicorn==0.40.0",
+  "labelloop-core",
+  "labelloop-compiler",
 ]
 
 [project.scripts]
@@ -24,3 +26,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/labelloop_api"]
+
+[tool.uv.sources]
+labelloop-core = { workspace = true }
+labelloop-compiler = { workspace = true }
