@@ -96,7 +96,8 @@ Neural training and hosted inference have statistical and implementation-depende
 | ML worker | separate `worker-ml` package that imports `ultralytics`/PyTorch | The only package that imports `ultralytics` (§12.3) |
 | Web | TypeScript, React + Vite, `pnpm` | Built from `TogetherWeOwn/two-design-kit` tokens and components; screen designs are produced before implementation |
 | LLM access | OpenAI-compatible `/v1/chat/completions` plus Anthropic Messages adapters behind `LLMReviewer` | Each configured model is probed with a fixture before use (§5.3) |
-| Local runtime | `docker compose`: postgres, minio, api, worker-core, worker-ml (CPU), web | `make dev`, `make test` |
+| Workers | `worker-core` (non-ML stages), `worker-ml` (ultralytics), `worker-llm` (LLM review calls), `worker-platform` (Platform mutations) | Separate processes and containers. Only `worker-llm` and `worker-platform` hold a decryption key, each for its own secret type (§12.2) |
+| Local runtime | `docker compose`: postgres, minio, api, worker-core, worker-ml (CPU), worker-llm, worker-platform, web | `make dev`, `make test` |
 | CI | GitHub Actions only: lint, type-check, unit, geometry property tests, compiler determinism, CPU tiny-training smoke on the local backend | No paid account in CI; the live Platform smoke is opt-in (§9.7) |
 
 Repository layout (monorepo):
@@ -110,6 +111,8 @@ packages/platform/   Ultralytics Platform adapter (generated client + contract t
 packages/llm/        LLM reviewer adapters, schemas, probes
 workers/core/        job runner for non-ML stages
 workers/ml/          proposals, controlled training/eval/export (imports ultralytics)
+workers/llm/         LLM review job runner (uses packages/llm; holds the LLM key-decryption key)
+workers/platform/    Platform mutation job runner (uses packages/platform; holds the Platform key-decryption key)
 fixtures/            tiny licence-clean datasets and golden outputs
 docs/                plan, ADRs, runbooks
 ```
@@ -538,9 +541,12 @@ Create the model record in the intended Platform project, start the job against 
 
 A representative REST body for `/api/training/start` follows. These are example experiment settings, not a claim that 100 epochs or batch 16 is optimal. The adapter must validate supported arguments and inspect the resolved configuration; unsupported controls must not be silently discarded. [U1] [U4] [U8]
 
+**[v0.3]** The adapter always sends the full pinned set from the §14 `training` profile. The body below shows the keys that most often go wrong: `gpuType`, the augmentation defaults that would otherwise stay on, `tile`, and `nms`. `nms: external` in the recipe maps to `"nms": true`, and `end2end` maps to `"nms": false`. Any pinned key missing from the request fails acceptance check 26.
+
 ```json
 {
   "modelId": "returned-model-record-id",
+  "gpuType": "rtx-4090",
   "captureDatasetVersion": true,
   "trainArgs": {
     "model": "ul://selected-workspace/base-models/yolo26n-pinned-r1",
@@ -553,6 +559,12 @@ A representative REST body for `/api/training/start` follows. These are example 
     "mosaic": 0.0,
     "mixup": 0.0,
     "cutmix": 0.0,
+    "close_mosaic": 0,
+    "scale": 0.0,
+    "translate": 0.0,
+    "fliplr": 0.0,
+    "tile": false,
+    "nms": true,
     "seed": 0,
     "deterministic": true
   }
@@ -777,9 +789,9 @@ Every paid external operation goes through `BudgetGate`. That covers Platform tr
 ### 12.2 Secrets, authentication and authorization [v0.3]
 
 - **v1 tenancy.** One deployment serves one organization. There are two roles: `admin`, who manages connections, budgets, promotion and project policy, and `reviewer`, who annotates, adjudicates and audits. Authentication uses server-side sessions with an Argon2id password hash, and optional OIDC comes later. Every review event and promotion records the authenticated principal. Model workers authenticate as service principals that cannot write human-review fields (acceptance check 11).
-- **Provider secrets.** The Platform API key (a full-owner, non-expiring credential) and LLM provider keys are encrypted at rest with an application master key supplied by the environment, using AES-GCM envelope encryption.
-- **Decryption scope.** Only `worker-platform` and `worker-llm` can decrypt their own secret type. The API stores keys and shows only a fingerprint (last 4 characters plus the SHA-256 prefix). Secrets never appear in prompts, datasets, manifests, logs, browser bundles or error messages; log redaction is tested.
-- **Rotation.** Replacing a key re-validates it against `GET` on the workspace and records the change in the audit trail.
+- **Provider secrets.** The Platform API key (a full-owner, non-expiring credential) and LLM provider keys are encrypted at rest with envelope encryption: an AES-GCM data key per secret, wrapped with a per-secret-type key pair whose private half is supplied by the environment.
+- **Decryption scope.** Only `worker-platform` and `worker-llm` can decrypt their own secret type. Each holds only its own private key; the API and the other workers get only the public halves, so they can encrypt new keys but not decrypt them. The API stores keys and shows only a fingerprint (last 4 characters plus the SHA-256 prefix). Secrets never appear in prompts, datasets, manifests, logs, browser bundles or error messages; log redaction is tested.
+- **Rotation.** Replacing a key re-validates it (a `worker-platform` job calls `GET` on the workspace) and records the change in the audit trail.
 
 ### 12.3 Licensing [v0.3]
 
@@ -968,11 +980,11 @@ An unresolved target blocks the affected sample's eligibility. Other complete el
 
 | Milestone | Deliverable | Exit condition | Acceptance checks (§16) |
 |---|---|---|---|
-| 0. Bootstrap | Monorepo skeleton (§2.3), docker compose dev stack, CI on Actions (lint, types, unit, `ci-ok`), gitleaks, pr-lint, pr-size, AGENTS.md, ADR log, two licence-clean fixture domains | `ci-ok` green on `main`; `make dev` brings up the stack; protect-main ruleset requires `ci-ok`, `gitleaks` and Devin Review | — |
-| 1. Canonical foundation + compiler | Schema and migrations (projects, ontology, assets, revisions, review events, split groups, releases), near-duplicate grouping, letterbox 640/320 compiler, manifests, validators | Two unrelated fixture domains represented without engine edits; property-based geometry tests; byte-identical recompilation | 1, 2, 3, 4, 5, 6, 7, 11, 20 (data part) |
-| 2. Local training + evaluation | `local_ultralytics` backend, dataloader retention audit, fixed-shape validator, original-frame evaluator, model registry with per-recipe promotion/rollback | CPU CI trains a yolo26n run on both recipes, evaluates on the source frame and promotes/rolls back independently | 12, 13, 14, 15, 17, 19 |
-| 3. Review UI + LLM review | Review screens (designed on `two-design-kit` before implementation), proposal workers, discovery pass, LLM adapters with fixture probes, untrusted-patch validator, adjudication and audit sampling, budget ledger for LLM calls | Measured annotation quality on fixture domains with unresolved cases preserved; model workers cannot set human fields | 5, 10, 11, 16 |
-| 4. Platform adapter | Encrypted connection, pinned SDK and contract snapshot, release upload and reconciliation, label replacement with conflict detection, cloud training behind the budget gate | Recorded-fixture contract tests in CI; opt-in live smoke on a test workspace round-trips a fixture release with explicit lineage | 1 (Platform), 8, 9, 18 |
+| 0. Bootstrap | Monorepo skeleton (§2.3), docker compose dev stack, CI on Actions (lint, types, unit, `ci-ok`), gitleaks, pr-lint, pr-size, AGENTS.md, ADR log, two licence-clean fixture domains | `ci-ok` green on `main`; `make dev` brings up the stack; protect-main ruleset requires `ci-ok`, `gitleaks` and Devin Review | 24 (static secret scan via gitleaks), 25 (import-linter rule from the first package) |
+| 1. Canonical foundation + compiler | Schema and migrations (projects, ontology, assets, revisions, review events, split groups, releases), near-duplicate grouping, letterbox 640/320 compiler, manifests, validators | Two unrelated fixture domains represented without engine edits; property-based geometry tests; byte-identical recompilation | 1, 2, 3, 4, 5, 6, 7, 11, 20 (data part), 27 (compiler non-empty val) |
+| 2. Local training + evaluation | `local_ultralytics` backend, dataloader retention audit, fixed-shape validator, original-frame evaluator, model registry with per-recipe promotion/rollback | CPU CI trains a yolo26n run on both recipes, evaluates on the source frame and promotes/rolls back independently | 12, 13, 14, 15, 17, 19, 26 (local backend) |
+| 3. Review UI + LLM review | Review screens (designed on `two-design-kit` before implementation), proposal workers, discovery pass, LLM adapters with fixture probes, untrusted-patch validator, adjudication and audit sampling, budget ledger for LLM calls | Measured annotation quality on fixture domains with unresolved cases preserved; model workers cannot set human fields | 5, 10, 11, 16, 23 (LLM ledger), 24 (LLM keys) |
+| 4. Platform adapter | Encrypted connection, pinned SDK and contract snapshot, release upload and reconciliation, label replacement with conflict detection, cloud training behind the budget gate | Recorded-fixture contract tests in CI; opt-in live smoke on a test workspace round-trips a fixture release with explicit lineage | 1 (Platform), 8, 9, 18, 23 (training), 24 (Platform key), 26 (Platform resolved args), 27 (post-ingest reconciliation) |
 | 5. Qualification + operations | Per-class gates, locked final test handling, canary, drift pause, backup/restore drill, cost and audit screens | Candidate promotion and rollback demonstrated on both recipes; restore regenerates a variant | 16, 17, 19, 21 |
 | 6. Improvement loop | Active selection, bounded iterations, reference memory updates, warm-start vs base comparison, augmentation experiments | A documented iteration improves a declared metric without critical regression on a non-game domain | 20, 22 |
 
@@ -1082,7 +1094,7 @@ The linked vendor documentation is mutable. Pin tested package versions, checkpo
 
 **Technical choices delegated to the technical lead** (an ADR in `docs/adr/`, which may override §2.3 with a recorded reason): queue library vs hand-rolled `SKIP LOCKED`, embedding model for references and near-duplicates, and web state/data libraries.
 
-**Product-product-owner decisions reserved for later** (not needed to start M0–M3):
+**Product-owner decisions reserved for later** (not needed to start M0–M3):
 
 - Spend: a hosted deployment and GPU hosting for controlled training.
 - Spend: a budget for an Ultralytics Platform test workspace and LLM review spend before M4 live smoke.
