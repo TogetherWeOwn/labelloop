@@ -148,6 +148,20 @@ jobs:
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
       - run: pnpm --dir apps/web build
+      - run: pnpm --dir apps/web build:operations
+      - name: Scan application and fixture bundles for secrets
+        run: docker run --rm -v "$PWD/apps/web/dist:/scan:ro" zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f dir /scan --redact --exit-code 1
+      - run: pnpm --dir apps/web exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/web test:operations
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: operational-ui-evidence
+          path: |
+            apps/web/dist/operations-evidence
+            apps/web/dist/operations-report
+          if-no-files-found: error
+          retention-days: 7
 
   dev-stack:
     needs: [changes, full-run]
