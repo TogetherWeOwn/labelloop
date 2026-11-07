@@ -68,7 +68,7 @@ const SECTIONS = [
 ];
 
 // J1 workbench header. `cur` names the current section.
-const header = (cur, { spend = [3.1, 40], role = "Reviewer", project = "Shelf audit" } = {}) => {
+const header = (cur, { spend = [3.1, 40], paused = false, role = "Reviewer", project = "Shelf audit" } = {}) => {
   const pct = Math.round((spend[0] / spend[1]) * 100);
   return `<a class="skip pill" href="#main">Skip to content</a>
 <header class="top"><div class="bar">
@@ -79,9 +79,13 @@ const header = (cur, { spend = [3.1, 40], role = "Reviewer", project = "Shelf au
       `<li><a href="#"${k === cur ? ' aria-current="page"' : ""}>${l}${n ? `<span class="count">${n}<span class="sr"> images to review</span></span>` : ""}</a></li>`,
   ).join("")}</ul></nav>
   <div class="end">
-    <a class="spend hide-m" href="#" aria-label="Spend this month: $${spend[0].toFixed(2)} of $${spend[1]} budget. Open costs">
+    ${
+      paused
+        ? `<a class="spend paused" href="#" aria-label="Paid steps paused. Open costs">${I.warn}<span>Paid steps paused</span></a>`
+        : `<a class="spend hide-m" href="#" aria-label="Spend this month: $${spend[0].toFixed(2)} of $${spend[1]} budget. Open costs">
       <span>$${spend[0].toFixed(2)} of $${spend[1]}</span><span class="meter" aria-hidden="true"><span style="width:${pct}%"></span></span>
-    </a>
+    </a>`
+    }
     <a class="who" href="#"><span class="av" aria-hidden="true">MO</span><span class="hide-m">Mora · ${role}</span><span class="sr">Mora, ${role}. Account and connections</span></a>
     <button class="pill ghost icon menu-btn" aria-expanded="false" aria-label="Menu">${I.menu}</button>
   </div>

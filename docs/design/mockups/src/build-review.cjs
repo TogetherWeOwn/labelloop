@@ -262,14 +262,17 @@ function r3() {
   const body = `${header("review")}
 <main id="main">
 ${toolbar({ tool: "box", audit: true, file: "IMG_0388.png", pos: "3 of 20" })}
+<h1 class="sr">Audit IMG_0388.png</h1>
 <div class="review">
-  <div class="stage">
-    <h1 class="sr">Audit IMG_0388.png</h1>
-    ${compactNote}
+  <div class="stage hide-m">
     ${canvas(mine, { alt: "Shelf photo, store 14 aisle 3, with your 9 boxes." })}
     ${legend(mine, { hidden: true })}
   </div>
-  ${inspector}
+  ${inspector.replace('<aside class="inspector"', '<aside class="inspector hide-m"')}
+  <section class="audit-narrow only-m" aria-label="Audit sample">
+    <div class="notice" role="note">${I.info}<p>Audit samples need a screen 820 px or wider. You need to box every object yourself before you compare, and drawing needs the larger screen.</p></div>
+    <div class="row"><button class="pill ghost md">Skip</button><span class="small t2">The queue won't show you audit samples on this screen.</span></div>
+  </section>
 </div></main>`;
   out("review-audit.html", page("Audit IMG_0388.png", body));
 }

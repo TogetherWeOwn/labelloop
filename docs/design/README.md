@@ -27,7 +27,7 @@ Each mockup has `mockups/png/<name>-1280.png` (1280 × 800 viewport) and `<name>
 
 1. **Provenance is always visible.** Anything a model made or judged says so in words, wherever it appears: on a box, in a table, in history, in a count. Proposed, auto-accepted and reviewed never share a look (kit components.md §J, the provenance table). Only a person reviews; a model proposes or auto-accepts.
 2. **One ember surface per view.** It is the page's primary action. Accepting a model's proposal is never the ember action.
-3. **Money and spend:** nothing paid starts from one click. J20 shows the estimate, and the button names the amount. When paid steps are paused, every page's header says so.
+3. **Money and spend:** nothing paid starts from one click. J20 shows the estimate, the button names it ("Start · estimate $1.38") and a line says which limits are enforced; an estimate is never worded as a cap. When paid steps are paused, every page's header says so (J1 paused variant: "Paid steps paused" in `state.danger` in place of the meter, on the Costs mockup).
 4. **Secrets:** only J18 fingerprints, ever.
 5. **Honest numbers:** a metric names its set and size; estimates say "Estimate"; unsupported classes show the reason, never a number.
 6. **Times:** UTC in tables and audit (labelled), viewer-local with the zone in sentences.

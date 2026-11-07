@@ -337,6 +337,15 @@ nav.sections .count {
 .spend .meter {
   width: 48px;
 }
+/* J1 paused variant: replaces the meter on every page while paid steps are paused. */
+.spend.paused {
+  color: var(--two-color-state-danger);
+  font-weight: 600;
+}
+.spend.paused svg {
+  width: 16px;
+  height: 16px;
+}
 .who {
   display: inline-flex;
   align-items: center;
@@ -642,6 +651,10 @@ nav.sections .count {
 .btab.reviewed .id,
 .btab.reviewed .pg {
   color: var(--two-color-bg-canvas);
+}
+/* The check glyph's mark is drawn in the canvas colour; on the filled tab it takes the tier colour so it reads as a check, not a dot. */
+.btab.reviewed .pg path {
+  stroke: var(--two-color-label-reviewed);
 }
 .btab.sel {
   outline: 2px solid var(--two-color-focus-ring);
@@ -1551,6 +1564,18 @@ tr.hl {
 }
 .only-m {
   display: none;
+}
+/* R3 below 820 px: audit samples are not served; only the note and Skip. */
+.audit-narrow {
+  flex-direction: column;
+  gap: var(--two-space-4);
+  padding: var(--two-space-4);
+}
+.audit-narrow .row {
+  display: flex;
+  align-items: center;
+  gap: var(--two-space-3);
+  flex-wrap: wrap;
 }
 @media (max-width: 820px) {
   .only-m {

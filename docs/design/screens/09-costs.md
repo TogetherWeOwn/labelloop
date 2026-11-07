@@ -20,7 +20,7 @@ J13 table, newest first: UTC time, operation (kind · object · recipe), approve
 
 - A12 "Spend without asking", default off. Consequence line: "Off: every paid step waits for a person to approve its estimate. On: steps run inside the limits below, and each one still writes its estimate first."
 - Limits: monthly, per iteration, per operation (required before any paid operation; empty = paid steps unavailable with "Set a monthly limit first"). Help: "An operation over any limit is refused, never queued."
-- Turning the switch on confirms in place and names the limits: "labelloop may spend up to $40 this month without asking, at most $5 per operation. *Turn on* · Cancel".
+- Turning the switch on confirms in place and names the limits: "labelloop starts paid steps without asking while their estimates fit $40 this month and $5 per operation. Actual billing can come in above an estimate. *Turn on* · Cancel". The limits are checked against estimates, so the copy never calls them a cap on what is billed (plan §12.1).
 
 ## States
 
