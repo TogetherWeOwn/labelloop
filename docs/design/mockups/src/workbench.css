@@ -525,7 +525,7 @@ nav.sections .count {
 
 @media (min-width: 821px) {
   .review {
-    height: calc(100vh - var(--two-size-header-compact) - var(--two-size-toolbar));
+    height: calc(100vh - var(--two-size-header-compact) - var(--two-size-toolbar) - var(--two-space-7));
     min-height: 0;
   }
   .stage,
@@ -1476,6 +1476,13 @@ tr.hl {
   justify-content: space-between;
   gap: var(--two-space-3);
   flex-wrap: wrap;
+}
+/* P7: the footer landmark stays, as one line inside the viewport height. */
+.foot.slim {
+  padding: 0 var(--two-space-5);
+  min-height: var(--two-space-7);
+  align-items: center;
+  font-size: var(--two-font-size-label);
 }
 
 /* Compact: one layout switch at 820 px */

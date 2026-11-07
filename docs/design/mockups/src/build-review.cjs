@@ -2,7 +2,7 @@
 const fs = require("fs");
 const path = require("path");
 const { sceneSvg, refSvg } = require("./fixture.cjs");
-const { I, pg, badge, TIER_WORD, header, overlay, cropBg, scaleWord, page, OBJECTS, CLASSES } = require("./parts.cjs");
+const { I, pg, badge, TIER_WORD, header, overlay, cropBg, scaleWord, page, footerSlim, OBJECTS, CLASSES } = require("./parts.cjs");
 
 const out = (f, s) => fs.writeFileSync(path.join(__dirname, f), s);
 out("scene.svg", sceneSvg());
@@ -156,7 +156,8 @@ ${toolbar()}
     ${strip(OBJECTS, 4)}
   </div>
   ${inspector}
-</div></main>`;
+</div></main>
+${footerSlim}`;
   out("review.html", page("Review IMG_0412.png", body));
 }
 
@@ -216,7 +217,8 @@ ${toolbar({ tool: "box" })}
     ${strip(OBJECTS, null)}
   </div>
   ${inspector}
-</div></main>`;
+</div></main>
+${footerSlim}`;
   out("review-draw.html", page("Add a box · IMG_0412.png", body, { status: "Box tool. Draw a box, then pick its class." }));
 }
 
@@ -273,7 +275,8 @@ ${toolbar({ tool: "box", audit: true, file: "IMG_0388.png", pos: "3 of 20" })}
     <div class="notice" role="note">${I.info}<p>Audit samples need a screen 820 px or wider. You need to box every object yourself before you compare, and drawing needs the larger screen.</p></div>
     <div class="row"><button class="pill ghost md">Skip</button><span class="small t2">The queue won't show you audit samples on this screen.</span></div>
   </section>
-</div></main>`;
+</div></main>
+${footerSlim}`;
   out("review-audit.html", page("Audit IMG_0388.png", body));
 }
 
@@ -328,7 +331,8 @@ ${toolbar()}
     ${strip(done, null)}
   </div>
   ${inspector}
-</div></main>`;
+</div></main>
+${footerSlim}`;
   out("review-ready.html", page("Ready · IMG_0412.png", body));
 }
 

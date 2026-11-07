@@ -205,4 +205,5 @@ const page = (title, body, { status = "" } = {}) => `<!doctype html>
 
 const footer = `<footer class="foot"><span>labelloop is free software under the AGPL-3.0. <a href="#">Get the source code</a>.</span><span class="mono">v0.1.0 · ultralytics 8.4.204</span></footer>`;
 
-module.exports = { I, pg, badge, TIER_WORD, header, overlay, cropBg, scaleWord, page, footer, OBJECTS, CLASSES, W, H };
+const footerSlim = footer.replace('class="foot"', 'class="foot slim"');
+module.exports = { I, pg, badge, TIER_WORD, header, overlay, cropBg, scaleWord, page, footer, footerSlim, OBJECTS, CLASSES, W, H };

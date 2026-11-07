@@ -39,7 +39,7 @@ Each mockup has `mockups/png/<name>-1280.png` (1280 × 800 viewport) and `<name>
 - **J1 header** on every screen: product mark · project switcher · sections: Review (with queue count) · Releases · Recipes · Runs · Evaluation · Models · Costs · Audit log · spend status · account menu (Connections, account settings including shortcut preferences, sign out).
 - New project is reached from the project switcher ("New project").
 - Patterns: Image review uses **P7** (review canvas); every other screen uses **P6** (workbench page).
-- The AGPL source offer is in the footer on every P6 page and in the account menu on P7: "labelloop is free software under the AGPL-3.0. Get the source code." (plan §12.3).
+- The AGPL source offer is in the footer on every page: the full footer on P6, a one-line footer inside the viewport height on P7 (kit templates.md shell rule): "labelloop is free software under the AGPL-3.0. Get the source code." (plan §12.3).
 
 ## Roles (plan §12.2)
 
