@@ -89,13 +89,19 @@ def test_confidently_wrong_ordinary_acceptance_blocks_the_audit() -> None:
     assert result.pending_asset_ids == ()
 
 
-@pytest.mark.parametrize(
-    "observation_change",
-    [{"blind_full_image_inspected": False}, {"output_truncated": True}],
-)
-def test_nonblind_or_truncated_evidence_cannot_pass(observation_change: dict[str, bool]) -> None:
+@pytest.mark.parametrize(("blind", "truncated"), [(False, False), (True, True)])
+def test_nonblind_or_truncated_evidence_cannot_pass(blind: bool, truncated: bool) -> None:
     sample = select_audit_sample((candidate("source"),), sample_id="sample", size=1, seed=7)
-    result = assess_audit(sample, (replace(observation("source"), **observation_change),))
+    result = assess_audit(
+        sample,
+        (
+            replace(
+                observation("source"),
+                blind_full_image_inspected=blind,
+                output_truncated=truncated,
+            ),
+        ),
+    )
     assert not result.passed and result.blocking_asset_ids == ("source",)
 
 

@@ -8,9 +8,15 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from .domain import AnnotationRevision, CompletenessAssessment, DatasetObject, SourceAsset
+from .domain import (
+    AnnotationRevision,
+    CompletenessAssessment,
+    DatasetObject,
+    LabelState,
+    SourceAsset,
+)
 from .geometry import Box
 
 MAX_PATCH_BYTES = 262_144
@@ -256,9 +262,11 @@ def validate_patch(
             assert operation.box is not None
             objects[obj.object_id] = replace(obj, box=operation.box)
         elif operation.action == "uncertain":
-            if operation.label_state not in {"ambiguous", "unknown", "insufficient_evidence"}:
+            if operation.label_state not in ("ambiguous", "unknown", "insufficient_evidence"):
                 raise ValueError("uncertainty must preserve an unresolved label state")
-            objects[obj.object_id] = replace(obj, label_state=operation.label_state)
+            objects[obj.object_id] = replace(
+                obj, label_state=cast(LabelState, operation.label_state)
+            )
         elif operation.action in {"delete", "duplicate"}:
             if operation.action == "duplicate" and (
                 operation.duplicate_of not in objects or operation.duplicate_of == obj.object_id
