@@ -51,7 +51,8 @@ def upgrade() -> None:
         sa.Column("action", sa.String(32), nullable=False),
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
-            "action IN ('login_failed','login_succeeded','logout','permission_denied','csrf_denied')"
+            "action IN ('login_failed','login_succeeded','logout',"
+            "'permission_denied','csrf_denied')"
         ),
     )
     op.execute("""

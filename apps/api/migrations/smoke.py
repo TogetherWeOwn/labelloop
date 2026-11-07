@@ -6,6 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine, insert, text
 
 from labelloop_api.revision_store import append_review, completeness_context_hash
@@ -278,12 +280,53 @@ def check_frozen_lineage(connection: sa.Connection) -> None:
             transaction.rollback()
 
 
+def check_authentication_schema(connection: sa.Connection) -> None:
+    path = Path(__file__).parent / "versions/0003_authentication.py"
+    spec = importlib.util.spec_from_file_location("auth_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with Operations.context(MigrationContext.configure(connection)):
+        migration.upgrade()
+        assert connection.execute(text("SELECT count(*) FROM auth_principal")).scalar_one() == 0
+        connection.execute(
+            text("""
+            INSERT INTO auth_principal
+                (id, name, kind, role, enabled, failed_attempts)
+            VALUES ('fixture-worker', 'fixture-worker', 'service', 'worker-ml', true, 0)
+        """)
+        )
+        connection.execute(
+            text("""
+            INSERT INTO auth_event (id, principal_id, action, occurred_at)
+            VALUES ('fixture-event', 'fixture-worker', 'permission_denied', now())
+        """)
+        )
+        for statement, message in (
+            ("UPDATE auth_principal SET role = 'admin'", "check constraint"),
+            ("DELETE FROM auth_event", "immutable"),
+            ("UPDATE auth_event SET action = 'logout'", "immutable"),
+            ("INSERT INTO auth_session VALUES ('hash', 'absent', 'csrf', now())", "foreign key"),
+        ):
+            with connection.begin_nested() as transaction:
+                rejects(
+                    sa.exc.DatabaseError,
+                    message,
+                    lambda statement=statement: connection.execute(text(statement)),
+                )
+                transaction.rollback()
+        migration.downgrade()
+        migration.upgrade()
+        assert connection.execute(text("SELECT count(*) FROM auth_event")).scalar_one() == 0
+
+
 def main() -> None:
     engine = create_engine(os.environ["DATABASE_URL"])
     try:
         with engine.begin() as connection:
             connection.execute(text("DROP SCHEMA IF EXISTS migration_smoke CASCADE"))
             install_isolated_guards(connection)
+            check_authentication_schema(connection)
             initial_state(connection)
             check_completeness_provenance(connection)
             check_frozen_lineage(connection)
