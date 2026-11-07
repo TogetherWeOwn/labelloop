@@ -18,6 +18,7 @@ from labelloop_api.auth_store import SESSION_LIFETIME, AuthStore, Principal, dig
 from labelloop_api.database_url import quoted_database_url
 
 COOKIE = "__Host-labelloop-session"
+CSRF_COOKIE = "__Host-labelloop-csrf"
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -73,14 +74,14 @@ async def authentication_boundary(request: Request, call_next):
         ("GET", "/readyz"),
         ("POST", "/auth/login"),
     )
+    response = None
     if not public:
         try:
-            denied = await run_in_threadpool(authenticate_request, request)
+            response = await run_in_threadpool(authenticate_request, request)
         except SQLAlchemyError:
-            return JSONResponse({"detail": "authentication_unavailable"}, status_code=503)
-        if denied is not None:
-            return denied
-    response = await call_next(request)
+            response = JSONResponse({"detail": "authentication_unavailable"}, status_code=503)
+    if response is None:
+        response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -138,6 +139,16 @@ def login(payload: Login, request: Request, response: Response) -> dict[str, str
         samesite="strict",
         path="/",
     )
+    # The browser can recover this proof after reload without exposing the session token.
+    response.set_cookie(
+        CSRF_COOKIE,
+        csrf,
+        max_age=int(SESSION_LIFETIME.total_seconds()),
+        secure=True,
+        httponly=False,
+        samesite="strict",
+        path="/",
+    )
     return {"csrf_token": csrf}
 
 
@@ -154,6 +165,7 @@ def logout(request: Request, actor: Annotated[Principal, Depends(require_reviewe
         raise HTTPException(503, detail="authentication_unavailable") from None
     response = Response(status_code=204)
     response.delete_cookie(COOKIE, secure=True, httponly=True, samesite="strict", path="/")
+    response.delete_cookie(CSRF_COOKIE, secure=True, samesite="strict", path="/")
     return response
 
 

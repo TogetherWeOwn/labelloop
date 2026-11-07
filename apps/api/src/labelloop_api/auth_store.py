@@ -14,6 +14,7 @@ from labelloop_api.auth_schema import auth_event, principal, service_token, sess
 
 PASSWORDS = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, type=Type.ID)
 SESSION_LIFETIME = timedelta(hours=8)
+SESSION_CLEANUP_BATCH = 100
 
 
 def digest(token: str) -> str:
@@ -102,6 +103,15 @@ class AuthStore:
             if PASSWORDS.check_needs_rehash(encoded):
                 values["password_hash"] = PASSWORDS.hash(password)
             connection.execute(update(principal).where(principal.c.id == identity).values(**values))
+            # Amortize expired-session retention without a scheduler or unbounded request work.
+            expired = (
+                select(session.c.token_hash)
+                .where(session.c.expires_at <= now)
+                .order_by(session.c.expires_at, session.c.token_hash)
+                .limit(SESSION_CLEANUP_BATCH)
+                .with_for_update(skip_locked=True)
+            )
+            connection.execute(delete(session).where(session.c.token_hash.in_(expired)))
             connection.execute(
                 insert(session).values(
                     token_hash=digest(token),

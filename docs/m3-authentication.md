@@ -22,12 +22,23 @@ sign-in. This slice does not create or configure that proxy.
 
 A successful login returns a per-session `csrf_token`, and sets a random 256-bit
 `__Host-labelloop-session` cookie: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain.
-Only SHA-256 hashes of the session and CSRF tokens are stored. Absolute lifetime is
+A separate `__Host-labelloop-csrf` cookie carries the CSRF proof with the same Secure,
+SameSite=Strict, Path=/, no-Domain and eight-hour settings, but deliberately without
+HttpOnly. After a reload the same-origin client reads that cookie to construct the
+CSRF header; it never reads the session credential. The proof alone cannot authenticate.
+Only SHA-256 hashes of the session and CSRF tokens are stored server-side. Absolute lifetime is
 eight hours; there is no sliding renewal. On cookie-authenticated unsafe methods,
 the exact configured Origin and matching `X-CSRF-Token` are both mandatory. CSRF
 proofs from a different session fail. `POST /auth/logout` revokes the current session
-and deletes its cookie; `GET` cannot log out. `GET /auth/me` returns only id, name,
-kind and role. Auth responses are `Cache-Control: no-store`.
+and deletes both cookies; `GET` cannot log out. `GET /auth/me` returns only id, name,
+kind and role. Auth responses, including credential, CSRF and database refusals, are
+`Cache-Control: no-store`.
+
+Each successful login removes up to 100 expired sessions before inserting the new
+session, in the same transaction. Cleanup uses the expiry index and skips rows
+locked by concurrent cleaners. This amortized cleanup needs no scheduler; expired
+rows may remain while there are no successful logins, but do not grow during that
+idle period. Active sessions and the separate immutable audit history are untouched.
 
 Passwords use pinned `argon2-cffi`, Argon2id with 64 MiB, three iterations and four
 lanes. Successful verification upgrades parameters when necessary. Known and unknown
@@ -85,6 +96,11 @@ GitHub Actions is the CI of record. `apps/api/tests/test_auth.py` uses real isol
 SQLite transactions and HTTPS TestClient requests, with synthetic principals only:
 cookie/hash contract, route default-deny, admin/reviewer/worker matrix, request actor
 injection, secret-safe validation, origin/CSRF, logout, expiry, disablement, current
-roles, credential-type separation and generic lockout. The dev-stack Actions job
-runs Alembic against PostgreSQL, including the auth migration. No paid call or local
-suite is needed or authorized for this implementation.
+roles, credential-type separation, generic lockout, reload-to-logout CSRF recovery,
+no-store rejection responses and bounded session cleanup. The dev-stack Actions job
+runs Alembic against PostgreSQL, including the auth migration. Its isolated smoke
+checks also start six concurrent logins on separate connections, asserting the
+five-failure threshold, immutable lock deadline, expiry reset, audit count and
+successful-login cleanup. These are synthetic fixtures in `migration_smoke`, not
+production-database tests. No paid call or local suite is needed or authorized for
+this implementation.

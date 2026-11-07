@@ -37,7 +37,7 @@ session = Table(
     Column("token_hash", String(64), primary_key=True),
     Column("principal_id", String(36), ForeignKey("auth_principal.id"), nullable=False),
     Column("csrf_hash", String(64), nullable=False),
-    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False, index=True),
 )
 service_token = Table(
     "auth_service_token",

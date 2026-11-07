@@ -13,7 +13,13 @@ from sqlalchemy.pool import StaticPool
 
 from labelloop_api import auth
 from labelloop_api.auth_schema import auth_event, metadata, principal, service_token, session
-from labelloop_api.auth_store import PASSWORDS, SESSION_LIFETIME, AuthStore, digest
+from labelloop_api.auth_store import (
+    PASSWORDS,
+    SESSION_CLEANUP_BATCH,
+    SESSION_LIFETIME,
+    AuthStore,
+    digest,
+)
 
 NOW = datetime(2026, 11, 7, tzinfo=UTC)
 ORIGIN = "https://testserver"
@@ -402,6 +408,93 @@ def test_database_rejects_service_admin_and_human_worker_roles(store):
                     failed_attempts=0,
                 )
             )
+
+
+def test_reload_recovers_csrf_without_revealing_session(client):
+    assert login(client).status_code == 200
+    # A new browser context retains cookies but not the previous login response.
+    with TestClient(client.app, base_url=ORIGIN, cookies=client.cookies) as reloaded:
+        assert reloaded.get("/auth/me").status_code == 200
+        proof = reloaded.cookies.get(auth.CSRF_COOKIE)
+        assert proof and proof != reloaded.cookies.get(auth.COOKIE)
+        headers = {"origin": ORIGIN, "x-csrf-token": proof}
+        assert reloaded.post("/review", headers=headers).status_code == 200
+        assert reloaded.post("/auth/logout", headers=headers).status_code == 204
+        assert auth.COOKIE not in reloaded.cookies
+        assert auth.CSRF_COOKIE not in reloaded.cookies
+
+
+def test_readable_csrf_cookie_cannot_authenticate_or_replace_session_proof(client):
+    first = login(client).json()["csrf_token"]
+    response = login(client)
+    cookies = response.headers.get_list("set-cookie")
+    csrf_cookie = next(value for value in cookies if value.startswith(auth.CSRF_COOKIE + "="))
+    for expected in ("Secure", "SameSite=strict", "Path=/", "Max-Age=28800"):
+        assert expected in csrf_cookie
+    assert "HttpOnly" not in csrf_cookie and "Domain=" not in csrf_cookie
+    # Even a supplied cookie/header pair must match the database's current session proof.
+    client.cookies.set(auth.CSRF_COOKIE, first)
+    assert (
+        client.post("/review", headers={"origin": ORIGIN, "x-csrf-token": first}).status_code == 403
+    )
+    proof = response.json()["csrf_token"]
+    client.cookies.clear()
+    client.cookies.set(auth.COOKIE, proof)
+    assert client.get("/auth/me").status_code == 401
+
+
+@pytest.mark.parametrize("failure", ["missing", "invalid", "csrf", "database"])
+def test_boundary_rejections_are_never_stored(client, store, monkeypatch, failure):
+    if failure == "csrf":
+        login(client)
+        response = client.post("/review", headers={"origin": ORIGIN})
+        assert response.status_code == 403
+    else:
+        if failure == "invalid":
+            client.cookies.set(auth.COOKIE, "x" * 43)
+        elif failure == "database":
+            client.cookies.set(auth.COOKIE, "x" * 43)
+
+            def unavailable(*args, **kwargs):
+                raise SQLAlchemyError("database detail")
+
+            monkeypatch.setattr(store, "authenticate", unavailable)
+        response = client.get("/auth/me")
+        assert response.status_code == (503 if failure == "database" else 401)
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_login_reaps_only_bounded_expired_sessions_and_preserves_events(store):
+    token, _ = store.login("reviewer", PASSWORD, NOW)
+    with store.engine.begin() as connection:
+        identity = connection.execute(
+            select(principal.c.id).where(principal.c.name == "reviewer")
+        ).scalar_one()
+        connection.execute(
+            insert(session),
+            [
+                {
+                    "token_hash": digest(f"expired-{index}"),
+                    "principal_id": identity,
+                    "csrf_hash": digest("fixture-csrf"),
+                    "expires_at": NOW,
+                }
+                for index in range(SESSION_CLEANUP_BATCH + 1)
+            ],
+        )
+    assert store.login("reviewer", PASSWORD, NOW) is not None
+    with store.engine.connect() as connection:
+        assert (
+            len(connection.execute(select(session).where(session.c.expires_at <= NOW)).all()) == 1
+        )
+        assert connection.execute(select(auth_event.c.action)).scalars().all() == [
+            "login_succeeded",
+            "login_succeeded",
+        ]
+    assert store.authenticate(token, service=False, now=NOW) is not None
+    assert store.login("reviewer", PASSWORD, NOW) is not None
+    with store.engine.connect() as connection:
+        assert connection.execute(select(session).where(session.c.expires_at <= NOW)).all() == []
 
 
 def test_store_does_not_retain_password_or_session_plaintext(client, store, caplog):

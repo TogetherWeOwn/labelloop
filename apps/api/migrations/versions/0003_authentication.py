@@ -36,6 +36,7 @@ def upgrade() -> None:
         sa.Column("csrf_hash", sa.String(64), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
     )
+    op.create_index("ix_auth_session_expires_at", "auth_session", ["expires_at"])
     op.create_table(
         "auth_service_token",
         sa.Column("token_hash", sa.String(64), primary_key=True),
