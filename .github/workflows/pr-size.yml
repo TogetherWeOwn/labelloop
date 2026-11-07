@@ -1,0 +1,41 @@
+name: pr-size
+
+# Advisory only: this must never be a required status check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Optional PR number to label now
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-size:
+    if: github.event_name == 'pull_request' || inputs.pr_number != ''
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@b319ed790b00c07c9d4dec51ef693eefa1f30feb
+    with:
+      pr-number: ${{ inputs.pr_number || '' }}
+      exclude-extra: "fixtures/**,uv.lock,pnpm-lock.yaml"
+
+  pr-size-weekly:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@b319ed790b00c07c9d4dec51ef693eefa1f30feb

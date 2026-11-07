@@ -1,0 +1,13 @@
+[project]
+name = "labelloop-llm"
+version = "0.0.0"
+description = "Review model adapters and fixture probes"
+requires-python = ">=3.12,<3.13"
+dependencies = ["pydantic==2.13.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/labelloop_llm"]

@@ -1,0 +1,98 @@
+[project]
+name = "labelloop-workspace"
+version = "0.0.0"
+description = "Labelloop monorepo development workspace"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "labelloop-api",
+  "labelloop-compiler",
+  "labelloop-core",
+  "labelloop-llm",
+  "labelloop-platform",
+  "labelloop-worker-core",
+  "import-linter==2.16",
+  "mypy==1.20.0",
+  "pytest==9.0.3",
+  "ruff==0.15.12",
+]
+ml = ["labelloop-worker-ml"]
+runtime = [
+  "labelloop-api",
+  "labelloop-compiler",
+  "labelloop-core",
+  "labelloop-llm",
+  "labelloop-platform",
+  "labelloop-worker-core",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+package = false
+
+[tool.uv.sources]
+labelloop-api = { workspace = true }
+labelloop-compiler = { workspace = true }
+labelloop-core = { workspace = true }
+labelloop-llm = { workspace = true }
+labelloop-platform = { workspace = true }
+labelloop-worker-core = { workspace = true }
+labelloop-worker-ml = { workspace = true }
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/api", "workers/*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages/*/src", "apps/api/src", "workers/*/src"]
+extend-exclude = ["*_violation.py"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+  "labelloop_api",
+  "labelloop_compiler",
+  "labelloop_core",
+  "labelloop_llm",
+  "labelloop_platform",
+  "labelloop_worker_core",
+  "labelloop_worker_ml",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["packages/core/src"]
+mypy_path = "packages/core/src"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = [
+  "packages/core/tests",
+  "packages/compiler/tests",
+  "packages/platform/tests",
+  "packages/llm/tests",
+  "apps/api/tests",
+  "workers/core/tests",
+  "workers/ml/tests",
+]
+pythonpath = [
+  "packages/core/src",
+  "packages/compiler/src",
+  "packages/platform/src",
+  "packages/llm/src",
+  "apps/api/src",
+  "workers/core/src",
+  "workers/ml/src",
+]

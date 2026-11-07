@@ -1,0 +1,132 @@
+name: labelloop
+
+x-python-dev: &python-dev
+  # Match the host bind-mount owner; files created by development stay host-owned.
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+  build:
+    context: .
+    args:
+      UV_GROUPS: ${UV_GROUPS:-runtime}
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_USER: ${POSTGRES_USER:-labelloop}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-labelloop-local-only}
+    POSTGRES_DB: ${POSTGRES_DB:-labelloop}
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-labelloop-local-only}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:-labelloop-local-secret}
+    S3_BUCKET: ${S3_BUCKET:-labelloop}
+    PYTHONPATH: /app/packages/core/src:/app/packages/compiler/src:/app/packages/platform/src:/app/packages/llm/src:/app/apps/api/src:/app/workers/core/src:/app/workers/ml/src
+    # Host IDs do not own the image's HOME; shared dependency resolution is read-only.
+    UV_CACHE_DIR: /tmp/labelloop-uv-cache
+  depends_on: &ready-services
+    postgres:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+  volumes:
+    - .:/app
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-labelloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-labelloop-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-labelloop}
+    # Local-only defaults never listen on a development host's external interfaces.
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./apps/api/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    build:
+      context: dev/minio
+    command: ["minio", "server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-labelloop-local-only}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-labelloop-local-secret}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-labelloop-local-only}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-labelloop-local-secret}
+      S3_BUCKET: ${S3_BUCKET:-labelloop}
+    ports:
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9000/minio/health/live || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    <<: *python-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["python", "/app/scripts/initialize-dev-storage.py"]
+
+  api:
+    <<: *python-dev
+    command: uv run --no-sync --no-project uvicorn labelloop_api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=14)"]
+      interval: 3s
+      # Covers the sequential database connect/query and two storage reads.
+      timeout: 15s
+      retries: 30
+
+  worker-core:
+    <<: *python-dev
+    command: ["python", "-c", "import signal; print({'status': 'ready', 'worker': 'core'}, flush=True); signal.pause()"]
+
+  worker-ml:
+    <<: *python-dev
+    build:
+      context: .
+      args:
+        UV_GROUPS: ml
+    command: ["python", "-c", "import signal; from labelloop_worker_ml.main import runtime_version; print({'status': 'ready', 'worker': 'ml', 'ultralytics': runtime_version()}, flush=True); signal.pause()"]
+    cpus: 2.0
+    mem_limit: 4g
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_PROXY_TARGET: http://api:8000
+      CI: "true"
+    # Refresh the persistent dependency volume before serving a lockfile change.
+    # CI=true makes pnpm reconcile changed modules noninteractively in containers.
+    command: ["sh", "-c", "pnpm install --frozen-lockfile --filter @labelloop/web... && pnpm --dir apps/web dev"]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
+    volumes:
+      - ./apps/web:/app/apps/web
+      - web-node-modules:/app/apps/web/node_modules
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:
+  web-node-modules:

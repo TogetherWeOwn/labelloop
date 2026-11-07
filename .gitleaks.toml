@@ -1,0 +1,7 @@
+title = "Labelloop secret scanning"
+
+[extend]
+useDefault = true
+
+# No path allowlist: the example's public local-only values must not create an
+# exemption for a future high-entropy provider credential in the same file.

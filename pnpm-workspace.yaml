@@ -1,0 +1,5 @@
+packages:
+  - apps/web
+
+overrides:
+  rollup: 4.67.5
