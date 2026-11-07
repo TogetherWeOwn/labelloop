@@ -162,6 +162,33 @@ def test_model_cannot_invent_human_or_gold_states() -> None:
     assert not truncated.valid_for("changed", 1)
 
 
+def test_changed_object_set_invalidates_inherited_acceptance() -> None:
+    accepted = AnnotationRevision(
+        1,
+        (DatasetObject("one", "item", Box(0, 0, 10, 10)),),
+        "human",
+        approval_state="human_accepted",
+        review_tier="adjudicated",
+        scope_completeness="exhaustive_for_scope",
+        training_eligible=True,
+        gold_eligible=True,
+    )
+    changed = accepted.next_revision(objects=(), expected_revision=1, actor_kind="human")
+    assert changed.objects == ()
+    assert changed.scope_completeness == "unreviewed"
+    assert changed.approval_state == "draft"
+    assert changed.review_tier == "unreviewed"
+    assert not changed.training_eligible and not changed.gold_eligible
+    unchanged = accepted.next_revision(
+        objects=accepted.objects, expected_revision=1, actor_kind="human"
+    )
+    assert unchanged.training_eligible and unchanged.gold_eligible
+    with pytest.raises(ValueError, match="completeness"):
+        accepted.next_revision(
+            objects=(), expected_revision=1, actor_kind="human", training_eligible=True
+        )
+
+
 def test_source_label_lineage_reaches_all_descendants() -> None:
     graph = LineageGraph()
     graph.add("derived:r1", "source:a:revision:2")

@@ -28,9 +28,13 @@ work only when its identity matches the project policy. Gold eligibility still
 requires human adjudication. Object IDs, class membership and canonical image
 bounds are validated before append. Review-only revisions may retain a valid
 completeness assessment, while changed object sets require a new authoritative
-completeness decision. The expected parent is checked under an asset revision
-lock. Frozen split assignments cannot be changed when a release says they are
-locked.
+completeness decision. Core `next_revision` also clears inherited acceptance,
+review and eligibility when objects change. Repository completeness hashes are
+produced by `completeness_context_hash`: SHA-256 of compact, sorted-key JSON
+containing `class_map`, `classes` and project `scope`. A changed definition,
+class map or scope invalidates eligibility even for an unchanged empty object set.
+The expected parent is checked under an asset revision lock. Frozen split
+assignments cannot be changed when a release says they are locked.
 
 ## Grouping and split
 
@@ -52,8 +56,9 @@ and keyboard definitions live in fixture configuration, not the engine.
 
 The two full-frame recipes use `min(S/W,S/H)`, actual rounded raster gains,
 integer centered padding (114,114,114), OpenCV area on downscale and linear on
-upscale. The inverse matrix is equivalent subtract-padding/divide-gain. A crop
-inverse recovers only the retained source intersection. The built-in full-frame
+upscale. Exported matrices map the full canonical source frame, including crop
+origin translation: the inverse subtracts padding, divides by the actual gain
+and adds the crop origin. A crop inverse recovers only the retained source intersection. The built-in full-frame
 recipes use `min_target_px=4`: an annotated sample whose remaining targets are
 all too small or otherwise policy-ineligible is explicitly excluded rather than
 silently trained as a negative. A crop that removes every target likewise records
@@ -65,7 +70,9 @@ requires a recrop or explicit whole-sample exclusion instead of a partial label.
 
 Every release has nonempty val. Hash-validated RGB source decoding, stable class
 mapping, finite clipped boxes, five-field labels (8 decimals), exact source and
-group membership, and actual dimensions are gate conditions. Duplicate rows,
+group membership, and actual dimensions are gate conditions. Serialized extents
+are clamped to the rounded center's valid bounds; decimal validation enforces
+strict [0,1] edges without accepting an out-of-bounds rounding tolerance. Duplicate rows,
 zero-area geometry, out-of-bounds values, mismatched image/label counts and
 incomplete samples fail compilation. Zero-box samples are emitted only after
 `scope_completeness=exhaustive_for_scope`; their empty label file and

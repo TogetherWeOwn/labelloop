@@ -8,6 +8,7 @@ import shutil
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,14 @@ def digest(data: bytes) -> str:
 
 def json_bytes(document: Any) -> bytes:
     return (json.dumps(document, sort_keys=True, indent=2) + "\n").encode()
+
+
+def _serialized_geometry(values: tuple[float, float, float, float]) -> str:
+    cx, cy, width, height = (Decimal(f"{value:.8f}") for value in values)
+    # Rounding the center and extent independently must not move an edge outside [0,1].
+    width = min(width, 2 * cx, 2 * (1 - cx))
+    height = min(height, 2 * cy, 2 * (1 - cy))
+    return " ".join(f"{value:.8f}" for value in (cx, cy, width, height))
 
 
 def resolve_recipe(recipe: str | Recipe) -> Recipe:
@@ -275,7 +284,7 @@ def _compile_sample(
         if not excluded:
             normalized = normalize_box(mapped, recipe.output_size, recipe.output_size)
             class_index = release.ontology.class_map[item.class_id]
-            row = f"{class_index} " + " ".join(f"{value:.8f}" for value in normalized)
+            row = f"{class_index} " + _serialized_geometry(normalized)
             if row in seen_rows:
                 raise CompilerFailure("duplicate normalized YOLO row")
             seen_rows.add(row)
@@ -469,9 +478,16 @@ def _validate_output(
             class_index = int(fields[0])
             if class_index not in set(manifest["class_map"].values()):
                 raise CompilerFailure("unknown class index")
-            values = [float(value) for value in fields[1:]]
+            try:
+                values = [Decimal(value) for value in fields[1:]]
+            except InvalidOperation as error:
+                raise CompilerFailure("invalid normalized geometry") from error
             cx, cy, width, height = values
-            if any(not 0 <= value <= 1 for value in values) or min(width, height) <= 0:
+            if (
+                any(not value.is_finite() for value in values)
+                or any(not 0 <= value <= 1 for value in values)
+                or min(width, height) <= 0
+            ):
                 raise CompilerFailure("invalid normalized geometry")
             if (
                 cx - width / 2 < 0

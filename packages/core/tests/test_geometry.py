@@ -79,6 +79,19 @@ def test_actual_gain_and_padding_clip() -> None:
     assert with_crop(full_frame_transform(100, 100, 200), Crop(0, 0, 50, 50)).scale_x == 4
 
 
+def test_exported_crop_matrices_map_the_source_frame() -> None:
+    transform = full_frame_transform(200, 200, 320, crop=Crop(50, 50, 100, 100))
+    assert transform.points(50, 50) == pytest.approx((0, 0))
+    assert transform.points(150, 150) == pytest.approx((320, 320))
+    assert transform.points(0, 0, inverse=True) == pytest.approx((50, 50))
+    assert transform.points(320, 320, inverse=True) == pytest.approx((150, 150))
+    original = Box(50, 50, 100, 100)
+    mapped = transform.apply(original)
+    assert mapped is not None
+    assert mapped == Box(0, 0, 160, 160)
+    assert transform.restore(mapped) == original
+
+
 def test_outside_crop_and_tiny_targets() -> None:
     transform = full_frame_transform(400, 300, 320)
     cropped = full_frame_transform(400, 300, 320, crop=Crop(40, 0, 160, 150))

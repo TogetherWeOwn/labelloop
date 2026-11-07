@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from sqlalchemy import create_engine, insert, text
 
-from labelloop_api.revision_store import append_review
+from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
     completeness_assessment,
@@ -77,7 +77,7 @@ def initial_state(connection: sa.Connection) -> None:
         insert(completeness_assessment).values(
             asset_id=asset_id,
             revision=1,
-            ontology_hash="0" * 64,
+            ontology_hash=completeness_context_hash({"item": 0}, [], "test"),
             scope_completeness="exhaustive_for_scope",
             actor_kind="human",
             actor_id="migration-test",
@@ -181,6 +181,21 @@ def main() -> None:
                 ValueError,
                 "eligibility",
                 lambda: append(connection, expected=1, eligible=True),
+            )
+            project_id = connection.execute(sa.select(project.c.id)).scalar_one()
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key="migration-smoke-v2",
+                    project_id=project_id,
+                    version=2,
+                    classes=[],
+                    class_map={"item": 0, "new-class": 1},
+                )
+            )
+            rejects(
+                ValueError,
+                "valid current completeness",
+                lambda: append(connection, expected=1, eligible=True, actor_kind="human"),
             )
             append_review(
                 connection,

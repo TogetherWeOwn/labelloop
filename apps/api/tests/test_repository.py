@@ -1,6 +1,8 @@
 """Offline storage and transaction boundaries; integration is the Postgres dev stack."""
 
 import io
+import runpy
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,7 +12,7 @@ from sqlalchemy.schema import CreateTable
 
 from labelloop_api.database_url import database_url, quoted_database_url
 from labelloop_api.repository import ingest_canonical_asset
-from labelloop_api.revision_store import append_review
+from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import annotation_revision, review_event, source_asset
 
 
@@ -93,6 +95,9 @@ def test_review_intent_precedes_append_and_nonhuman_eligibility_is_denied() -> N
         elif "SELECT ontology_release.class_map" in sql:
             result.mappings.return_value.one.return_value = {
                 "class_map": {"item": 0},
+                "classes": [],
+                "scope": "test",
+                "assessed_ontology_hash": completeness_context_hash({"item": 0}, [], "test"),
                 "access_policy": {},
                 "assessed_completeness": "exhaustive_for_scope",
                 "output_truncated": False,
@@ -135,6 +140,7 @@ def review_connection(
     approval_state="human_accepted",
     review_tier="adjudicated",
     qualification=None,
+    context_changes=None,
 ):
     connection = MagicMock()
     current_objects = [] if objects is None else objects
@@ -153,10 +159,14 @@ def review_connection(
         elif "SELECT ontology_release.class_map" in sql:
             result.mappings.return_value.one.return_value = {
                 "class_map": {"item": 0},
+                "classes": [],
+                "scope": "test",
+                "assessed_ontology_hash": completeness_context_hash({"item": 0}, [], "test"),
                 "access_policy": qualification or {},
                 "assessed_completeness": "exhaustive_for_scope",
                 "output_truncated": False,
                 "unresolved_regions": [],
+                **(context_changes or {}),
             }
         else:
             result.one.return_value = (100, 100)
@@ -238,6 +248,36 @@ def test_system_policy_auto_acceptance_is_not_categorically_forbidden():
         )
 
 
+@pytest.mark.parametrize(
+    "context_changes",
+    [
+        {"class_map": {"item": 0, "new-class": 1}},
+        {"classes": [{"stable_id": "item", "definition": "changed scope"}]},
+        {"scope": "new scope"},
+        {"assessed_ontology_hash": None},
+    ],
+)
+def test_obsolete_ontology_or_scope_cannot_qualify_a_negative(monkeypatch, context_changes):
+    from labelloop_api import revision_store
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    connection = review_connection(context_changes=context_changes)
+    with pytest.raises(ValueError, match="valid current completeness"):
+        append_review(
+            connection,
+            asset_id="asset",
+            actor_kind="human",
+            actor_id="reviewer",
+            expected_revision=1,
+            approval_state="human_accepted",
+            review_tier="adjudicated",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            training_eligible=True,
+        )
+    assert not any(hasattr(call.args[0], "table") for call in connection.execute.call_args_list)
+
+
 def test_database_url_encodes_password_punctuation(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "local/dev@password")
     url = database_url()
@@ -246,3 +286,20 @@ def test_database_url_encodes_password_punctuation(monkeypatch):
     engine = __import__("sqlalchemy").create_engine(quoted_database_url())
     assert engine.url.password == "local/dev@password"
     engine.dispose()
+
+
+def test_alembic_receives_percent_encoded_url_without_interpolation(monkeypatch):
+    import sqlalchemy
+    from alembic import context
+    from alembic.config import Config
+
+    monkeypatch.setenv("POSTGRES_PASSWORD", "local/dev@password%")
+    url = quoted_database_url()
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setattr(context, "config", Config(), raising=False)
+    for operation in ("configure", "begin_transaction", "run_migrations"):
+        monkeypatch.setattr(context, operation, MagicMock())
+    engine_factory = MagicMock()
+    monkeypatch.setattr(sqlalchemy, "engine_from_config", engine_factory)
+    runpy.run_path(str(Path(__file__).parents[1] / "migrations" / "env.py"))
+    assert engine_factory.call_args.args[0]["sqlalchemy.url"] == url

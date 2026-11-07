@@ -1,5 +1,7 @@
 """Expected-revision, append-only review writes; never update historical rows."""
 
+import hashlib
+import json
 from typing import Any
 
 from sqlalchemy import Connection, insert, select, text
@@ -9,6 +11,18 @@ from labelloop_core.geometry import Box
 
 from .repository import source_uuid
 from .schema import annotation_revision, review_event, source_asset
+
+
+def completeness_context_hash(
+    class_map: dict[str, int], classes: list[dict[str, Any]], scope: str
+) -> str:
+    """Bind an image completeness decision to the exact ontology and project scope."""
+    encoded = json.dumps(
+        {"class_map": class_map, "classes": classes, "scope": scope},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def append_review(
@@ -69,8 +83,9 @@ def append_review(
         context = (
             connection.execute(
                 text(
-                    "SELECT ontology_release.class_map, project.access_policy,"
-                    " completeness_assessment.scope_completeness"
+                    "SELECT ontology_release.class_map, ontology_release.classes, project.scope,"
+                    " project.access_policy, completeness_assessment.ontology_hash"
+                    " AS assessed_ontology_hash, completeness_assessment.scope_completeness"
                     " AS assessed_completeness, completeness_assessment.output_truncated,"
                     " completeness_assessment.unresolved_regions"
                     " FROM source_asset"
@@ -129,7 +144,11 @@ def append_review(
             raise ValueError("changed object sets need a new authoritative completeness review")
         if (training_eligible or gold_eligible) and not objects_changed:
             if (
-                context["assessed_completeness"] != "exhaustive_for_scope"
+                context["assessed_ontology_hash"]
+                != completeness_context_hash(
+                    context["class_map"], context["classes"], context["scope"]
+                )
+                or context["assessed_completeness"] != "exhaustive_for_scope"
                 or context["output_truncated"]
                 or context["unresolved_regions"]
             ):

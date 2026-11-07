@@ -114,15 +114,9 @@ class AffineTransform:
         retained = box.intersect(self.crop.box)
         if retained is None:
             return None
-        translated = Box(
-            retained.x_min - self.crop.x,
-            retained.y_min - self.crop.y,
-            retained.x_max - self.crop.x,
-            retained.y_max - self.crop.y,
-        )
-        x1, y1 = self.points(translated.x_min, translated.y_min)
-        x2, y2 = self.points(translated.x_max, translated.y_max)
-        return Box(x1, y1, x2, y2).intersect(self.valid_content)
+        x1, y1 = self.points(retained.x_min, retained.y_min)
+        x2, y2 = self.points(retained.x_max, retained.y_max)
+        return Box(max(self.left, x1), max(self.top, y1), x2, y2).intersect(self.valid_content)
 
     def restore(self, box: Box) -> Box | None:
         """Recover only source extent supported by retained pixels, never hidden extent."""
@@ -133,10 +127,10 @@ class AffineTransform:
         x2, y2 = self.points(retained.x_max, retained.y_max, inverse=True)
         try:
             restored = Box(
-                max(0.0, x1) + self.crop.x,
-                max(0.0, y1) + self.crop.y,
-                max(0.0, x2) + self.crop.x,
-                max(0.0, y2) + self.crop.y,
+                max(self.crop.x, x1),
+                max(self.crop.y, y1),
+                max(self.crop.x, x2),
+                max(self.crop.y, y2),
             )
         except ValueError:
             return None
@@ -170,8 +164,10 @@ def full_frame_transform(
     top = (output_size - resized_height) // 2
     scale_x, scale_y = resized_width / selected.width, resized_height / selected.height
     return AffineTransform(
-        forward=_matrix(scale_x, scale_y, left, top),
-        inverse=_matrix(1 / scale_x, 1 / scale_y, -left / scale_x, -top / scale_y),
+        forward=_matrix(scale_x, scale_y, left - scale_x * selected.x, top - scale_y * selected.y),
+        inverse=_matrix(
+            1 / scale_x, 1 / scale_y, selected.x - left / scale_x, selected.y - top / scale_y
+        ),
         crop=selected,
         output_size=output_size,
         source_width=source_width,

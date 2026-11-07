@@ -11,7 +11,7 @@ from labelloop_api.schema import metadata
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"].replace("%", "%%"))
 target_metadata = metadata
 
 

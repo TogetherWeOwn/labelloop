@@ -3,6 +3,7 @@
 import io
 import json
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 from PIL import Image
@@ -193,6 +194,33 @@ def test_unsafe_ids_cannot_become_derivative_paths(tmp_path):
     first = manifest["samples"][0]
     assert first["image_path"] == f"images/train/{replacement.sha256}.jpg"
     assert not (tmp_path / "escape.jpg").exists()
+
+
+@pytest.mark.parametrize("box", [Box(0, 0, 2, 2), Box(5, 5, 7, 7)])
+def test_edge_boxes_remain_bounded_after_decimal_serialization(tmp_path, box):
+    release, images = canonical_release()
+    output = io.BytesIO()
+    Image.new("RGB", (7, 7), "white").save(output, "JPEG")
+    asset, images["a"] = process_image(output.getvalue(), asset_id="a", project_id="project")
+    train = replace(
+        release.samples[0],
+        asset=asset,
+        revision=replace(
+            release.samples[0].revision, objects=(DatasetObject("edge", "item", box),)
+        ),
+    )
+    manifest = compile_dataset(
+        replace(release, samples=(train, release.samples[1])),
+        "full-letterbox-320-v1",
+        tmp_path / "edge",
+        images,
+    )
+    sample = next(item for item in manifest["samples"] if item["asset_id"] == "a")
+    row = (tmp_path / "edge" / sample["label_path"]).read_text().split()
+    cx, cy, width, height = map(Decimal, row[1:])
+    assert 0 <= cx - width / 2 < cx + width / 2 <= 1
+    assert 0 <= cy - height / 2 < cy + height / 2 <= 1
+    assert float(width) == pytest.approx(2 / 7, abs=1e-8)
 
 
 def test_normalized_gate_does_not_accept_out_of_range_geometry():

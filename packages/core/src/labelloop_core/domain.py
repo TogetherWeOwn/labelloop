@@ -89,11 +89,27 @@ class AnnotationRevision:
     ) -> "AnnotationRevision":
         if expected_revision != self.revision:
             raise ValueError("stale expected annotation revision")
+        next_objects = tuple(objects)
+        if next_objects != self.objects:
+            if (
+                changes.get("training_eligible")
+                or changes.get("gold_eligible")
+                or changes.get("scope_completeness") == "exhaustive_for_scope"
+            ):
+                raise ValueError("changed object sets need a new authoritative completeness review")
+            changes = {
+                "approval_state": "draft",
+                "review_tier": "unreviewed",
+                "scope_completeness": "unreviewed",
+                "training_eligible": False,
+                "gold_eligible": False,
+                **changes,
+            }
         return replace(
             self,
             revision=self.revision + 1,
             parent_revision=self.revision,
-            objects=tuple(objects),
+            objects=next_objects,
             actor_kind=actor_kind,
             **changes,
         )
