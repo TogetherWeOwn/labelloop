@@ -3,7 +3,7 @@
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 NMSMode = Literal["external", "end2end"]
 EvaluationRole = Literal["development", "calibration", "locked_final_test"]
@@ -186,5 +186,10 @@ class TrainingResult:
             raise ValueError("selected checkpoint disagrees with fixed-shape validation")
 
 
-class TrainingBackend(Protocol):
-    def train(self, request: TrainingRequest) -> TrainingResult: ...
+ResultT_co = TypeVar("ResultT_co", covariant=True)
+
+
+class TrainingBackend(Protocol[ResultT_co]):
+    """Cloud progress must not masquerade as a fixed-shape local TrainingResult."""
+
+    def train(self, request: TrainingRequest) -> ResultT_co: ...

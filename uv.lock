@@ -525,11 +525,15 @@ name = "labelloop-platform"
 version = "0.0.0"
 source = { editable = "packages/platform" }
 dependencies = [
+    { name = "labelloop-core" },
     { name = "ultralytics-platform" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "ultralytics-platform", specifier = "==0.1.107" }]
+requires-dist = [
+    { name = "labelloop-core", editable = "packages/core" },
+    { name = "ultralytics-platform", specifier = "==0.1.107" },
+]
 
 [[package]]
 name = "labelloop-worker-core"
