@@ -86,7 +86,7 @@ class ReviewBundle:
         if len(set(ids)) != len(ids) or set(ids) != self.context.class_ids:
             raise ValueError("class definitions must match the pinned ontology")
         image_ids = [item.evidence_id for item in self.images]
-        if len(set(image_ids)) != len(image_ids) or not set(image_ids) <= self.context.evidence_ids:
+        if len(set(image_ids)) != len(image_ids) or set(image_ids) != self.context.evidence_ids:
             raise ValueError("images require unique available evidence identities")
         full_images = [item for item in self.images if item.kind == "full_image"]
         if len(full_images) != 1:
@@ -321,6 +321,8 @@ class AnthropicMessagesReviewer:
             if not isinstance(block, dict):
                 raise ReviewerError("invalid_response")
             kind = block.get("type")
+            if not isinstance(kind, str):
+                raise ReviewerError("unsupported_response")
             if kind == "text" and isinstance(block.get("text"), str):
                 text.append(block["text"])
             elif kind not in {"thinking", "redacted_thinking"}:

@@ -302,6 +302,13 @@ def test_text_blocks_are_joined_but_tools_are_never_executed() -> None:
         reviewer.parse(response(reviewer, content=[]))
 
 
+@pytest.mark.parametrize("kind", [[], {}, None, True, 1])
+def test_malformed_messages_block_type_uses_safe_error(kind: Any) -> None:
+    reviewer = AnthropicMessagesReviewer("fixture-model")
+    with pytest.raises(ReviewerError, match="^unsupported_response$"):
+        reviewer.parse(response(reviewer, content=[{"type": kind}]))
+
+
 def test_chat_rejects_ambiguous_choices_tools_and_accepts_refusal() -> None:
     reviewer = OpenAIChatReviewer("fixture-model")
     data = json.loads(response(reviewer))
@@ -320,9 +327,11 @@ def test_bundle_refuses_wrong_source_missing_overview_and_unapproved_evidence(
     bundle: ReviewBundle,
 ) -> None:
     with pytest.raises(ValueError, match="full source image"):
-        replace(bundle, images=(bundle.images[1],))
+        replace(bundle, images=(replace(bundle.images[0], kind="reference"), bundle.images[1]))
     with pytest.raises(ValueError, match="pinned source"):
-        replace(bundle, images=(replace(bundle.images[0], data=b"different"),))
+        replace(bundle, images=(replace(bundle.images[0], data=b"different"), bundle.images[1]))
+    with pytest.raises(ValueError, match="unique available"):
+        replace(bundle, images=(bundle.images[0],))
     with pytest.raises(ValueError, match="unique available"):
         replace(bundle, images=(*bundle.images, replace(bundle.images[1], evidence_id="private")))
     with pytest.raises(ValueError, match="unique available"):
@@ -336,6 +345,18 @@ def test_resource_caps_and_opaque_representations(bundle: ReviewBundle) -> None:
         ReviewImage("large", "reference", "image/png", b"x" * (MAX_IMAGE_BYTES + 1))
     with pytest.raises(ValueError, match="counts"):
         replace(bundle, images=bundle.images * 9)
+    images = (bundle.images[0],) + tuple(
+        ReviewImage(f"ref-{index}", "reference", "image/png", b"x" * MAX_IMAGE_BYTES)
+        for index in range(3)
+    )
+    context = replace(bundle.context, evidence_ids=frozenset(item.evidence_id for item in images))
+    with pytest.raises(ValueError, match="combined image"):
+        replace(bundle, context=context, images=images)
+    classes = tuple(ClassDefinition(f"class-{index}", "x" * 2048) for index in range(128))
+    context = replace(bundle.context, class_ids=frozenset(item.class_id for item in classes))
+    large = replace(bundle, context=context, classes=classes)
+    with pytest.raises(ValueError, match="prompt exceeds"):
+        OpenAIChatReviewer("fixture-model").prepare(large)
     for cap in (True, 0, -1, 16_385, 1.5):
         for cls in (OpenAIChatReviewer, AnthropicMessagesReviewer):
             with pytest.raises(ValueError, match="token cap"):

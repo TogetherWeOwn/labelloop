@@ -16,7 +16,8 @@ It requires exactly one full image, bound by SHA-256 to the canonical asset.
 Zero teacher detections do not remove that image from the request. Target crops,
 context crops and approved references can accompany it. Full-image source
 coordinates remain authoritative; a crop is recognition evidence, not a new
-coordinate frame. Image IDs must be unique and available in the context.
+coordinate frame. Image IDs must be unique and match the context's evidence set
+exactly, so a patch cannot cite a reference omitted from the request.
 
 The caller must obtain the revision for that asset from authoritative storage,
 authenticate the project/access scope, exclude holdout references, verify evidence
