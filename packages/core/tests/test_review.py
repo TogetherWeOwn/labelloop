@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from labelloop_core.domain import AnnotationRevision, DatasetObject, SourceAsset
+from labelloop_core.domain import AnnotationRevision, DatasetObject, LabelState, SourceAsset
 from labelloop_core.geometry import Box
 from labelloop_core.review import (
     MAX_OPERATIONS,
@@ -167,7 +167,9 @@ def test_changed_object_set_needs_a_second_completeness_pass(edit: dict[str, Any
 
 @pytest.mark.parametrize("state", ["ambiguous", "unknown", "insufficient_evidence"])
 @pytest.mark.parametrize("class_id", ["a", "b"])
-def test_relabel_resolves_uncertainty_but_requires_reinspection(state: str, class_id: str) -> None:
+def test_relabel_resolves_uncertainty_but_requires_reinspection(
+    state: LabelState, class_id: str
+) -> None:
     current = revision(objects=(replace(revision().objects[0], label_state=state),))
     first = CorrectionLoop(current).consume(
         context(), patch([operation("relabel", class_id=class_id)])
