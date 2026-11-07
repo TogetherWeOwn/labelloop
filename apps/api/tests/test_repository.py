@@ -63,10 +63,7 @@ def test_sql_defaults_are_sql_not_uuid_literals() -> None:
 def test_review_intent_precedes_append_and_nonhuman_eligibility_is_denied() -> None:
     connection = MagicMock()
     asset_uuid = object()
-    with (
-        pytest.raises(ValueError, match="eligibility"),
-        connection.begin_nested.return_value as _,
-    ):
+    with pytest.raises(ValueError, match="eligibility"):
         append_review(
             connection,
             asset_id="asset",
