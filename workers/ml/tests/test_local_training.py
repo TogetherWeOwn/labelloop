@@ -178,9 +178,9 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         class_map_sha256=file_digest(dataset / "class-map.json"),
         split_assignment_version=fixture.release.assignment.assignment_version,
         initialization_sha256=file_digest(initialization),
-        # Keep the coarse head above threshold, without truncating nearly tied random scores.
-        # A zero threshold plus max_det=300 cut through a tied score cohort at 320.
-        policy=InferencePolicy(side, conf=0.005 * (320 / side) ** 2, max_det=1000),
+        # The seeded coarse head scores near .012 at both sizes; the next head is near .003.
+        # A fixed threshold keeps the complete coarse cohort below the cap at either size.
+        policy=InferencePolicy(side, conf=0.005, max_det=1000),
         epochs=1,
         batch=2,
     )

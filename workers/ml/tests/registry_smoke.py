@@ -396,7 +396,10 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
     assert restored.champion.release_id == model.release_id and restored.revision == 5
     assert incumbent_shared.run_id in restored.champion.evaluation_run_ids
     return {
-        "scope": "synthetic retraining lineage and shared-development persistence only; no second actual training claim",
+        "scope": (
+            "synthetic retraining lineage and shared-development persistence only; "
+            "no second actual training claim"
+        ),
         "selected": asdict(selected),
         "restored": asdict(restored),
     }
