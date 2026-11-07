@@ -20,6 +20,8 @@ from labelloop_api.schema import (
     yolo_dataset_variant,
 )
 from labelloop_core.evaluation import ClassMetrics, Coverage, EvaluationReport, Metrics
+from labelloop_core.qualification import QualificationContext
+from labelloop_core.qualification_wire import dumps as qualification_json
 from labelloop_core.registry import ModelRelease, PromotionPolicy, RegistryState
 from labelloop_core.training import InferencePolicy, TrainingResult
 
@@ -386,11 +388,15 @@ def change_registry(
     evaluation_key: str | None = None,
     policy: PromotionPolicy | None = None,
     incumbent_evaluation_key: str | None = None,
+    qualification: QualificationContext | None = None,
 ) -> RegistryState:
     """Lock one recipe, validate persisted evidence, then commit head and event together.
 
     candidate_key=None requests rollback. The caller must authenticate/authorize the admin;
     this internal store deliberately does not expose principal claims through HTTP.
+    Qualification is a trusted read port, not a request body. Until authenticated,
+    locked policy/final-test/audit loaders are wired, production callers must omit it
+    and promotion fails closed. Synthetic fixtures exercise the port explicitly.
     """
     if not actor_id.strip():
         raise ValueError("registry events require an authenticated actor")
@@ -447,6 +453,7 @@ def change_registry(
                 policy,
                 expected_revision=expected_revision,
                 incumbent_report=incumbent,
+                qualification=qualification,
             )
             champion_id, rollback_id = candidate_row["id"], row["champion_id"]
         connection.execute(
@@ -467,6 +474,9 @@ def change_registry(
                     "policy": asdict(policy) if policy else None,
                     "evaluation_key": evaluation_key,
                     "incumbent_evaluation_key": incumbent_evaluation_key,
+                    "qualification": json.loads(qualification_json(qualification))
+                    if qualification
+                    else None,
                 },
             )
         )

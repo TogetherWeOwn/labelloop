@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from qualification_fixture import qualification_context, synthetic_final
 from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import model_schema as db
@@ -15,10 +16,12 @@ from labelloop_api.model_store import (
     change_registry,
     decode_report,
     load_registry,
+    load_release,
     record_digest,
     save_evaluation,
     save_model,
     save_training,
+    stored_report,
 )
 from labelloop_api.schema import (
     canonical_dataset_release,
@@ -28,6 +31,47 @@ from labelloop_api.schema import (
     yolo_dataset_variant,
 )
 from labelloop_core.registry import ModelRelease, PromotionPolicy
+
+
+def fixture_change_registry(connection, **kwargs):
+    """Exercise persistence with explicitly SYNTHETIC qualification, not a quality claim.
+
+    The CPU development metrics are copied only to test record/transaction wiring.
+    Invented source groups/audits must never be used as real final-test evidence.
+    The unchanged production entry point rejects the original missing context.
+    """
+    candidate_key = kwargs.get("candidate_key")
+    if candidate_key is None:
+        return change_registry(connection, **kwargs)
+
+    def final_for(model_key, evaluation_key):
+        model_id = connection.execute(
+            sa.select(db.model_release.c.id).where(db.model_release.c.release_key == model_key)
+        ).scalar_one()
+        release = load_release(connection, model_id)
+        source = stored_report(connection, release, evaluation_key)
+        final = synthetic_final(
+            source,
+            run_id=evaluation_key + "-synthetic-final-" + model_key,
+            dataset_id=source.dataset_release_id,
+        )
+        if final.run_id not in release.evaluation_run_ids:
+            variant_id = connection.execute(
+                sa.select(db.evaluation_run.c.variant_id).where(
+                    db.evaluation_run.c.run_key == evaluation_key
+                )
+            ).scalar_one()
+            save_evaluation(connection, model_key=model_key, variant_id=variant_id, report=final)
+        return load_release(connection, model_id), final
+
+    candidate, final = final_for(candidate_key, kwargs["evaluation_key"])
+    kwargs["evaluation_key"] = final.run_id
+    state = load_registry(connection, kwargs["project_key"], kwargs["recipe_key"])
+    if state.champion and kwargs.get("incumbent_evaluation_key"):
+        _, incumbent = final_for(state.champion.release_id, kwargs["incumbent_evaluation_key"])
+        kwargs["incumbent_evaluation_key"] = incumbent.run_id
+    kwargs["qualification"] = qualification_context(candidate, final, kwargs["policy"])
+    return change_registry(connection, **kwargs)
 
 
 def seed_variant(connection, request, manifest):
@@ -219,7 +263,17 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     release=item,
                     export_evidence=asdict(exported),
                 )
-            promoted = change_registry(
+            with pytest.raises(ValueError, match="trusted qualification"):
+                change_registry(
+                    connection,
+                    **common,
+                    expected_revision=0,
+                    candidate_key=model.release_id,
+                    evaluation_key=model.evaluation_run_ids[0],
+                    policy=gate,
+                )
+            assert load_registry(connection, request.project_id, request.recipe_id).champion is None
+            promoted = fixture_change_registry(
                 connection,
                 **common,
                 expected_revision=0,
@@ -227,7 +281,8 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 evaluation_key=model.evaluation_run_ids[0],
                 policy=gate,
             )
-            assert promoted.champion == model
+            assert replace(promoted.champion, evaluation_run_ids=model.evaluation_run_ids) == model
+            model = promoted.champion
         # A new connection must recover the whole immutable release, not in-memory state.
         with engine.connect() as connection:
             assert load_registry(connection, request.project_id, request.recipe_id) == promoted
@@ -235,7 +290,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
         def compete(suffix):
             try:
                 with engine.begin() as connection:
-                    return change_registry(
+                    return fixture_change_registry(
                         connection,
                         **common,
                         expected_revision=1,
@@ -262,7 +317,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             sa.event.listen(connection, "before_cursor_execute", fail_event)
             try:
                 with pytest.raises(RuntimeError, match="event failure"):
-                    change_registry(connection, **common, expected_revision=2)
+                    fixture_change_registry(connection, **common, expected_revision=2)
             finally:
                 sa.event.remove(connection, "before_cursor_execute", fail_event)
             assert load_registry(connection, request.project_id, request.recipe_id) == winner
@@ -281,12 +336,12 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 ).scalar_one()
                 == 2
             )
-            restored = change_registry(connection, **common, expected_revision=2)
+            restored = fixture_change_registry(connection, **common, expected_revision=2)
             assert restored.champion == model and restored.rollback == winner.champion
             assert restored.revision == 3
             assert load_registry(connection, request.project_id, other_recipe) == untouched
             with pytest.raises(ValueError, match="stale"):
-                change_registry(connection, **common, expected_revision=2)
+                fixture_change_registry(connection, **common, expected_revision=2)
             for table in (db.training_run, db.evaluation_run, db.model_release, db.promotion_event):
                 with connection.begin_nested() as transaction:
                     with pytest.raises(sa.exc.DatabaseError, match="immutable"):
@@ -355,7 +410,7 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
     )
     gate = PromotionPolicy(1, 0.0)
     with pytest.raises(ValueError, match="frozen evaluation protocol"):
-        change_registry(
+        fixture_change_registry(
             connection,
             **common,
             expected_revision=3,
@@ -402,7 +457,7 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
         )
     ).scalar_one()
     assert initial_payload["evaluation_run_ids"] == list(model.evaluation_run_ids)
-    selected = change_registry(
+    selected = fixture_change_registry(
         connection,
         **common,
         expected_revision=3,
@@ -412,7 +467,7 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
         policy=gate,
     )
     assert selected.champion.release_id == challenger.release_id and selected.revision == 4
-    restored = change_registry(connection, **common, expected_revision=4)
+    restored = fixture_change_registry(connection, **common, expected_revision=4)
     assert restored.champion.release_id == model.release_id and restored.revision == 5
     assert incumbent_shared.run_id in restored.champion.evaluation_run_ids
     return {
