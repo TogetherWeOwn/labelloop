@@ -759,7 +759,7 @@ Pause automatic acceptance for affected classes or sources when audits reveal in
 Promotion uses the application's `EvaluationRunner`, not Ultralytics `val`. For each recipe it:
 
 1. runs the declared pipeline on every source image of the evaluation release;
-2. inverse-maps through the recorded transforms, clips predictions to the valid-content rectangle and merges tiles;
+2. clips predictions to the derivative's valid-content rectangle, drops zero-area intersections, inverse-maps through the recorded transforms, clips to the source crop and image bounds, and merges tiles (the order in §7.4);
 3. scores against complete source ground truth.
 
 Outputs are COCO-style mAP50 and mAP50-95, plus precision and recall at the release `conf`. Each comes overall, per class (with ground-truth support counts) and per declared slice (size buckets measured in *source* pixels and in *derived* pixels, truncation, occlusion, negatives). The output also records the coverage lost to cropping or exclusion. A test cross-checks the numbers against `pycocotools` on golden fixtures. Ultralytics `val` output is kept as a diagnostic only.
@@ -780,7 +780,7 @@ Store originals, canonical labels, reference assets, model weights, release mani
 
 Every paid external operation goes through `BudgetGate`. That covers Platform training, batch auto-annotation, hosted predict, and LLM review requests.
 
-- **Ledger.** Each operation writes an estimate before dispatch and the actual cost after completion. Training actuals come from Platform `estimatedCost` and billing; LLM actuals come from provider token usage times configured prices.
+- **Ledger.** Each operation writes an estimate before dispatch and the actual cost after completion. The Platform `estimatedCost` is recorded as the estimate only. The training actual is the billing charge attributed to that run; until a charge can be attributed, the actual stays `unconfirmed` and the budget keeps counting the estimate; LLM actuals come from provider token usage times configured prices.
 - **Limits.** Each project has a monthly budget, a per-iteration budget and a per-operation ceiling. An operation whose estimate would exceed any limit is refused with `budget_exceeded`, never queued silently.
 - **Defaults.** New projects start with `autonomous_spend: false`. Every paid operation then needs an authenticated user click on a dry-run summary showing the estimated cost, GPU, epochs and image count. The project owner can enable autonomous spend within explicit limits; every iteration still writes its estimate to the ledger and stops at the limit.
 - **Failure states.** A 402 (insufficient credits) pauses the project's paid stages with a visible banner. The application never retries a 402.

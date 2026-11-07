@@ -9,7 +9,7 @@ The engine sets up a new visual domain and then works through this loop:
 3. adjudicates and audits uncertain cases;
 4. freezes annotation releases;
 5. compiles reproducible datasets for each image recipe;
-6. trains and evaluates one model per recipe on the original frame;
+6. trains one model per recipe on its compiled dataset and evaluates predictions against original-frame ground truth;
 7. promotes or rolls back each recipe independently;
 8. repeats while measured evidence justifies it.
 
