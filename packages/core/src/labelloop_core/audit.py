@@ -14,7 +14,12 @@ class AuditCandidate:
     prior_reviewer_ids: frozenset[str]
 
     def __post_init__(self) -> None:
-        if not self.asset_id or not self.pipeline_id or not self.prior_reviewer_ids:
+        if (
+            not self.asset_id
+            or not self.pipeline_id
+            or not self.prior_reviewer_ids
+            or any(not value.strip() for value in self.prior_reviewer_ids)
+        ):
             raise ValueError("audit candidates require source, pipeline and reviewer provenance")
         if self.revision.approval_state not in {"auto_accepted", "human_accepted"}:
             raise ValueError("audit sampling requires ordinary accepted labels")
@@ -33,6 +38,8 @@ def select_audit_sample(
     """Sample ordinary acceptances without confidence filtering; cover negatives too."""
     if not sample_id or type(size) is not int or not 1 <= size <= len(candidates):
         raise ValueError("audit sample needs an identity and a feasible positive size")
+    if type(seed) is not int:
+        raise ValueError("audit sample seed must be an integer")
     if len({item.asset_id for item in candidates}) != len(candidates):
         raise ValueError("audit pool must contain one revision per source")
 
@@ -99,7 +106,9 @@ def assess_audit(sample: AuditSample, observations: tuple[AuditObservation, ...]
         candidate = candidates[observation.asset_id]
         if observation.revision != candidate.revision.revision:
             raise ValueError("audit observation has a stale source revision")
-        if not observation.reviewer_id or observation.reviewer_id in candidate.prior_reviewer_ids:
+        reviewer = observation.reviewer_id.strip().casefold()
+        prior = {value.strip().casefold() for value in candidate.prior_reviewer_ids}
+        if not reviewer or reviewer in prior:
             raise ValueError("audit reviewer must be independent of the original decision")
         seen.add(observation.asset_id)
         if (

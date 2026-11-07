@@ -165,6 +165,35 @@ def test_changed_object_set_needs_a_second_completeness_pass(edit: dict[str, Any
     assert not second.current.training_eligible and not second.current.gold_eligible
 
 
+@pytest.mark.parametrize("state", ["ambiguous", "unknown", "insufficient_evidence"])
+@pytest.mark.parametrize("class_id", ["a", "b"])
+def test_relabel_resolves_uncertainty_but_requires_reinspection(state: str, class_id: str) -> None:
+    current = revision(objects=(replace(revision().objects[0], label_state=state),))
+    first = CorrectionLoop(current).consume(
+        context(), patch([operation("relabel", class_id=class_id)])
+    )
+    assert first.status == "running" and first.current.scope_completeness == "partial"
+    assert first.current.objects[0].class_id == class_id
+    assert first.current.objects[0].label_state == "identified"
+    assert current.objects[0].label_state == state
+    second = first.consume(context(review_run_id="review-second"), patch(expected_revision=2))
+    assert second.status == "accepted" and second.reason == "machine_evidence_only"
+    assert second.current.approval_state == "proposed"
+    assert not second.current.training_eligible and not second.current.gold_eligible
+
+
+def test_relabel_cannot_resolve_a_human_adjudicated_object_without_adjudication() -> None:
+    current = revision(
+        objects=(replace(revision().objects[0], label_state="ambiguous"),),
+        actor_kind="human",
+        approval_state="human_accepted",
+        review_tier="adjudicated",
+    )
+    loop = CorrectionLoop(current).consume(context(), patch([operation("relabel", class_id="b")]))
+    assert loop.status == "unresolved" and loop.reason == "adjudication_required"
+    assert loop.current == current
+
+
 def test_oscillation_is_escalated_and_never_runs_a_third_pass() -> None:
     first = CorrectionLoop(revision()).consume(
         context(), patch([operation("relabel", class_id="b")])
@@ -324,6 +353,9 @@ def test_discovery_cannot_reuse_the_review_run_identity() -> None:
         {"ontology_hash": "other"},
         {"evidence_ids": frozenset({"source"})},
         {"representation": "hud_portrait"},
+        {"discovery_run_id": "different-discovery"},
+        {"discovery_complete": False},
+        {"discovery_truncated": True},
     ],
 )
 def test_loop_cannot_switch_scope_between_passes(changes: dict[str, Any]) -> None:
@@ -331,6 +363,17 @@ def test_loop_cannot_switch_scope_between_passes(changes: dict[str, Any]) -> Non
         context(), patch([operation("relabel", class_id="b")])
     )
     second = first.consume(context(**changes), patch(expected_revision=2))
+    assert second.status == "failed" and second.reason == "review_context_changed"
+    assert second.current == first.current
+
+
+def test_incomplete_discovery_cannot_be_replaced_by_complete_evidence_midloop() -> None:
+    first = CorrectionLoop(revision()).consume(
+        context(discovery_complete=False), patch([operation("relabel", class_id="b")])
+    )
+    second = first.consume(
+        context(discovery_run_id="replacement-discovery"), patch(expected_revision=2)
+    )
     assert second.status == "failed" and second.reason == "review_context_changed"
     assert second.current == first.current
 

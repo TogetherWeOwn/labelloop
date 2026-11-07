@@ -60,6 +60,9 @@ class ReviewContext:
                     "classes": sorted(self.class_ids),
                     "evidence": sorted(self.evidence_ids),
                     "representation": self.representation,
+                    "discovery_run_id": self.discovery_run_id,
+                    "discovery_complete": self.discovery_complete,
+                    "discovery_truncated": self.discovery_truncated,
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -269,7 +272,9 @@ def validate_patch(
         obj = objects[operation.object_id]
         if operation.action == "relabel":
             assert operation.class_id is not None
-            objects[obj.object_id] = replace(obj, class_id=operation.class_id)
+            objects[obj.object_id] = replace(
+                obj, class_id=operation.class_id, label_state="identified"
+            )
         elif operation.action == "geometry":
             assert operation.box is not None
             objects[obj.object_id] = replace(obj, box=operation.box)

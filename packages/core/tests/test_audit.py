@@ -63,6 +63,25 @@ def test_sample_size_cannot_skip_a_present_stratum_or_exceed_pool(size: int) -> 
         )
 
 
+@pytest.mark.parametrize("seed", [True, 1.0, "7", None])
+def test_audit_seed_requires_a_strict_integer(seed: Any) -> None:
+    with pytest.raises(ValueError, match="seed must be an integer"):
+        select_audit_sample((candidate("source"),), sample_id="sample", size=1, seed=seed)
+
+
+@pytest.mark.parametrize("reviewer_id", ["", " \t"])
+def test_audit_candidate_requires_nonblank_prior_reviewer_ids(reviewer_id: str) -> None:
+    with pytest.raises(ValueError, match="provenance"):
+        replace(candidate("source"), prior_reviewer_ids=frozenset({"teacher", reviewer_id}))
+
+
+def test_prior_reviewer_identity_is_also_normalized() -> None:
+    item = replace(candidate("source"), prior_reviewer_ids=frozenset({" Teacher \t"}))
+    sample = select_audit_sample((item,), sample_id="sample", size=1, seed=7)
+    with pytest.raises(ValueError, match="independent"):
+        assess_audit(sample, (replace(observation("source"), reviewer_id="teacher"),))
+
+
 def test_duplicate_pool_members_and_nonaccepted_labels_are_rejected() -> None:
     item = candidate("source")
     with pytest.raises(ValueError, match="one revision"):
@@ -115,7 +134,9 @@ def test_missing_evidence_is_pending_not_success() -> None:
         assess_audit(AuditSample("empty", (), 1), ())
 
 
-@pytest.mark.parametrize("reviewer_id", ["teacher", "reviewer-model", ""])
+@pytest.mark.parametrize(
+    "reviewer_id", ["teacher", "reviewer-model", "", " \t", "Teacher", "teacher "]
+)
 def test_original_decider_cannot_independently_audit_its_acceptance(reviewer_id: str) -> None:
     sample = select_audit_sample((candidate("source"),), sample_id="sample", size=1, seed=7)
     with pytest.raises(ValueError, match="independent"):

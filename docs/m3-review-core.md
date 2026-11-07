@@ -20,6 +20,9 @@ The actions are `confirm`, `relabel` (`class_id`), `geometry` (`box`), `add`
 (`class_id`, `box`), `duplicate` (`duplicate_of`), `delete`, and `uncertain`
 (`label_state`). Only the action's listed extra fields are permitted. Reasons are
 untrusted plain text; consumers must never render them as markup or execute them.
+Relabeling establishes the allowed class and sets `label_state=identified`, including
+when resolving uncertainty without changing the class. It does not establish image
+completeness: that changed object set still needs a subsequent full-image inspection.
 
 `validate_patch` checks exact source/revision identity, approved evidence IDs,
 class membership, representation policy, finite positive geometry and source
@@ -41,7 +44,9 @@ Only approved, project-permitted, non-holdout evidence may enter the allowlist.
 or two passes, never more. Invalid patches terminate as `failed`; truncation,
 adjudication, oscillation and exhausted corrections terminate as `unresolved`.
 Changed objects invalidate completeness and need another complete inspection.
-The loop binds scope, source and evidence across passes.
+The loop binds scope, source, evidence and discovery run identity/completion/truncation
+across passes. Each review pass may have its own recorded review run identity, but
+it cannot replace discovery provenance or completion evidence mid-loop.
 
 An `accepted` loop means **machine review evidence settled**, not accepted labels
 or release readiness. Its annotation remains `proposed`, with a machine review
@@ -65,7 +70,10 @@ both accepted positives and negatives, the requested size must cover both strata
 This is stratified sampling, not an unweighted population error-rate estimator.
 
 `assess_audit` requires one observation for every sampled source/revision and a
-reviewer distinct from the original decision-makers. A missing result is pending;
+reviewer distinct from the original decision-makers. Independence comparisons
+conservatively strip whitespace and case-fold both reviewer identities; blank IDs
+are rejected, and distinct authenticated IDs that normalize alike require another
+auditor. The seed must be a strict integer. A missing result is pending;
 a wrong label, missed object, nonblind inspection or truncated output blocks a
 passing verdict. These are trusted audit records; future API/worker adapters must
 authenticate principals and record blind-first inspection before invoking it.
