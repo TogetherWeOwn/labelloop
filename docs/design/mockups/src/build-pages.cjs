@@ -173,8 +173,8 @@ function runs() {
     <dl class="facts"><dt>Release</dt><dd>r0008</dd><dt>Recipe</dt><dd>full-letterbox-320-v1</dd><dt>Base model</dt><dd class="mono">yolo26n · sha256 9c1e…</dd><dt>GPU</dt><dd>RTX 4090 · 3 free</dd><dt>Epochs</dt><dd>100</dd><dt>Images</dt><dd>1,114</dd></dl>
     <div class="stack" style="gap:12px">
       <div class="tile"><span class="label">Estimate <span class="tag warn">Estimate</span></span><span class="v">$1.38</span><span class="c">About 2 h at $0.69/h. Billed for time used, even if cancelled; at least 15 minutes.</span></div>
-      <p class="small t2">This month after this run: $4.48 of $40. Per-run limit $5.</p>
-      <p class="small t2">The run won't start if its estimate is over $5, or would take this month's spend past $40. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run.</p>
+      <p class="small t2">This month after this run: $5.86 of $40 ($3.10 spent, $1.38 queued, $1.38 this run). Per-run limit $5.</p>
+      <p class="small t2">The run won't start if its estimate is over $5, or if this month's spend plus queued estimates plus this one would pass $40. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run.</p>
     </div>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="pill md">Start · estimate $1.38</button><button class="pill ghost md">Cancel</button></div>

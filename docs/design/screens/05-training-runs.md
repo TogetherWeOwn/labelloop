@@ -14,7 +14,7 @@ An admin starts a run for a release and recipe, follows it, and sees whether the
 
 ## The start panel (J20)
 
-Fields: release, recipe (one run per recipe; two recipes = two runs), backend, base model with hash, GPU (Platform: always explicit, with availability), epochs, image count. Estimate tile with "Estimate" tag, price basis and billing rule. Month total after the run and the per-run limit. Ceiling line: "The run won't start if its estimate is over $5 per operation, or would take this month's spend past the $40 limit. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run." The button names the estimate, never a cap (kit J20). Over any limit: no primary; danger notice names the limit with a link to Costs (plan §12.1). With "Spend without asking" on, the panel still shows and starts on one click inside limits.
+Fields: release, recipe (one run per recipe; two recipes = two runs), backend, base model with hash, GPU (Platform: always explicit, with availability), epochs, image count. Estimate tile with "Estimate" tag, price basis and billing rule. Month total after the run and the per-run limit. Ceiling line: "The run won't start if its estimate is over $5 per operation, or if this month's spend, plus estimates reserved for queued work, plus this estimate would pass the $40 limit. Time-based billing can come in above the estimate; the actual shows as unconfirmed until the bill is matched to this run." The button names the estimate, never a cap (kit J20). Over any limit: no primary; danger notice names the limit with a link to Costs (plan §12.1). With "Spend without asking" on, the panel still shows and starts on one click inside limits.
 
 ## Run detail
 
