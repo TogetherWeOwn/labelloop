@@ -253,6 +253,25 @@ def test_insufficient_evidence_or_resources_never_weakens_mandatory_quotas(chang
         select_evidence(scope, candidates, selected_policy)
 
 
+def test_selection_input_bound_and_partial_optional_fill_preserve_hard_quotas() -> None:
+    scope = scope_for()
+    candidates = candidates_for(scope)
+    with pytest.raises(ValueError, match="candidate bound"):
+        select_evidence(scope, candidates, replace(policy(), max_candidates=4))
+    result = select_evidence(scope, candidates, replace(policy(), budget_units=6))
+    assert len(result.items) == 3
+    assert result.used_units == 6
+    assert {item.stratum for item in result.items} == {
+        "zero_detection",
+        "missing_object",
+        "ordinary_random",
+    }
+    with pytest.raises(ValueError, match="positive weights"):
+        replace(policy(), weights={**policy().weights, "omission": 0.0})
+    with pytest.raises(ValueError, match="disjoint"):
+        replace(policy(), ordinary_max_signal=0.8)
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.1, 1.1])
 def test_malformed_signals_are_not_evidence(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):

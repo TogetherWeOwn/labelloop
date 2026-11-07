@@ -158,7 +158,7 @@ def select_evidence(
     remaining = {item.asset_id: item for item in ordered}
 
     def score(item: SelectionCandidate) -> float:
-        values = asdict(item.signals)
+        values: dict[str, float] = asdict(item.signals)
         weighted = sum(values[key] * policy.weights[key] for key in sorted(SIGNALS))
         return weighted + policy.diversity_weight / (1 + clusters[item.cluster_id])
 
