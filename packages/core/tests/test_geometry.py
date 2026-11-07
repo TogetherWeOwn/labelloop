@@ -3,6 +3,7 @@ from dataclasses import astuple
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from hypothesis.strategies import DataObject
 
 from labelloop_core.geometry import Box, Crop, full_frame_transform, normalize_box, target_flags
 
@@ -13,7 +14,9 @@ from labelloop_core.geometry import Box, Crop, full_frame_transform, normalize_b
     output_size=st.integers(2, 1280),
     data=st.data(),
 )
-def test_unclipped_box_affine_and_normalized_round_trip(width, height, output_size, data):
+def test_unclipped_box_affine_and_normalized_round_trip(
+    width: int, height: int, output_size: int, data: DataObject
+) -> None:
     x_min = data.draw(st.floats(0, width - 1))
     y_min = data.draw(st.floats(0, height - 1))
     x_max = data.draw(st.floats(x_min + 1e-6, width))
@@ -45,7 +48,7 @@ def test_unclipped_box_affine_and_normalized_round_trip(width, height, output_si
 
 
 @given(crop_x=st.integers(0, 79), output_size=st.integers(16, 640))
-def test_crop_recover_only_retained_source_intersection(crop_x, output_size):
+def test_crop_recover_only_retained_source_intersection(crop_x: int, output_size: int) -> None:
     transform = full_frame_transform(200, 150, output_size, crop=Crop(crop_x, 0, 100, 150))
     original = Box(10, 10, 90, 120)
     mapped = transform.apply(original)
@@ -59,7 +62,7 @@ def test_crop_recover_only_retained_source_intersection(crop_x, output_size):
         assert "clipped" in target_flags(transform, original, 1)
 
 
-def test_actual_gain_and_padding_clip():
+def test_actual_gain_and_padding_clip() -> None:
     transform = full_frame_transform(20, 10, 4)
     assert (transform.resized_width, transform.resized_height) == (4, 2)
     assert (transform.scale_x, transform.scale_y) == (4 / 20, 2 / 10)
@@ -67,7 +70,7 @@ def test_actual_gain_and_padding_clip():
     assert transform.restore(Box(0, 0, 1, 1)) is None
 
 
-def test_outside_crop_and_tiny_targets():
+def test_outside_crop_and_tiny_targets() -> None:
     transform = full_frame_transform(400, 300, 320)
     cropped = full_frame_transform(400, 300, 320, crop=Crop(40, 0, 160, 150))
     assert cropped.apply(Box(0, 0, 10, 10)) is None

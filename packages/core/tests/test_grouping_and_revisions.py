@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from labelloop_core.domain import AnnotationRevision, CompletenessAssessment, DatasetObject
@@ -6,8 +8,8 @@ from labelloop_core.grouping import AssetEvidence, GroupingThresholds, assign_sp
 from labelloop_core.lineage import LineageGraph
 
 
-def evidence(name: str, **changes) -> AssetEvidence:
-    values = {
+def evidence(name: str, **changes: Any) -> AssetEvidence:
+    values: dict[str, Any] = {
         "asset_id": name,
         "sha256": name * 64,
         "phash": 0,
@@ -19,7 +21,7 @@ def evidence(name: str, **changes) -> AssetEvidence:
     return AssetEvidence(**values)
 
 
-def test_injected_duplicate_and_transitive_relation_never_crosses_split():
+def test_injected_duplicate_and_transitive_relation_never_crosses_split() -> None:
     records = [
         evidence("a", sha256="1" * 64, metadata={"session": "first"}),
         evidence("b", sha256="2" * 64, phash=0xAAAA_AAAA_AAAA_AAAA, metadata={"session": "first"}),
@@ -46,7 +48,7 @@ def test_injected_duplicate_and_transitive_relation_never_crosses_split():
     assert len(set(assignment.group_ids.values())) == 3
 
 
-def test_unavailable_embeddings_not_synthesized_and_borderline_queued():
+def test_unavailable_embeddings_not_synthesized_and_borderline_queued() -> None:
     left = evidence("a", sha256="1" * 64, phash=0)
     right = evidence("b", sha256="2" * 64, phash=0b111111111)
     _, _, borders = group_sources([left, right])
@@ -56,7 +58,7 @@ def test_unavailable_embeddings_not_synthesized_and_borderline_queued():
     assert thresholds.embedding_model == "none-v1"
 
 
-def test_seed_changes_order_and_same_seed_is_exactly_repeatable():
+def test_seed_changes_order_and_same_seed_is_exactly_repeatable() -> None:
     records = [
         evidence(chr(97 + i), sha256=f"{i + 1:064x}", phash=0xAAAA_AAAA_AAAA_AAAA if i % 2 else 0)
         for i in range(15)
@@ -65,7 +67,7 @@ def test_seed_changes_order_and_same_seed_is_exactly_repeatable():
     # The algorithm still requires independent sources; no source-only balancing fallback.
 
 
-def test_model_cannot_invent_human_or_gold_states():
+def test_model_cannot_invent_human_or_gold_states() -> None:
     initial = AnnotationRevision(1, (), "system")
     for field, value in (
         ("approval_state", "human_accepted"),
@@ -95,7 +97,7 @@ def test_model_cannot_invent_human_or_gold_states():
     assert not truncated.valid_for("changed", 1)
 
 
-def test_source_label_lineage_reaches_all_descendants():
+def test_source_label_lineage_reaches_all_descendants() -> None:
     graph = LineageGraph()
     graph.add("derived:r1", "source:a:revision:2")
     graph.add("dataset:r1-320", "derived:r1")
@@ -110,7 +112,7 @@ def test_source_label_lineage_reaches_all_descendants():
     assert not graph.descendants("source:a:revision:1")
 
 
-def test_negative_cannot_pass_completeness_gates():
+def test_negative_cannot_pass_completeness_gates() -> None:
     with pytest.raises(ValueError, match="exhaustive"):
         AnnotationRevision(1, (), "model", approval_state="auto_accepted", training_eligible=True)
     with pytest.raises(ValueError, match="unresolved"):

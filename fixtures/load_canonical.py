@@ -17,6 +17,7 @@ from labelloop_core.domain import (
     SourceSplitAssignment,
 )
 from labelloop_core.geometry import Box
+from labelloop_core.grouping import AssetEvidence
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = ROOT / "fixtures" / "golden"
@@ -31,7 +32,7 @@ class FixtureDomain:
         for item in document["images"]:
             data = (source_directory / item["file"]).read_bytes()
             asset_id = item["file"].removesuffix(".jpg")
-            from labelloop_compiler.ingest import process_image
+            from labelloop_compiler.ingest import process_image  # type: ignore[import-untyped]
 
             asset, encoded = process_image(
                 data,
@@ -88,10 +89,9 @@ class FixtureDomain:
 
 
 def load_labels(domain: str) -> dict[str, Any]:
-    return json.loads((GOLDEN / f"{domain}.labels.json").read_text())
+    document: dict[str, Any] = json.loads((GOLDEN / f"{domain}.labels.json").read_text())
+    return document
 
 
-def load_evidence(domain: str) -> list[Any]:
-    from labelloop_core.grouping import AssetEvidence
-
+def load_evidence(domain: str) -> list[AssetEvidence]:
     return [AssetEvidence(**item) for item in load_labels(domain)["evidence"]]

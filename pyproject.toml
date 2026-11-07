@@ -75,7 +75,7 @@ select = ["E", "F", "I", "B", "UP"]
 python_version = "3.12"
 strict = true
 files = ["packages/core/src"]
-mypy_path = "packages/core/src"
+mypy_path = "packages/core/src:fixtures"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"

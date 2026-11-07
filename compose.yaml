@@ -78,6 +78,8 @@ services:
 
   migrate:
     <<: *python-dev
+    # libpq requires a passwd entry even when host-side IDs are just bind ownership.
+    user: labelloop
     command:
       - sh
       - -c
