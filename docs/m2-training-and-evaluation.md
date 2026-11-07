@@ -64,17 +64,48 @@ release/event and advance the champion in one transaction. No HTTP promotion
 endpoint is exposed by this increment; authenticated principal enforcement stays
 at the service boundary.
 
+## Controlled CPU backend
+
+`labelloop_worker_ml.training.LocalUltralyticsBackend` consumes worker-owned paths,
+a hash-pinned initialization checkpoint, a compiled manifest and complete source
+validation truth. It verifies manifest/file/class-map hashes and request lineage
+before starting. A disposable dataset copy receives vendor label caches; the
+compiled release is never edited. The worker strips the test split from the run's
+data configuration and refuses validation sources present in training/test.
+
+The pinned trainer overrides rectangular validation batching with square datasets.
+Actual train and validation preprocessing and native inference inputs are asserted
+against the recipe and observed model stride. The real training transform is
+wrapped with per-sample before/after target counts and counts at or below six
+pixels. Any lost target fails the run and persists the failed audit evidence.
+Implicit Albumentations remains forbidden.
+
+Every epoch checkpoint is hashed and evaluated through the source-frame runner.
+The worker records a separate AP collection confidence floor (at most 0.001),
+while precision/recall retain the release's operating confidence. All geometry,
+NMS and tiling settings remain identical. Selection uses the source-frame score,
+not the vendor diagnostic `best.pt`. The result binds the selected epoch digest
+and resolved argument audit. Shapes, retention, per-epoch reports and arguments
+are written even when training fails where available.
+
+Actions now has an `ml-smoke` job required through `ci-ok`. It initializes a
+seeded yolo26n architecture from the pinned package without downloading pretrained
+weights, then trains one epoch on the 16-image CC0 interface fixture independently
+at 320 and 640. This is pipeline evidence, not model-quality qualification or a
+claim that pretrained weights were exercised. Linux Torch and torchvision use
+the CPU index. Audit records are uploaded as an Actions artifact. Execution and
+exact-head success remain to be verified in Actions.
+
 ## Remaining before milestone acceptance
 
-- Wire the pinned `local_ultralytics` backend to actual train/validation/inference
-  tensor hooks and per-epoch locally hashed checkpoints.
-- Audit sample target identities/counts before and after actual dataloader
-  transforms, including targets at or below six pixels.
+- Verify and repair the real CPU backend and retention/shape evidence in Actions.
+- Add real-loader small-target and negative-image boundary cases beyond the
+  fixture training run and synthetic transform-loss regression.
 - Export static ONNX, assert its runtime signature and compare native/exported
   outputs within a declared tolerance.
 - Persist training/evaluation lineage and atomic per-recipe registry transitions.
-- Add the Actions CPU smoke: yolo26n, 1–3 epochs, at least 16 fixture images,
-  independently at 320 and 640, then source evaluation, promotion and rollback.
+- Extend the Actions CPU smoke through native/ONNX equivalence and persistent,
+  independent promotion and rollback for both recipes.
 - Record exact-head Actions run/job conclusions and complete independent review
   before marking the draft PR ready. Existing required checks remain mandatory.
 

@@ -43,6 +43,7 @@ labelloop-platform = { workspace = true }
 labelloop-worker-core = { workspace = true }
 labelloop-worker-ml = { workspace = true }
 torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

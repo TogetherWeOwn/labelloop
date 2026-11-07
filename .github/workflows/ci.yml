@@ -174,10 +174,46 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+  ml-smoke:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LABELLOOP_ML_SMOKE: "1"
+      YOLO_OFFLINE: "true"
+      YOLO_AUTOINSTALL: "false"
+      YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv sync --frozen --group ml
+      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ml-smoke-evidence
+          path: |
+            ml-smoke-evidence/**/*.json
+            ml-smoke-evidence/**/args.yaml
+            ml-smoke-evidence/**/results.csv
+          if-no-files-found: error
+          retention-days: 7
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, full-run, lint, types, unit, import-contract, web-build, dev-stack]
+    needs: [changes, full-run, lint, types, unit, import-contract, web-build, dev-stack, ml-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
