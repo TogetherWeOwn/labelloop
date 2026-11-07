@@ -40,7 +40,8 @@ class FixtureDomain:
                 project_id=domain,
                 source_uri=item["file"],
             )
-            assert asset.sha256 == item["normalized_sha256"]
+            if asset.sha256 != item["normalized_sha256"]:
+                raise ValueError(f"fixture normalized digest mismatch: {asset_id}")
             self.images[asset_id] = encoded
             sources[asset_id] = asset
         ontology = OntologyRelease(
@@ -94,7 +95,9 @@ class FixtureDomain:
 
 
 def load_labels(domain: str) -> dict[str, Any]:
-    document: dict[str, Any] = json.loads((GOLDEN / f"{domain}.labels.json").read_text())
+    document: dict[str, Any] = json.loads(
+        (GOLDEN / f"{domain}.labels.json").read_text(encoding="utf-8")
+    )
     return document
 
 

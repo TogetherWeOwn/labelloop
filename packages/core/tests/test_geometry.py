@@ -79,6 +79,25 @@ def test_actual_gain_and_padding_clip() -> None:
     assert with_crop(full_frame_transform(100, 100, 200), Crop(0, 0, 50, 50)).scale_x == 4
 
 
+@pytest.mark.parametrize("source_size", [100, 200, 400])
+@pytest.mark.parametrize("allow_upscale", [False, True])
+def test_recropping_preserves_the_declared_upscale_policy(
+    source_size: int, allow_upscale: bool
+) -> None:
+    parent = full_frame_transform(source_size, source_size, 200, allow_upscale=allow_upscale)
+    crop = Crop(10, 20, 50, 50)
+    recropped = with_crop(parent, crop)
+    assert parent.allow_upscale is allow_upscale
+    assert recropped.allow_upscale is allow_upscale
+    assert recropped == full_frame_transform(
+        source_size, source_size, 200, crop=crop, allow_upscale=allow_upscale
+    )
+    assert recropped.scale_x == (4 if allow_upscale else 1)
+    assert recropped.scale_y == (4 if allow_upscale else 1)
+    # Repeated recropping must keep the original recipe policy too.
+    assert with_crop(recropped, Crop(20, 30, 25, 25)).scale_x == (8 if allow_upscale else 1)
+
+
 def test_exported_crop_matrices_map_the_source_frame() -> None:
     transform = full_frame_transform(200, 200, 320, crop=Crop(50, 50, 100, 100))
     assert transform.points(50, 50) == pytest.approx((0, 0))

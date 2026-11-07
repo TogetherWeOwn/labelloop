@@ -11,7 +11,7 @@ from PIL import Image
 
 from .domain import SourceSplitAssignment, Split
 
-ALGORITHM = "union-find-grouped-stratified-v1"
+ALGORITHM = "union-find-grouped-stratified-v2"
 METADATA_KEYS = frozenset({"session", "sequence", "subject"})
 
 
@@ -141,7 +141,7 @@ def assign_splits(
     seed: int = 20261107,
     validation_fraction: float = 0.25,
 ) -> SourceSplitAssignment:
-    """Greedy seeded class-count balancing; it never assigns an individual image."""
+    """Seeded class-count balancing within a group cap, exact for up to 16 groups."""
     groups, _, _ = group_sources(evidence, thresholds)
     if len(set(groups.values())) < 2:
         raise ValueError("independent train and validation groups are required")
@@ -177,7 +177,8 @@ def assign_splits(
     shuffled = sorted(
         members, key=lambda group: hashlib.sha256(f"{seed}:{group}".encode()).hexdigest()
     )
-    val_cap = max(1, round(len(members) * validation_fraction))
+    positions = {group: index for index, group in enumerate(shuffled)}
+    val_cap = min(len(members) - 1, max(1, round(len(members) * validation_fraction)))
 
     def best_candidate(candidate: list[str]) -> tuple[float, float, tuple[int, ...]]:
         deficit = sum(
@@ -186,7 +187,7 @@ def assign_splits(
         )
         size = abs(len(candidate) - val_cap)
         # Tie breaking uses the seeded order, never source iteration order.
-        rank = tuple(shuffled.index(group) for group in candidate)
+        rank = tuple(positions[group] for group in candidate)
         return deficit, size, rank
 
     best: list[str] | None = None
@@ -194,7 +195,7 @@ def assign_splits(
 
     def search(selected: list[str], tail: list[str]) -> None:
         nonlocal best
-        if best is not None and len(selected) > val_cap and len(selected) >= len(best):
+        if len(selected) > val_cap:
             return
         if not tail:
             if (
@@ -211,19 +212,22 @@ def assign_splits(
         search([], remaining)
     else:
         selected: list[str] = []
+        covered: Counter[str] = Counter()
         while len(selected) < val_cap:
             group = max(
-                (group for group in shuffled if group not in selected),
+                remaining,
                 key=lambda group: (
                     sum(
                         min(counts[group][class_id], targets[class_id])
                         for class_id in classes
-                        if sum(counts[item][class_id] for item in selected) < targets[class_id]
+                        if covered[class_id] < targets[class_id]
                     ),
-                    -shuffled.index(group),
+                    -positions[group],
                 ),
             )
             selected.append(group)
+            covered.update(counts[group])
+            remaining.remove(group)
         best = selected
     if best is None:
         raise ValueError("assignment cannot establish non-empty train and validation")

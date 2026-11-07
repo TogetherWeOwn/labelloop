@@ -192,7 +192,7 @@ preprocessing_recipe = table(
 )
 derived_sample = table(
     "derived_sample",
-    Column("variant_id", UUID, nullable=False),
+    Column("variant_id", UUID, ForeignKey("yolo_dataset_variant.id"), nullable=False),
     Column("source_id", UUID, ForeignKey("source_asset.id"), nullable=False),
     Column("crop", JSON, nullable=False),
     Column("transform", JSON, nullable=False),

@@ -140,7 +140,7 @@ def build(domain: str) -> None:
             "asset_splits": assignment.asset_splits,
             "group_splits": assignment.group_splits,
             "group_ids": assignment.group_ids,
-            "seed": 20261107,
+            "seed": assignment.seed,
             "algorithm": assignment.algorithm,
             "reasons": assignment.reasons,
             "locked": True,
@@ -149,7 +149,7 @@ def build(domain: str) -> None:
     }
     path = ROOT / "fixtures" / "golden" / f"{domain}.labels.json"
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(labels, indent=2) + "\n")
+    path.write_text(json.dumps(labels, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":

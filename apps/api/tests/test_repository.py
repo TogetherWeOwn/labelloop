@@ -13,7 +13,7 @@ from sqlalchemy.schema import CreateTable
 from labelloop_api.database_url import database_url, quoted_database_url
 from labelloop_api.repository import ingest_canonical_asset
 from labelloop_api.revision_store import append_review, completeness_context_hash
-from labelloop_api.schema import annotation_revision, review_event, source_asset
+from labelloop_api.schema import annotation_revision, derived_sample, review_event, source_asset
 
 
 def test_content_hash_is_database_and_object_store_identity() -> None:
@@ -276,6 +276,71 @@ def test_obsolete_ontology_or_scope_cannot_qualify_a_negative(monkeypatch, conte
             training_eligible=True,
         )
     assert not any(hasattr(call.args[0], "table") for call in connection.execute.call_args_list)
+
+
+@pytest.mark.parametrize("truncated", [False, True])
+def test_model_cannot_upgrade_partial_completeness(monkeypatch, truncated):
+    from labelloop_api import revision_store
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    connection = review_connection(
+        actor_kind="model",
+        approval_state="proposed",
+        review_tier="unreviewed",
+        context_changes={"assessed_completeness": "partial", "output_truncated": truncated},
+    )
+    with pytest.raises(ValueError, match="valid current completeness"):
+        append_review(
+            connection,
+            asset_id="asset",
+            actor_kind="model",
+            actor_id="proposal",
+            expected_revision=1,
+            approval_state="proposed",
+            review_tier="unreviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+        )
+    assert not any(hasattr(call.args[0], "table") for call in connection.execute.call_args_list)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_append_preserves_assessment_instead_of_caller_claim(monkeypatch, changed):
+    from labelloop_api import revision_store
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    connection = review_connection(
+        actor_kind="model",
+        approval_state="proposed",
+        review_tier="unreviewed",
+        context_changes={"assessed_completeness": "partial", "output_truncated": True},
+    )
+    append_review(
+        connection,
+        asset_id="asset",
+        actor_kind="model",
+        actor_id="proposal",
+        expected_revision=1,
+        approval_state="proposed",
+        review_tier="unreviewed",
+        scope_completeness="unreviewed",
+        objects=[{"object_id": "one", "class_id": "item", "box": [0, 0, 5, 5]}] if changed else [],
+    )
+    copies = [
+        call
+        for call in connection.execute.call_args_list
+        if "INSERT INTO completeness_assessment" in str(call.args[0])
+    ]
+    assert len(copies) == 1
+    assert copies[0].args[1]["next_completeness"] == ("unreviewed" if changed else "partial")
+    assert ":actor_kind" not in str(copies[0].args[0])
+    assert ":actor_id" not in str(copies[0].args[0])
+
+
+def test_derived_sample_retains_variant_foreign_key():
+    assert {key.target_fullname for key in derived_sample.c.variant_id.foreign_keys} == {
+        "yolo_dataset_variant.id"
+    }
 
 
 def test_database_url_encodes_password_punctuation(monkeypatch):

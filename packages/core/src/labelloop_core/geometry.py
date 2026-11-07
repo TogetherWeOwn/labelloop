@@ -92,6 +92,7 @@ class AffineTransform:
     scale_x: float
     scale_y: float
     algorithm: str
+    allow_upscale: bool = True
 
     @property
     def valid_content(self) -> Box:
@@ -181,6 +182,7 @@ def full_frame_transform(
         scale_x=scale_x,
         scale_y=scale_y,
         algorithm=VALID_CONTENT if crop else "full-letterbox-v1",
+        allow_upscale=allow_upscale,
     )
 
 
@@ -223,6 +225,5 @@ def with_crop(transform: AffineTransform, crop: Crop) -> AffineTransform:
         transform.source_height,
         transform.output_size,
         crop=crop,
-        allow_upscale=transform.resized_width / transform.crop.width > 1
-        or transform.resized_height / transform.crop.height > 1,
+        allow_upscale=transform.allow_upscale,
     )

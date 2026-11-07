@@ -30,5 +30,7 @@ class LineageGraph:
     ) -> set[str]:
         candidates = set(self.parents) if candidate_ids is None else candidate_ids
         return {
-            artifact_id for artifact_id in candidates if source_id in self.ancestors(artifact_id)
+            artifact_id
+            for artifact_id in candidates
+            if artifact_id != source_id and source_id in self.ancestors(artifact_id)
         }

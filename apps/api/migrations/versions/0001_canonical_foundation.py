@@ -22,6 +22,17 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER revision_no_update BEFORE UPDATE OR DELETE ON annotation_revision
 FOR EACH ROW EXECUTE FUNCTION annotation_revision_append_only();
 
+CREATE FUNCTION canonical_identity_immutable() RETURNS trigger
+SET search_path FROM CURRENT AS $$
+BEGIN
+  RAISE EXCEPTION 'source assets and ontology releases are immutable; create a new identity';
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER source_identity_no_update BEFORE UPDATE OR DELETE ON source_asset
+FOR EACH ROW EXECUTE FUNCTION canonical_identity_immutable();
+CREATE TRIGGER ontology_identity_no_update BEFORE UPDATE OR DELETE ON ontology_release
+FOR EACH ROW EXECUTE FUNCTION canonical_identity_immutable();
+
 CREATE FUNCTION frozen_guard() RETURNS trigger SET search_path FROM CURRENT AS $$
 BEGIN
   RAISE EXCEPTION 'frozen releases and locked split assignments are immutable';
@@ -114,6 +125,9 @@ def downgrade() -> None:
             "DROP TRIGGER IF EXISTS locked_assignment_update ON source_split_assignment;"
             "DROP TRIGGER IF EXISTS frozen_release_update ON canonical_dataset_release;"
             "DROP FUNCTION IF EXISTS frozen_guard;"
+            "DROP TRIGGER IF EXISTS ontology_identity_no_update ON ontology_release;"
+            "DROP TRIGGER IF EXISTS source_identity_no_update ON source_asset;"
+            "DROP FUNCTION IF EXISTS canonical_identity_immutable;"
             "DROP TRIGGER IF EXISTS revision_no_update ON annotation_revision;"
             "DROP FUNCTION IF EXISTS annotation_revision_append_only;"
         )

@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 from .geometry import Box
@@ -76,6 +76,10 @@ class AnnotationRevision:
                 raise ValueError("release eligibility requires an accepted annotation revision")
             if any(obj.label_state != "identified" for obj in self.objects):
                 raise ValueError("unresolved objects prevent ordinary training eligibility")
+        if self.actor_kind == "model" and self.training_eligible:
+            raise ValueError(
+                "model output cannot assert eligibility; a qualified system policy must"
+            )
         if self.gold_eligible and self.review_tier != "adjudicated":
             raise ValueError("gold eligibility requires independent adjudication")
 
@@ -292,5 +296,15 @@ class CanonicalDatasetRelease:
             raise ValueError("an asset cannot be both selected and excluded")
 
     def ontology_hash(self) -> str:
-        encoded = json.dumps(self.ontology.mapping(), sort_keys=True, separators=(",", ":"))
+        encoded = json.dumps(
+            {
+                "class_map": self.ontology.mapping(),
+                "classes": [
+                    asdict(item)
+                    for item in sorted(self.ontology.classes, key=lambda item: item.stable_id)
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return hashlib.sha256(encoded.encode()).hexdigest()

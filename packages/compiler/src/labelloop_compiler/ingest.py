@@ -2,7 +2,9 @@
 
 import hashlib
 import io
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Protocol
 
 from PIL import Image, ImageOps, UnidentifiedImageError, features
@@ -49,7 +51,22 @@ class LocalObjectStore:
             if target.read_bytes() != data:
                 raise ValueError("immutable object already has different bytes")
             return
-        target.write_bytes(data)
+        temporary: Path | None = None
+        try:
+            with NamedTemporaryFile(dir=target.parent, prefix=".partial-", delete=False) as staged:
+                temporary = Path(staged.name)
+                staged.write(data)
+                staged.flush()
+                os.fsync(staged.fileno())
+            # A hard link publishes complete bytes without replacing a concurrent writer.
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                if target.read_bytes() != data:
+                    raise ValueError("immutable object already has different bytes") from None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def process_image(
@@ -70,9 +87,12 @@ def process_image(
             opened.load()
 
             orientation = opened.getexif().get(274, 1)
+            # TIFF/EXIF defines only values 1..8; an absent tag defaults to 1.
             if orientation not in range(1, 9):
                 raise ValueError("invalid EXIF orientation")
             normalized = ImageOps.exif_transpose(opened).convert("RGB")
+    except Image.DecompressionBombError as error:
+        raise ValueError("image exceeds the decoder pixel safety boundary") from error
     except (UnidentifiedImageError, OSError, SyntaxError) as error:
         raise ValueError("image cannot be decoded completely") from error
     output = io.BytesIO()

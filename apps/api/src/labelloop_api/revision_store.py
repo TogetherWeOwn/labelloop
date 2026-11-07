@@ -142,7 +142,7 @@ def append_review(
             (training_eligible, gold_eligible, scope_completeness == "exhaustive_for_scope")
         ):
             raise ValueError("changed object sets need a new authoritative completeness review")
-        if (training_eligible or gold_eligible) and not objects_changed:
+        if training_eligible or gold_eligible or scope_completeness == "exhaustive_for_scope":
             if (
                 context["assessed_ontology_hash"]
                 != completeness_context_hash(
@@ -153,9 +153,12 @@ def append_review(
                 or context["unresolved_regions"]
             ):
                 raise ValueError(
-                    "release eligibility needs a valid current completeness assessment"
+                    "exhaustive claims and release eligibility need a valid current completeness"
+                    " assessment"
                 )
-        next_completeness = "unreviewed" if objects_changed else scope_completeness
+        next_completeness = (
+            "unreviewed" if objects_changed else context["assessed_completeness"] or "unreviewed"
+        )
         values = {
             "asset_id": asset_uuid,
             "revision": expected_revision + 1,
@@ -185,9 +188,9 @@ def append_review(
             text(
                 """INSERT INTO completeness_assessment
                    (asset_id, revision, ontology_hash, scope_completeness, actor_kind,
-                    actor_id, output_truncated, unresolved_regions)
-                   SELECT asset_id, :next_revision, ontology_hash, :next_completeness, :actor_kind,
-                    :actor_id, output_truncated, unresolved_regions
+                    actor_id, output_truncated, unresolved_regions, created_at)
+                   SELECT asset_id, :next_revision, ontology_hash, :next_completeness, actor_kind,
+                    actor_id, output_truncated, unresolved_regions, created_at
                    FROM completeness_assessment
                    WHERE asset_id = :asset_id AND revision = :expected_revision
                    ON CONFLICT (asset_id, revision) DO NOTHING"""

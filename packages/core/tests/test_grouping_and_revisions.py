@@ -1,8 +1,19 @@
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from labelloop_core.domain import AnnotationRevision, CompletenessAssessment, DatasetObject
+from labelloop_core.domain import (
+    AnnotationRevision,
+    CanonicalDatasetRelease,
+    ClassDefinition,
+    CompletenessAssessment,
+    DatasetObject,
+    OntologyRelease,
+    ReleasedSample,
+    SourceAsset,
+    SourceSplitAssignment,
+)
 from labelloop_core.geometry import Box
 from labelloop_core.grouping import (
     AssetEvidence,
@@ -65,12 +76,10 @@ def test_unavailable_embeddings_not_synthesized_and_borderline_queued() -> None:
 
 
 def test_seed_changes_order_and_same_seed_is_exactly_repeatable() -> None:
-    records = [
-        evidence(chr(97 + i), sha256=f"{i + 1:064x}", phash=0xAAAA_AAAA_AAAA_AAAA if i % 2 else 0)
-        for i in range(15)
-    ]
-    assert assign_splits(records, seed=7) == assign_splits(list(reversed(records)), seed=7)
-    # The algorithm still requires independent sources; no source-only balancing fallback.
+    records = independent_records(40)
+    baseline = assign_splits(records, seed=7)
+    assert baseline == assign_splits(list(reversed(records)), seed=7)
+    assert baseline.asset_splits != assign_splits(records, seed=8).asset_splits
 
 
 def independent_records(count: int) -> list[AssetEvidence]:
@@ -125,6 +134,24 @@ def test_large_group_assignment_is_bounded_and_group_safe() -> None:
         assert len(groups) == 1
 
 
+@pytest.mark.parametrize(
+    ("count", "fraction", "expected_validation_groups"),
+    [(16, 0.25, 4), (16, 0.98, 15), (17, 0.25, 4), (17, 0.98, 16), (2, 0.98, 1), (17, 0.01, 1)],
+)
+def test_split_fraction_is_a_hard_cap_even_with_unique_classes(
+    count: int, fraction: float, expected_validation_groups: int
+) -> None:
+    records = [
+        replace(record, class_counts={f"unique-{index}": 1})
+        for index, record in enumerate(independent_records(count))
+    ]
+    assignment = assign_splits(records, validation_fraction=fraction)
+    assert list(assignment.group_splits.values()).count("val") == expected_validation_groups
+    assert set(assignment.group_splits.values()) == {"train", "val"}
+    assert assignment == assign_splits(list(reversed(records)), validation_fraction=fraction)
+    assert assignment.algorithm == "union-find-grouped-stratified-v2"
+
+
 def test_malformed_embedding_is_not_missing_evidence() -> None:
     with pytest.raises(ValueError, match="dimensions"):
         group_sources([evidence("a", embedding=(1.0, 0.0)), evidence("b", embedding=(1.0,))])
@@ -160,6 +187,31 @@ def test_model_cannot_invent_human_or_gold_states() -> None:
     assert not truncated.valid_for("hash", 1)
     assert not truncated.valid_for("hash", 2)
     assert not truncated.valid_for("changed", 1)
+
+
+@pytest.mark.parametrize("verified_negative", [False, True])
+def test_model_cannot_self_assign_or_inherit_training_eligibility(verified_negative: bool) -> None:
+    objects = () if verified_negative else (DatasetObject("one", "item", Box(0, 0, 10, 10)),)
+    proposal = AnnotationRevision(
+        1,
+        objects,
+        "model",
+        approval_state="auto_accepted",
+        review_tier="machine_verified_no_human_review",
+        scope_completeness="exhaustive_for_scope",
+    )
+    with pytest.raises(ValueError, match="qualified system policy"):
+        replace(proposal, training_eligible=True)
+    with pytest.raises(ValueError, match="qualified system policy"):
+        proposal.next_revision(
+            objects=objects, expected_revision=1, actor_kind="model", training_eligible=True
+        )
+    # Trusted policy code may promote machine evidence; authentication and qualification
+    # are enforced at the persistence boundary, not by untrusted model output.
+    accepted = replace(proposal, actor_kind="system", training_eligible=True)
+    assert accepted.training_eligible
+    with pytest.raises(ValueError, match="qualified system policy"):
+        accepted.next_revision(objects=objects, expected_revision=1, actor_kind="model")
 
 
 def test_changed_object_set_invalidates_inherited_acceptance() -> None:
@@ -202,6 +254,12 @@ def test_source_label_lineage_reaches_all_descendants() -> None:
         "proposal:new",
     }
     assert not graph.descendants("source:a:revision:1")
+    expected = {"dataset:r1-320", "model:20", "proposal:new"}
+    assert graph.descendants("derived:r1") == expected
+    candidates = {"derived:r1", "model:20", "unrelated"}
+    assert graph.descendants("derived:r1", candidates) == {"model:20"}
+    assert graph.descendants("derived:r1", frozenset(candidates)) == {"model:20"}
+    assert not graph.descendants("derived:r1", set())
 
 
 def test_all_lineage_parents_participate_in_cycle_guards() -> None:
@@ -211,6 +269,61 @@ def test_all_lineage_parents_participate_in_cycle_guards() -> None:
     with pytest.raises(ValueError, match="acyclic"):
         graph.add("root", "unrelated", "b")
     assert "root" not in graph.parents
+
+
+def test_ontology_hash_binds_definitions_and_mapping_independent_of_catalog_order() -> None:
+    item = ClassDefinition("item", "Item", "visible item", ("object",))
+    parent = ClassDefinition("parent", "Parent", "broader category")
+    ontology = OntologyRelease("ontology", "project", 1, (item, parent), {"item": 0, "parent": 1})
+    release = CanonicalDatasetRelease(
+        "release",
+        "project",
+        ontology,
+        SourceSplitAssignment(
+            "assignment", {"asset": "val"}, {"group": "val"}, {"asset": "group"}, 1, "test", {}
+        ),
+        (
+            ReleasedSample(
+                SourceAsset("asset", "project", "a" * 64, f"sha256/aa/{'a' * 64}", 100, 100),
+                AnnotationRevision(
+                    1,
+                    (),
+                    "human",
+                    approval_state="human_accepted",
+                    review_tier="human_reviewed",
+                    scope_completeness="exhaustive_for_scope",
+                    training_eligible=True,
+                ),
+                "group",
+                "val",
+            ),
+        ),
+        {},
+    )
+    original_hash = release.ontology_hash()
+    assessment = CompletenessAssessment(original_hash, 1, "exhaustive_for_scope", "human")
+    assert assessment.valid_for(original_hash, 1)
+    reordered = replace(ontology, classes=(parent, item), class_map={"parent": 1, "item": 0})
+    assert replace(release, ontology=reordered).ontology_hash() == original_hash
+    changed_ontologies = [
+        replace(ontology, classes=(replace(item, **changes), parent))
+        for changes in (
+            {"name": "Renamed item"},
+            {"definition": "different target scope"},
+            {"aliases": ("new alias",)},
+            {"parent_id": "parent"},
+        )
+    ]
+    changed_ontologies.extend(
+        [
+            replace(ontology, classes=(item, replace(parent, definition="changed parent scope"))),
+            replace(ontology, class_map={"item": 1, "parent": 0}),
+        ]
+    )
+    for changed in changed_ontologies:
+        changed_hash = replace(release, ontology=changed).ontology_hash()
+        assert changed_hash != original_hash
+        assert not assessment.valid_for(changed_hash, 1)
 
 
 def test_negative_cannot_pass_completeness_gates() -> None:

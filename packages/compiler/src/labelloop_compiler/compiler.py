@@ -88,8 +88,11 @@ def compile_dataset(
     file_hashes: dict[str, str] = {}
     try:
         seen_names: set[str] = set()
-        seen_derivatives: set[str] = set()
+        source_groups: dict[str, tuple[str, str]] = {}
         for sample in sorted(release.samples, key=lambda item: item.asset.asset_id):
+            group = (sample.group_id, sample.split)
+            if source_groups.setdefault(sample.asset.sha256, group) != group:
+                raise CompilerFailure("identical sources must share one split group")
             compiled = _compile_sample(sample, selected_recipe, reader, release, crop_policy)
             if sample.asset.asset_id in seen_names:
                 raise CompilerFailure("duplicate derivative basename")
@@ -104,11 +107,9 @@ def compile_dataset(
                 )
                 continue
             labels, image, record = compiled
-            image_path = temporary / "images" / sample.split / f"{sample.asset.sha256}.jpg"
-            label_path = temporary / "labels" / sample.split / f"{sample.asset.sha256}.txt"
-            if sample.asset.sha256 in seen_derivatives:
-                raise CompilerFailure("identical sources cannot become unique release samples")
-            seen_derivatives.add(sample.asset.sha256)
+            basename = f"{sample.asset.sha256}-{digest(sample.asset.asset_id.encode('utf-8'))}"
+            image_path = temporary / "images" / sample.split / f"{basename}.jpg"
+            label_path = temporary / "labels" / sample.split / f"{basename}.txt"
             image_path.parent.mkdir(parents=True, exist_ok=True)
             label_path.parent.mkdir(parents=True, exist_ok=True)
             image_bytes = _encode(image, selected_recipe)
@@ -184,10 +185,8 @@ def compile_dataset(
         documents["manifest.json"] = json_bytes(manifest)
         for relative, data in documents.items():
             (temporary / relative).write_bytes(data)
-        _contact_sheet(temporary, manifest_samples)
-        file_hashes["preview-contact-sheet.jpg"] = digest(
-            (temporary / "preview-contact-sheet.jpg").read_bytes()
-        )
+        for relative in _contact_sheet(temporary, manifest_samples):
+            file_hashes[relative] = digest((temporary / relative).read_bytes())
         for relative, data in documents.items():
             file_hashes[relative] = digest(data)
         file_hashes.pop("manifest.json")
@@ -403,19 +402,29 @@ def _class_support(
     }
 
 
-def _contact_sheet(root: Path, samples: list[dict[str, Any]]) -> None:
-    # Audit preview is separate from training raster determinism and uses a pinned font.
-    width, height = 160, 180
-    sheet = Image.new("RGB", (width * 8, height * ((len(samples) + 7) // 8)), "white")
-    draw = ImageDraw.Draw(sheet)
-    for index, sample in enumerate(samples):
-        with Image.open(root / sample["image_path"]) as image:
-            thumbnail = image.copy().convert("RGB")
-        thumbnail.thumbnail((width, 160))
-        x, y = index % 8 * width, index // 8 * height
-        sheet.paste(thumbnail, (x, y))
-        draw.text((x, y + 162), sample["asset_id"][:24], fill="black")
-    sheet.save(root / "preview-contact-sheet.jpg", format="JPEG", quality=90, optimize=False)
+def _contact_sheet(root: Path, samples: list[dict[str, Any]]) -> list[str]:
+    # Bound each audit page to 8 x 8 thumbnails, independently of release size.
+    width, height, page_size = 160, 180, 64
+    paths = []
+    for start in range(0, len(samples), page_size):
+        page = samples[start : start + page_size]
+        sheet = Image.new("RGB", (width * 8, height * ((len(page) + 7) // 8)), "white")
+        draw = ImageDraw.Draw(sheet)
+        for index, sample in enumerate(page):
+            with Image.open(root / sample["image_path"]) as image:
+                thumbnail = image.copy().convert("RGB")
+            thumbnail.thumbnail((width, 160))
+            x, y = index % 8 * width, index // 8 * height
+            sheet.paste(thumbnail, (x, y))
+            draw.text((x, y + 162), sample["asset_id"][:24], fill="black")
+        relative = (
+            "preview-contact-sheet.jpg"
+            if start == 0
+            else f"preview-contact-sheet-{start // page_size + 1:04d}.jpg"
+        )
+        sheet.save(root / relative, format="JPEG", quality=90, optimize=False)
+        paths.append(relative)
+    return paths
 
 
 def _validate_output(

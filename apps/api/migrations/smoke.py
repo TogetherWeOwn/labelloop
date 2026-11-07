@@ -11,11 +11,15 @@ from sqlalchemy import create_engine, insert, text
 from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
+    canonical_dataset_release,
     completeness_assessment,
+    derived_sample,
+    metadata,
     ontology_release,
+    preprocessing_recipe,
     project,
-    review_event,
     source_asset,
+    yolo_dataset_variant,
 )
 
 
@@ -115,35 +119,163 @@ def install_isolated_guards(connection: sa.Connection) -> None:
     connection.execute(text("CREATE SCHEMA migration_smoke"))
     connection.execute(text("SET search_path TO migration_smoke"))
     schema = sa.MetaData()
-    for original in (
-        project,
-        source_asset,
-        annotation_revision,
-        ontology_release,
-        review_event,
-        completeness_assessment,
-    ):
+    for original in metadata.sorted_tables:
         original.to_metadata(schema, schema="migration_smoke")
     schema.create_all(connection)
-    connection.execute(
-        text(
-            "CREATE TABLE canonical_dataset_release"
-            " (id UUID PRIMARY KEY, frozen BOOLEAN NOT NULL);"
-            "CREATE TABLE source_split_assignment"
-            " (id UUID PRIMARY KEY, locked BOOLEAN NOT NULL);"
-            "CREATE TABLE yolo_dataset_variant"
-            " (id UUID PRIMARY KEY, release_id UUID REFERENCES canonical_dataset_release(id),"
-            " validated BOOLEAN NOT NULL, non_empty_val BOOLEAN NOT NULL);"
-            "CREATE TABLE derived_sample"
-            " (id UUID PRIMARY KEY, variant_id UUID REFERENCES yolo_dataset_variant(id));"
-        )
-    )
     path = Path(__file__).parent / "versions/0001_canonical_foundation.py"
     spec = importlib.util.spec_from_file_location("canonical_guards", path)
     assert spec is not None and spec.loader is not None
     guards = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(guards)
     connection.execute(text(guards.GUARDS))
+
+
+def check_completeness_provenance(connection: sa.Connection) -> None:
+    project_id = connection.execute(sa.select(project.c.id)).scalar_one()
+    for truncated in (False, True):
+        with connection.begin_nested() as transaction:
+            asset_id = connection.execute(
+                insert(source_asset).values(
+                    asset_key="partial-smoke",
+                    project_id=project_id,
+                    sha256="0" * 64,
+                    object_key="sha256/00/" + "0" * 64,
+                    width=1,
+                    height=1,
+                    exif_orientation=1,
+                    source_uri="migration-test",
+                )
+            ).inserted_primary_key[0]
+            connection.execute(
+                insert(annotation_revision).values(
+                    asset_id=asset_id,
+                    revision=1,
+                    actor_kind="model",
+                    actor_id="initial",
+                    objects=[],
+                    approval_state="proposed",
+                    review_tier="unreviewed",
+                    scope_completeness="partial",
+                    training_eligible=False,
+                    gold_eligible=False,
+                )
+            )
+            connection.execute(
+                insert(completeness_assessment).values(
+                    asset_id=asset_id,
+                    revision=1,
+                    ontology_hash=completeness_context_hash({"item": 0}, [], "test"),
+                    scope_completeness="partial",
+                    actor_kind="human",
+                    actor_id="inspector",
+                    output_truncated=truncated,
+                    unresolved_regions=[],
+                )
+            )
+            common = dict(
+                asset_id="partial-smoke",
+                actor_kind="model",
+                actor_id="proposal",
+                expected_revision=1,
+                approval_state="proposed",
+                review_tier="unreviewed",
+                objects=[],
+            )
+            rejects(
+                ValueError,
+                "valid current completeness",
+                lambda common=common: append_review(
+                    connection, scope_completeness="exhaustive_for_scope", **common
+                ),
+            )
+            append_review(connection, scope_completeness="unreviewed", **common)
+            assessment = (
+                connection.execute(
+                    sa.select(completeness_assessment).where(
+                        completeness_assessment.c.asset_id == asset_id,
+                        completeness_assessment.c.revision == 2,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert assessment["scope_completeness"] == "partial"
+            assert assessment["actor_id"] == "inspector"
+            assert assessment["output_truncated"] == truncated
+            rejects(
+                ValueError,
+                "valid current completeness",
+                lambda: append_review(
+                    connection,
+                    asset_id="partial-smoke",
+                    actor_kind="human",
+                    actor_id="reviewer",
+                    expected_revision=2,
+                    approval_state="human_accepted",
+                    review_tier="adjudicated",
+                    objects=[],
+                    scope_completeness="exhaustive_for_scope",
+                    training_eligible=True,
+                ),
+            )
+            transaction.rollback()
+
+
+def check_frozen_lineage(connection: sa.Connection) -> None:
+    asset_id = connection.execute(sa.select(source_asset.c.id)).scalar_one()
+    project_id = connection.execute(sa.select(project.c.id)).scalar_one()
+    ontology_id = connection.execute(sa.select(ontology_release.c.id)).scalar_one()
+    release_id = connection.execute(
+        insert(canonical_dataset_release).values(
+            release_key="frozen-smoke",
+            project_id=project_id,
+            ontology_id=ontology_id,
+            assignment_version="smoke-v1",
+            sample_revisions={"migration-smoke-asset": 1},
+            ontology_hash="0" * 64,
+            excluded_asset_ids=[],
+            hashes={},
+            frozen=True,
+        )
+    ).inserted_primary_key[0]
+    recipe_id = connection.execute(
+        insert(preprocessing_recipe).values(recipe_key="smoke", policy={}, immutable=True)
+    ).inserted_primary_key[0]
+    variant_id = connection.execute(
+        insert(yolo_dataset_variant).values(
+            release_id=release_id,
+            recipe_id=recipe_id,
+            class_map={"item": 0},
+            file_manifest={},
+            validated=True,
+            non_empty_val=True,
+        )
+    ).inserted_primary_key[0]
+    connection.execute(
+        insert(derived_sample).values(
+            variant_id=variant_id,
+            source_id=asset_id,
+            crop=[0, 0, 1, 1],
+            transform={},
+            image_sha256="0" * 64,
+            image_key="smoke",
+            label_sha256="0" * 64,
+        )
+    )
+    for statement, message in (
+        (source_asset.update().values(width=2), "immutable"),
+        (source_asset.delete(), "immutable"),
+        (ontology_release.update().values(class_map={"item": 1}), "immutable"),
+        (ontology_release.delete(), "immutable"),
+        (yolo_dataset_variant.delete(), "foreign key"),
+    ):
+        with connection.begin_nested() as transaction:
+            rejects(
+                sa.exc.DatabaseError,
+                message,
+                lambda statement=statement: connection.execute(statement),
+            )
+            transaction.rollback()
 
 
 def main() -> None:
@@ -153,6 +285,8 @@ def main() -> None:
             connection.execute(text("DROP SCHEMA IF EXISTS migration_smoke CASCADE"))
             install_isolated_guards(connection)
             initial_state(connection)
+            check_completeness_provenance(connection)
+            check_frozen_lineage(connection)
         with engine.connect() as connection:
             connection.execute(text("SET search_path TO migration_smoke"))
             rejects(ValueError, "stale", lambda: append(connection, expected=2))
@@ -205,7 +339,7 @@ def main() -> None:
                 expected_revision=1,
                 approval_state="human_accepted",
                 review_tier="adjudicated",
-                scope_completeness="exhaustive_for_scope",
+                scope_completeness="unreviewed",
                 objects=[],
             )
             connection.commit()

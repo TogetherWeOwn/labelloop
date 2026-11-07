@@ -572,7 +572,7 @@
     }
   ],
   "split_assignment": {
-    "assignment_version": "union-find-grouped-stratified-v1-6f13096e4adbd700",
+    "assignment_version": "union-find-grouped-stratified-v2-de1c1f0d56441f35",
     "asset_splits": {
       "keyboard-01": "train",
       "keyboard-02": "train",
@@ -628,7 +628,7 @@
       "keyboard-16": "group-0015"
     },
     "seed": 20261107,
-    "algorithm": "union-find-grouped-stratified-v1",
+    "algorithm": "union-find-grouped-stratified-v2",
     "reasons": {
       "group-0000": "seeded group-level class-count stratification",
       "group-0001": "seeded group-level class-count stratification",
