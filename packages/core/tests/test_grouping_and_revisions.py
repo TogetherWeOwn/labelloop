@@ -4,7 +4,13 @@ import pytest
 
 from labelloop_core.domain import AnnotationRevision, CompletenessAssessment, DatasetObject
 from labelloop_core.geometry import Box
-from labelloop_core.grouping import AssetEvidence, GroupingThresholds, assign_splits, group_sources
+from labelloop_core.grouping import (
+    AssetEvidence,
+    GroupingThresholds,
+    assign_splits,
+    cosine,
+    group_sources,
+)
 from labelloop_core.lineage import LineageGraph
 
 
@@ -67,6 +73,65 @@ def test_seed_changes_order_and_same_seed_is_exactly_repeatable() -> None:
     # The algorithm still requires independent sources; no source-only balancing fallback.
 
 
+def independent_records(count: int) -> list[AssetEvidence]:
+    # Distinct Walsh rows have Hamming distance 32, beyond both pHash thresholds.
+    assert 1 < count <= 64
+    records = [
+        evidence(
+            f"{index:02d}",
+            sha256=f"{index + 1:064x}",
+            phash=sum(((index & bit).bit_count() % 2) << bit for bit in range(64)),
+        )
+        for index in range(count)
+    ]
+    assert all(
+        (left.phash ^ right.phash).bit_count() == 32
+        for index, left in enumerate(records)
+        for right in records[index + 1 :]
+    )
+    return records
+
+
+def test_split_version_binds_grouping_and_balancing_configuration() -> None:
+    records = independent_records(8)
+    baseline = assign_splits(records)
+    assert baseline.assignment_version == assign_splits(records).assignment_version
+    assert baseline.assignment_version != assign_splits(records, seed=8).assignment_version
+    assert (
+        baseline.assignment_version
+        != assign_splits(
+            records, thresholds=GroupingThresholds(phash_max_distance=7)
+        ).assignment_version
+    )
+    assert (
+        baseline.assignment_version
+        != assign_splits(records, validation_fraction=0.5).assignment_version
+    )
+
+
+def test_large_group_assignment_is_bounded_and_group_safe() -> None:
+    records = independent_records(40)
+    assignment = assign_splits(records)
+    assert len(assignment.group_splits) == 40
+    assert assignment == assign_splits(list(reversed(records)))
+    assert {assignment.split_for(record.asset_id) for record in records} == {"train", "val"}
+    assert any(split == "val" for split in assignment.group_splits.values())
+    for group in set(assignment.group_ids.values()):
+        groups = {
+            assignment.asset_splits[name]
+            for name in assignment.group_ids
+            if assignment.group_ids[name] == group
+        }
+        assert len(groups) == 1
+
+
+def test_malformed_embedding_is_not_missing_evidence() -> None:
+    with pytest.raises(ValueError, match="dimensions"):
+        group_sources([evidence("a", embedding=(1.0, 0.0)), evidence("b", embedding=(1.0,))])
+    with pytest.raises(ValueError, match="non-empty|dimensions"):
+        cosine((), ())
+
+
 def test_model_cannot_invent_human_or_gold_states() -> None:
     initial = AnnotationRevision(1, (), "system")
     for field, value in (
@@ -110,6 +175,15 @@ def test_source_label_lineage_reaches_all_descendants() -> None:
         "proposal:new",
     }
     assert not graph.descendants("source:a:revision:1")
+
+
+def test_all_lineage_parents_participate_in_cycle_guards() -> None:
+    graph = LineageGraph()
+    graph.add("a", "root")
+    graph.add("b", "a")
+    with pytest.raises(ValueError, match="acyclic"):
+        graph.add("root", "unrelated", "b")
+    assert "root" not in graph.parents
 
 
 def test_negative_cannot_pass_completeness_gates() -> None:

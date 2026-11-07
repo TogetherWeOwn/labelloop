@@ -5,7 +5,14 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.strategies import DataObject
 
-from labelloop_core.geometry import Box, Crop, full_frame_transform, normalize_box, target_flags
+from labelloop_core.geometry import (
+    Box,
+    Crop,
+    full_frame_transform,
+    normalize_box,
+    target_flags,
+    with_crop,
+)
 
 
 @given(
@@ -47,7 +54,7 @@ def test_unclipped_box_affine_and_normalized_round_trip(
         assert transform.points(*transform.points(*point), inverse=True) == pytest.approx(point)
 
 
-@given(crop_x=st.integers(0, 79), output_size=st.integers(16, 640))
+@given(crop_x=st.integers(0, 99), output_size=st.integers(16, 640))
 def test_crop_recover_only_retained_source_intersection(crop_x: int, output_size: int) -> None:
     transform = full_frame_transform(200, 150, output_size, crop=Crop(crop_x, 0, 100, 150))
     original = Box(10, 10, 90, 120)
@@ -58,7 +65,7 @@ def test_crop_recover_only_retained_source_intersection(crop_x: int, output_size
         assert restored is not None and expected is not None
         for value, target in zip(astuple(restored), astuple(expected), strict=True):
             assert value == pytest.approx(target)
-    if crop_x > 80:
+    if 10 < crop_x < 90:
         assert "clipped" in target_flags(transform, original, 1)
 
 
@@ -68,6 +75,8 @@ def test_actual_gain_and_padding_clip() -> None:
     assert (transform.scale_x, transform.scale_y) == (4 / 20, 2 / 10)
     assert transform.apply(Box(0, 0, 20, 10)) == Box(0, 1, 4, 3)
     assert transform.restore(Box(0, 0, 1, 1)) is None
+
+    assert with_crop(full_frame_transform(100, 100, 200), Crop(0, 0, 50, 50)).scale_x == 4
 
 
 def test_outside_crop_and_tiny_targets() -> None:

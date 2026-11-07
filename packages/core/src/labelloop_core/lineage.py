@@ -10,7 +10,7 @@ class LineageGraph:
     def add(self, child: str, *parents: str) -> None:
         if not child or not parents or child in self.parents or child in parents:
             raise ValueError("lineage children and immutable parents must be explicit")
-        if child in self.ancestors(parents[0]):
+        if any(child in self.ancestors(parent) for parent in parents):
             raise ValueError("lineage must be acyclic")
         self.parents[child] = tuple(sorted(set(parents)))
 

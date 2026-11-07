@@ -17,7 +17,7 @@ from labelloop_core.domain import (
     SourceSplitAssignment,
 )
 from labelloop_core.geometry import Box
-from labelloop_core.grouping import AssetEvidence
+from labelloop_core.grouping import AssetEvidence, assign_splits
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = ROOT / "fixtures" / "golden"
@@ -51,6 +51,11 @@ class FixtureDomain:
             class_map=document["class_map"],
         )
         assignment = SourceSplitAssignment(**document["split_assignment"])
+        expected = assign_splits(load_evidence(domain), seed=assignment.seed)
+        if assignment != expected:
+            raise ValueError("fixture split metadata does not match its grouping evidence")
+        if document.get("auto_accept_qualification") != "fixture-compiler-policy-v1":
+            raise ValueError("fixture training eligibility needs an explicit acceptance policy")
         self.release = CanonicalDatasetRelease(
             release_id=f"{domain}-canonical-r1",
             project_id=domain,
@@ -72,7 +77,7 @@ class FixtureDomain:
                             )
                             for obj in item["objects"]
                         ),
-                        actor_kind="human",
+                        actor_kind="system",
                         approval_state="auto_accepted",
                         review_tier="machine_verified_no_human_review",
                         scope_completeness="exhaustive_for_scope",

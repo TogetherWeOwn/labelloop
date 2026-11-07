@@ -215,7 +215,7 @@ class Recipe:
     interpolation: str
     allow_upscale: bool = True
     padding_color: tuple[int, int, int] = (114, 114, 114)
-    min_target_px: int = 1
+    min_target_px: int = 4
     min_retained_fraction: float = 0.01
     encoder: str = "JPEG"
     encoder_options: dict[str, int | bool] = field(

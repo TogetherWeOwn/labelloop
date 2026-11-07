@@ -1,8 +1,9 @@
 """Near-duplicate grouping and seeded group-level class stratification."""
 
 import hashlib
+import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 import numpy as np
@@ -146,6 +147,19 @@ def assign_splits(
         raise ValueError("independent train and validation groups are required")
     if not 0 < validation_fraction < 1:
         raise ValueError("validation fraction must be in (0,1)")
+    threshold_values = thresholds or GroupingThresholds()
+    identity = hashlib.sha256(
+        json.dumps(
+            {
+                "thresholds": asdict(threshold_values),
+                "validation_fraction": validation_fraction,
+                "seed": seed,
+                "algorithm": ALGORITHM,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()[:16]
     members: dict[str, list[AssetEvidence]] = {}
     for record in evidence:
         members.setdefault(groups[record.asset_id], []).append(record)
@@ -193,7 +207,7 @@ def assign_splits(
         search(selected + [tail[0]], tail[1:])
         search(selected, tail[1:])
 
-    if len(members) <= 20:
+    if len(members) <= 16:
         search([], remaining)
     else:
         selected: list[str] = []
@@ -227,7 +241,7 @@ def assign_splits(
         for group in members
     }
     return SourceSplitAssignment(
-        assignment_version=f"{ALGORITHM}-seed{seed}",
+        assignment_version=f"{ALGORITHM}-{identity}",
         asset_splits={asset_id: assignment[group] for asset_id, group in groups.items()},
         group_splits=assignment,
         group_ids=groups,

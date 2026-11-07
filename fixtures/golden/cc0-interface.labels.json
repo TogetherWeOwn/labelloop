@@ -1,6 +1,7 @@
 {
   "annotation_policy": "Fixture-only coarse visible rectangles; not independently adjudicated gold ground truth.",
   "annotation_licence": "CC0-1.0 for fixture metadata only; image licences and attribution remain in manifest.json.",
+  "auto_accept_qualification": "fixture-compiler-policy-v1",
   "classes": [
     {
       "stable_id": "application_view",
@@ -494,7 +495,7 @@
     }
   ],
   "split_assignment": {
-    "assignment_version": "union-find-grouped-stratified-v1-seed20261107",
+    "assignment_version": "union-find-grouped-stratified-v1-6f13096e4adbd700",
     "asset_splits": {
       "ui-01": "train",
       "ui-02": "train",
@@ -505,30 +506,30 @@
       "ui-07": "val",
       "ui-08": "train",
       "ui-09": "train",
-      "ui-10": "val",
-      "ui-11": "val",
+      "ui-10": "train",
+      "ui-11": "train",
       "ui-12": "train",
       "ui-13": "train",
-      "ui-14": "train",
-      "ui-15": "train",
+      "ui-14": "val",
+      "ui-15": "val",
       "ui-16": "train"
     },
     "group_splits": {
-      "group-0009": "val",
-      "group-0004": "val",
-      "group-0006": "val",
-      "group-0013": "train",
-      "group-0012": "train",
-      "group-0001": "train",
-      "group-0005": "train",
-      "group-0003": "train",
-      "group-0002": "train",
-      "group-0008": "train",
       "group-0000": "train",
-      "group-0011": "train",
-      "group-0014": "train",
+      "group-0001": "train",
+      "group-0002": "train",
+      "group-0003": "train",
+      "group-0004": "val",
+      "group-0005": "train",
+      "group-0006": "val",
+      "group-0007": "train",
+      "group-0008": "train",
+      "group-0009": "train",
       "group-0010": "train",
-      "group-0007": "train"
+      "group-0011": "train",
+      "group-0012": "val",
+      "group-0013": "val",
+      "group-0014": "train"
     },
     "group_ids": {
       "ui-01": "group-0000",

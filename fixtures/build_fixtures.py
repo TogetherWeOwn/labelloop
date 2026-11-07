@@ -131,11 +131,12 @@ def build(domain: str) -> None:
             "CC0-1.0 for fixture metadata only; image licences and "
             "attribution remain in manifest.json."
         ),
+        "auto_accept_qualification": "fixture-compiler-policy-v1",
         "classes": classes,
         "class_map": {item["stable_id"]: index for index, item in enumerate(classes)},
         "images": assets,
         "split_assignment": {
-            "assignment_version": "union-find-grouped-stratified-v1-seed20261107",
+            "assignment_version": assignment.assignment_version,
             "asset_splits": assignment.asset_splits,
             "group_splits": assignment.group_splits,
             "group_ids": assignment.group_ids,

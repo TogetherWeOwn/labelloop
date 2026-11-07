@@ -146,15 +146,13 @@ def test_tiny_targets_and_exclusions_are_explicit(tmp_path):
         sample,
         revision=replace(
             sample.revision,
-            objects=(DatasetObject("tiny", "item", Box(10, 10, 10.1, 10.1)),),
+            objects=(DatasetObject("tiny", "item", Box(10, 10, 10.1, 10.6)),),
         ),
     )
     release = replace(release, samples=(tiny, release.samples[1]))
     manifest = compile_dataset(release, "full-letterbox-320-v1", tmp_path / "small", images)
-    assert manifest["samples"][0]["objects"][0]["policy"] == "retained"
-    assert "below_min_target_px" in manifest["samples"][0]["objects"][0]["flags"]
-    assert manifest["excluded_count"] == 0
-    assert manifest["excluded_count"] == 0
+    assert manifest["release_membership"]["a"] == "excluded"
+    assert manifest["excluded_count"] == 1
     clipped_train = replace(
         release.samples[0],
         revision=replace(

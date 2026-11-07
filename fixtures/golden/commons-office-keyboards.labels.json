@@ -1,6 +1,7 @@
 {
   "annotation_policy": "Fixture-only coarse visible rectangles; not independently adjudicated gold ground truth.",
   "annotation_licence": "CC0-1.0 for fixture metadata only; image licences and attribution remain in manifest.json.",
+  "auto_accept_qualification": "fixture-compiler-policy-v1",
   "classes": [
     {
       "stable_id": "keyboard",
@@ -571,14 +572,14 @@
     }
   ],
   "split_assignment": {
-    "assignment_version": "union-find-grouped-stratified-v1-seed20261107",
+    "assignment_version": "union-find-grouped-stratified-v1-6f13096e4adbd700",
     "asset_splits": {
       "keyboard-01": "train",
       "keyboard-02": "train",
       "keyboard-03": "train",
       "keyboard-04": "train",
       "keyboard-05": "val",
-      "keyboard-06": "val",
+      "keyboard-06": "train",
       "keyboard-07": "val",
       "keyboard-08": "train",
       "keyboard-09": "train",
@@ -587,26 +588,26 @@
       "keyboard-12": "train",
       "keyboard-13": "val",
       "keyboard-14": "val",
-      "keyboard-15": "val",
-      "keyboard-16": "val"
+      "keyboard-15": "train",
+      "keyboard-16": "train"
     },
     "group_splits": {
-      "group-0005": "val",
-      "group-0013": "val",
-      "group-0015": "val",
-      "group-0014": "val",
-      "group-0004": "val",
-      "group-0006": "val",
-      "group-0012": "val",
-      "group-0001": "train",
-      "group-0003": "train",
-      "group-0002": "train",
-      "group-0008": "train",
       "group-0000": "train",
-      "group-0011": "train",
+      "group-0001": "train",
+      "group-0002": "train",
+      "group-0003": "train",
+      "group-0004": "val",
+      "group-0005": "train",
+      "group-0006": "val",
+      "group-0007": "train",
+      "group-0008": "train",
       "group-0009": "train",
       "group-0010": "train",
-      "group-0007": "train"
+      "group-0011": "train",
+      "group-0012": "val",
+      "group-0013": "val",
+      "group-0014": "train",
+      "group-0015": "train"
     },
     "group_ids": {
       "keyboard-01": "group-0000",

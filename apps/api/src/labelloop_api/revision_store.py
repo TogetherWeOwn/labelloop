@@ -2,10 +2,13 @@
 
 from typing import Any
 
-from sqlalchemy import Connection, insert, text
+from sqlalchemy import Connection, insert, select, text
+
+from labelloop_core.domain import AnnotationRevision, DatasetObject
+from labelloop_core.geometry import Box
 
 from .repository import source_uuid
-from .schema import annotation_revision, review_event
+from .schema import annotation_revision, review_event, source_asset
 
 
 def append_review(
@@ -28,26 +31,25 @@ def append_review(
         approval_state == "human_accepted" or review_tier in {"human_reviewed", "adjudicated"}
     ):
         raise ValueError("model or system output cannot assert human approval")
-    if training_eligible or gold_eligible:
-        if scope_completeness != "exhaustive_for_scope" or approval_state not in {
-            "auto_accepted",
-            "human_accepted",
-        }:
-            raise ValueError("eligible revisions require exhaustive, accepted annotations")
-        if any(item.get("label_state", "identified") != "identified" for item in objects):
-            raise ValueError("unresolved objects prevent training eligibility")
-    if actor_kind != "human" and (training_eligible or gold_eligible):
-        raise ValueError("non-human output cannot assert release eligibility")
+    if actor_kind != "human" and gold_eligible:
+        raise ValueError("gold eligibility requires authenticated adjudication")
+    if actor_kind == "model" and training_eligible:
+        raise ValueError("model output cannot assert eligibility; a qualified system policy must")
     asset_uuid = source_uuid(connection, asset_id)
     with connection.begin_nested():
         connection.execute(
             text("SELECT id FROM source_asset WHERE id = :asset_id FOR UPDATE"),
             {"asset_id": asset_uuid},
         ).one()
+        asset = connection.execute(
+            select(source_asset.c.width, source_asset.c.height).where(
+                source_asset.c.id == asset_uuid
+            )
+        ).one()
         current = (
             connection.execute(
                 text(
-                    "SELECT revision, actor_kind, approval_state, review_tier"
+                    "SELECT revision, actor_kind, approval_state, review_tier, objects"
                     " FROM annotation_revision WHERE asset_id = :asset_id"
                     " ORDER BY revision DESC LIMIT 1 FOR UPDATE"
                 ),
@@ -59,9 +61,82 @@ def append_review(
         if current["revision"] != expected_revision:
             raise ValueError("stale expected annotation revision")
         if actor_kind != "human" and (
-            current["review_tier"] == "adjudicated" or current["approval_state"] == "human_accepted"
+            current["review_tier"] == "adjudicated"
+            or current.get("approval_state") == "human_accepted"
         ):
             raise ValueError("late model output cannot supersede human labels")
+
+        context = (
+            connection.execute(
+                text(
+                    "SELECT ontology_release.class_map, project.access_policy,"
+                    " completeness_assessment.scope_completeness"
+                    " AS assessed_completeness, completeness_assessment.output_truncated,"
+                    " completeness_assessment.unresolved_regions"
+                    " FROM source_asset"
+                    " JOIN project ON project.id = source_asset.project_id"
+                    " JOIN ontology_release ON ontology_release.project_id = "
+                    "source_asset.project_id"
+                    " LEFT JOIN completeness_assessment ON completeness_assessment.asset_id = "
+                    "source_asset.id AND completeness_assessment.revision = :expected_revision"
+                    " WHERE source_asset.id = :asset_id"
+                    " ORDER BY ontology_release.version DESC LIMIT 1"
+                ),
+                {"asset_id": asset_uuid, "expected_revision": expected_revision},
+            )
+            .mappings()
+            .one()
+        )
+        allowed_classes = set(context["class_map"] or {})
+        if (training_eligible or gold_eligible) and actor_kind == "system":
+            qualification = (context["access_policy"] or {}).get("auto_accept_qualification", {})
+            if qualification.get("id") != actor_id or approval_state != "auto_accepted":
+                raise ValueError("system eligibility requires its qualified auto-accept policy")
+        try:
+            revision = AnnotationRevision(
+                expected_revision + 1,
+                tuple(
+                    DatasetObject(
+                        object_id=item["object_id"],
+                        class_id=item["class_id"],
+                        box=Box(*item["box"]),
+                        label_state=item.get("label_state", "identified"),
+                        attributes=item.get("attributes", {}),
+                        occluded=item.get("occluded", False),
+                        truncated_at_image_edge=item.get("truncated_at_image_edge", False),
+                    )
+                    for item in objects
+                ),
+                actor_kind,
+                parent_revision=expected_revision,
+                approval_state=approval_state,
+                review_tier=review_tier,
+                scope_completeness=scope_completeness,
+                training_eligible=training_eligible,
+                gold_eligible=gold_eligible,
+            )
+        except (KeyError, TypeError) as error:
+            raise ValueError("revision objects have malformed identities or boxes") from error
+        for item in revision.objects:
+            if item.class_id not in allowed_classes:
+                raise ValueError("annotation class is absent from the project ontology")
+            item.box.within(asset[0], asset[1])
+
+        objects_changed = current["objects"] != objects
+        if objects_changed and any(
+            (training_eligible, gold_eligible, scope_completeness == "exhaustive_for_scope")
+        ):
+            raise ValueError("changed object sets need a new authoritative completeness review")
+        if (training_eligible or gold_eligible) and not objects_changed:
+            if (
+                context["assessed_completeness"] != "exhaustive_for_scope"
+                or context["output_truncated"]
+                or context["unresolved_regions"]
+            ):
+                raise ValueError(
+                    "release eligibility needs a valid current completeness assessment"
+                )
+        next_completeness = "unreviewed" if objects_changed else scope_completeness
         values = {
             "asset_id": asset_uuid,
             "revision": expected_revision + 1,
@@ -87,13 +162,12 @@ def append_review(
             )
         )
         connection.execute(insert(annotation_revision).values(**values))
-        # The revision is write-locked while completeness is migrated to unreviewed.
         connection.execute(
             text(
                 """INSERT INTO completeness_assessment
                    (asset_id, revision, ontology_hash, scope_completeness, actor_kind,
                     actor_id, output_truncated, unresolved_regions)
-                   SELECT asset_id, :next_revision, ontology_hash, 'unreviewed', :actor_kind,
+                   SELECT asset_id, :next_revision, ontology_hash, :next_completeness, :actor_kind,
                     :actor_id, output_truncated, unresolved_regions
                    FROM completeness_assessment
                    WHERE asset_id = :asset_id AND revision = :expected_revision
@@ -103,6 +177,7 @@ def append_review(
                 "asset_id": asset_uuid,
                 "next_revision": expected_revision + 1,
                 "expected_revision": expected_revision,
+                "next_completeness": next_completeness,
                 "actor_kind": actor_kind,
                 "actor_id": actor_id,
             },

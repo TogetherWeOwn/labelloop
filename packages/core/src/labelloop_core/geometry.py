@@ -1,7 +1,7 @@
 """Half-open pixel geometry and exact affine maps derived from raster dimensions."""
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 type Matrix3 = tuple[
     tuple[float, float, float],
@@ -81,6 +81,8 @@ class AffineTransform:
     inverse: Matrix3
     crop: Crop
     output_size: int
+    source_width: int
+    source_height: int
     resized_width: int
     resized_height: int
     left: int
@@ -172,6 +174,8 @@ def full_frame_transform(
         inverse=_matrix(1 / scale_x, 1 / scale_y, -left / scale_x, -top / scale_y),
         crop=selected,
         output_size=output_size,
+        source_width=source_width,
+        source_height=source_height,
         resized_width=resized_width,
         resized_height=resized_height,
         left=left,
@@ -218,4 +222,11 @@ def target_flags(transform: AffineTransform, box: Box, min_target_px: int) -> tu
 
 
 def with_crop(transform: AffineTransform, crop: Crop) -> AffineTransform:
-    return replace(transform, crop=crop, algorithm=VALID_CONTENT)
+    return full_frame_transform(
+        transform.source_width,
+        transform.source_height,
+        transform.output_size,
+        crop=crop,
+        allow_upscale=transform.resized_width / transform.crop.width > 1
+        or transform.resized_height / transform.crop.height > 1,
+    )

@@ -22,9 +22,15 @@ fresh database. `SourceAsset` validates the content-key format; PostgreSQL
 retains its internal UUID separately.
 
 Source annotations use append-only revisions. Human acceptance, review and
-adjudication are denied for model/system actors. The expected parent is checked
-under an asset revision lock. Frozen split assignments cannot be changed when a
-release says they are locked.
+adjudication are denied for model/system actors. Model proposals cannot assert
+release eligibility; a qualified system policy may auto-accept training-eligible
+work only when its identity matches the project policy. Gold eligibility still
+requires human adjudication. Object IDs, class membership and canonical image
+bounds are validated before append. Review-only revisions may retain a valid
+completeness assessment, while changed object sets require a new authoritative
+completeness decision. The expected parent is checked under an asset revision
+lock. Frozen split assignments cannot be changed when a release says they are
+locked.
 
 ## Grouping and split
 
@@ -34,8 +40,9 @@ session/sequence/subject keys. Transitive closure joins related groups. pHash
 9–12 or cosine 0.90–0.95 is retained in `BorderlineReview`, never silently
 merged or declared independent. An empty embedding is missing evidence, not a
 zero/same vector. Split assignment uses canonical sorted groups and a
-SHA-256-derived seeded order with class-count balancing. Both fixture releases
-use the same seed and grouping algorithm version.
+SHA-256-derived seeded order with class-count balancing. The assignment version
+binds the algorithm, seed, validation fraction and all grouping thresholds.
+Both fixture releases use the same seed and grouping algorithm version.
 
 Fixture coarse rectangles are intentionally machine/LLM-free preliminary labels
 for compiler testing, **not** an adjudicated quality benchmark. Application-view
@@ -46,10 +53,15 @@ and keyboard definitions live in fixture configuration, not the engine.
 The two full-frame recipes use `min(S/W,S/H)`, actual rounded raster gains,
 integer centered padding (114,114,114), OpenCV area on downscale and linear on
 upscale. The inverse matrix is equivalent subtract-padding/divide-gain. A crop
-inverse recovers only the retained source intersection. Small full-frame
-annotations remain visible with `below_min_target_px`; cropping with a strict
-retention policy excludes the sample when no valid row survives. Crop absence
-alone never turns an annotated image into a verified negative.
+inverse recovers only the retained source intersection. The built-in full-frame
+recipes use `min_target_px=4`: an annotated sample whose remaining targets are
+all too small or otherwise policy-ineligible is explicitly excluded rather than
+silently trained as a negative. A crop that removes every target likewise records
+an exclusion. Partial crop absence alone does not fabricate class support; its
+object is marked `absent_after_crop`. Targets at or below 6 pixels additionally
+carry `near_min_target_px`. If any visible retained object fails crop-retention or
+minimum-size policy while other objects remain trainable, compilation fails and
+requires a recrop or explicit whole-sample exclusion instead of a partial label.
 
 Every release has nonempty val. Hash-validated RGB source decoding, stable class
 mapping, finite clipped boxes, five-field labels (8 decimals), exact source and

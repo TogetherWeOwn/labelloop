@@ -102,7 +102,11 @@ annotation_revision = table(
             "(parent_revision IS NULL AND revision = 1) OR parent_revision = revision - 1"
         ),
         CheckConstraint("NOT gold_eligible OR review_tier = 'adjudicated'"),
-        CheckConstraint("actor_kind = 'human' OR NOT (training_eligible OR gold_eligible)"),
+        CheckConstraint(
+            "NOT training_eligible OR actor_kind = 'human' OR "
+            "(actor_kind = 'system' AND approval_state = 'auto_accepted' "
+            "AND review_tier = 'machine_verified_no_human_review')"
+        ),
         CheckConstraint(
             "NOT (training_eligible OR gold_eligible) OR (scope_completeness = "
             "'exhaustive_for_scope' AND approval_state IN ('auto_accepted','human_accepted'))"

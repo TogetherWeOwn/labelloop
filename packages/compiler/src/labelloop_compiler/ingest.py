@@ -63,9 +63,12 @@ def process_image(
         raise ValueError("image upload is empty or exceeds the 40 MiB boundary")
     try:
         with Image.open(io.BytesIO(data)) as opened:
-            opened.load()
+            if opened.width <= 0 or opened.height <= 0:
+                raise ValueError("image dimensions must be positive")
             if opened.width * opened.height > MAX_PIXELS:
                 raise ValueError("image exceeds the 100 megapixel boundary")
+            opened.load()
+
             orientation = opened.getexif().get(274, 1)
             if orientation not in range(1, 9):
                 raise ValueError("invalid EXIF orientation")

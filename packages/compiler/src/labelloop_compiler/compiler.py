@@ -90,9 +90,7 @@ def compile_dataset(
                     {
                         "asset_id": sample.asset.asset_id,
                         "revision": sample.revision.revision,
-                        "reason": (
-                            "all targets discarded by the declared small/retained-geometry policy"
-                        ),
+                        "reason": "all targets outside or below the declared crop/size policy",
                     }
                 )
                 continue
@@ -109,6 +107,8 @@ def compile_dataset(
             label_path.write_text(labels, encoding="utf-8", newline="\n")
             file_hashes[str(image_path.relative_to(temporary))] = digest(image_bytes)
             file_hashes[str(label_path.relative_to(temporary))] = digest(labels.encode())
+            record["image_sha256"] = digest(image_bytes)
+            record["label_sha256"] = digest(labels.encode())
             manifest_samples.append(record)
             record["image_path"] = str(image_path.relative_to(temporary))
             record["label_path"] = str(label_path.relative_to(temporary))
@@ -270,7 +270,7 @@ def _compile_sample(
         ):
             flags.append("image_edge")
         fraction = retained_source.area / item.box.area
-        excluded = fraction < recipe.min_retained_fraction
+        excluded = fraction < recipe.min_retained_fraction or "below_min_target_px" in flags
         row: str | None = None
         if not excluded:
             normalized = normalize_box(mapped, recipe.output_size, recipe.output_size)
@@ -298,6 +298,12 @@ def _compile_sample(
                 "yolo_row": row,
             }
         )
+    discarded = [item for item in objects if item.get("policy") == "excluded"]
+    if discarded and rows:
+        raise CompilerFailure(
+            "a visible target fails crop-retention/size policy; recrop or explicitly exclude "
+            "the complete sample instead of leaving a fragment unlabeled"
+        )
     if revision.objects and not rows:
         return None
     labels = "".join(f"{row}\n" for row in rows)
@@ -313,8 +319,6 @@ def _compile_sample(
         "image_size": [recipe.output_size, recipe.output_size],
         "transform": transform_document(transform),
         "objects": objects,
-        "image_sha256": digest(_encode(canvas, recipe)),
-        "label_sha256": digest(labels.encode()),
     }
     return labels, canvas, record
 
@@ -382,7 +386,7 @@ def _class_support(
     }
     for sample in samples:
         for item in sample["objects"]:
-            if item.get("class_id") and item["policy"] == "retained":
+            if item.get("class_id") and item.get("policy") == "retained":
                 counts[item["class_id"]][sample["split"]] += 1
     return {
         class_id: {**support, "validation_supported": support["val"] > 0}

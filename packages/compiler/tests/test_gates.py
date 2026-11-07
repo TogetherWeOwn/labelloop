@@ -44,7 +44,7 @@ def test_small_image_edge_retained_policy(tmp_path):
         sample,
         revision=replace(
             sample.revision,
-            objects=(DatasetObject("1", "item", Box(0, 0, 1, 1), truncated_at_image_edge=True),),
+            objects=(DatasetObject("1", "item", Box(0, 0, 5, 5), truncated_at_image_edge=True),),
         ),
     )
     manifest = compile_dataset(
@@ -78,3 +78,43 @@ def test_crop_zero_area_objects_are_absent_not_zero_width_labels(tmp_path):
     exclusion = json.loads((tmp_path / "crop" / "exclusions.jsonl").read_text())
     assert exclusion["asset_id"] == "a"
     assert (tmp_path / "crop" / manifest["samples"][0]["label_path"]).read_bytes() == b""
+
+
+def test_absent_crop_object_does_not_create_class_support(tmp_path):
+    release, images = canonical_release()
+    val = release.samples[1]
+    outside = DatasetObject("outside", "item", Box(100, 20, 180, 120))
+    sample = replace(
+        val,
+        revision=replace(val.revision, objects=(val.revision.objects[0], outside)),
+    )
+    manifest = compile_dataset(
+        replace(release, samples=(release.samples[0], sample)),
+        "full-letterbox-320-v1",
+        tmp_path / "outside",
+        images,
+        crop_policy=lambda sample_: Crop(0, 0, 80, 150) if sample_.split == "val" else None,
+    )
+    compiled = next(sample_ for sample_ in manifest["samples"] if sample_["split"] == "val")
+    absent = next(item for item in compiled["objects"] if item["object_id"] == "outside")
+    assert absent["status"] == "absent_after_crop"
+    assert manifest["class_support"]["item"]["val"] == 1
+    assert manifest["class_support"]["item"]["validation_supported"] is True
+
+
+def test_tiny_visible_target_cannot_leave_partial_labels(tmp_path):
+    release, images = canonical_release()
+    train = release.samples[0]
+    tiny = DatasetObject("tiny", "item", Box(10, 10, 10.1, 10.6))
+    sample = replace(
+        train,
+        revision=replace(train.revision, objects=(train.revision.objects[0], tiny)),
+    )
+    with pytest.raises(CompilerFailure, match="recrop or explicitly exclude"):
+        compile_dataset(
+            replace(release, samples=(sample, release.samples[1])),
+            "full-letterbox-320-v1",
+            tmp_path / "partial",
+            images,
+        )
+    assert not (tmp_path / "partial").exists()

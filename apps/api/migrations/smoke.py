@@ -12,6 +12,7 @@ from labelloop_api.revision_store import append_review
 from labelloop_api.schema import (
     annotation_revision,
     completeness_assessment,
+    ontology_release,
     project,
     review_event,
     source_asset,
@@ -50,6 +51,15 @@ def initial_state(connection: sa.Connection) -> None:
         )
     ).inserted_primary_key[0]
     connection.execute(
+        insert(ontology_release).values(
+            ontology_key="migration-smoke",
+            project_id=project_id,
+            version=1,
+            classes=[],
+            class_map={"item": 0},
+        )
+    )
+    connection.execute(
         insert(annotation_revision).values(
             asset_id=asset_id,
             revision=1,
@@ -63,19 +73,40 @@ def initial_state(connection: sa.Connection) -> None:
             gold_eligible=True,
         )
     )
+    connection.execute(
+        insert(completeness_assessment).values(
+            asset_id=asset_id,
+            revision=1,
+            ontology_hash="0" * 64,
+            scope_completeness="exhaustive_for_scope",
+            actor_kind="human",
+            actor_id="migration-test",
+            output_truncated=False,
+            unresolved_regions=[],
+        )
+    )
 
 
-def append(connection: sa.Connection, *, expected: int, eligible: bool = False) -> None:
+def append(
+    connection: sa.Connection,
+    *,
+    expected: int,
+    eligible: bool = False,
+    objects: list[dict[str, object]] | None = None,
+    actor_kind: str = "model",
+) -> None:
     append_review(
         connection,
         asset_id="migration-smoke-asset",
-        actor_kind="model",
+        actor_kind=actor_kind,
         actor_id="migration-test",
         expected_revision=expected,
-        approval_state="auto_accepted",
-        review_tier="machine_verified_no_human_review",
+        approval_state="proposed" if actor_kind == "model" else "human_accepted",
+        review_tier=(
+            "machine_verified_no_human_review" if actor_kind == "model" else "adjudicated"
+        ),
         scope_completeness="exhaustive_for_scope",
-        objects=[],
+        objects=objects if objects is not None else [],
         training_eligible=eligible,
     )
 
@@ -88,6 +119,7 @@ def install_isolated_guards(connection: sa.Connection) -> None:
         project,
         source_asset,
         annotation_revision,
+        ontology_release,
         review_event,
         completeness_assessment,
     ):
@@ -125,6 +157,26 @@ def main() -> None:
             connection.execute(text("SET search_path TO migration_smoke"))
             rejects(ValueError, "stale", lambda: append(connection, expected=2))
             rejects(ValueError, "late model", lambda: append(connection, expected=1))
+            rejects(
+                ValueError,
+                "class",
+                lambda: append(
+                    connection,
+                    expected=1,
+                    actor_kind="human",
+                    objects=[{"object_id": "one", "class_id": "other", "box": [0, 0, 1, 1]}],
+                ),
+            )
+            rejects(
+                ValueError,
+                "non-negative",
+                lambda: append(
+                    connection,
+                    expected=1,
+                    actor_kind="human",
+                    objects=[{"object_id": "one", "class_id": "item", "box": [-1, 0, 1, 1]}],
+                ),
+            )
             rejects(
                 ValueError,
                 "eligibility",

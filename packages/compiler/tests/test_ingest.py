@@ -1,6 +1,8 @@
 """Image normalization and immutable-content tests."""
 
 import io
+import struct
+import zlib
 
 import pytest
 from PIL import Image
@@ -44,6 +46,21 @@ def test_invalid_image_rejected() -> None:
         process_image(b"not-image", asset_id="a", project_id="p")
     with pytest.raises(ValueError, match="upload"):
         process_image(b"", asset_id="a", project_id="p")
+
+
+def test_oversized_header_is_rejected_before_pixel_decode(monkeypatch: pytest.MonkeyPatch):
+    output = io.BytesIO()
+    Image.new("RGB", (10, 10)).save(output, format="PNG")
+    data = bytearray(output.getvalue())
+    data[16:24] = (10001).to_bytes(4, "big") + (10000).to_bytes(4, "big")
+    data[29:33] = struct.pack(">I", zlib.crc32(data[12:29]))
+
+    def decode_is_forbidden(self: Image.Image):
+        raise AssertionError("oversized image was decoded")
+
+    monkeypatch.setattr(Image.Image, "load", decode_is_forbidden)
+    with pytest.raises(ValueError, match="megapixel"):
+        process_image(bytes(data), asset_id="large", project_id="p")
 
 
 def test_fixture_image_toolchain_record():
