@@ -34,7 +34,9 @@ def model(side: int, release_id: str = "model-1") -> ModelRelease:
     )
 
 
-def report(release: ModelRelease, *, missed: bool = False) -> EvaluationReport:
+def report(
+    release: ModelRelease, *, missed: bool = False, truth_classes: tuple[str, ...] = ("object",)
+) -> EvaluationReport:
     transform = full_frame_transform(100, 100, release.policy.imgsz)
     box = Box(10, 10, 30, 30)
     mapped = transform.apply(box)
@@ -46,10 +48,21 @@ def report(release: ModelRelease, *, missed: bool = False) -> EvaluationReport:
         weights_sha256=release.weights_sha256,
         class_map_sha256=release.class_map_sha256,
         role="development",
-        images=(EvaluationImage("source", 100, 100, (GroundTruth("one", "object", box),)),),
+        images=(
+            EvaluationImage(
+                "source",
+                100,
+                100,
+                tuple(GroundTruth(class_id, class_id, box) for class_id in truth_classes),
+            ),
+        ),
         derived=(
             DerivedPredictions(
-                "source", transform, () if missed else (Detection("object", mapped, 0.9),)
+                "source",
+                transform,
+                ()
+                if missed
+                else tuple(Detection(class_id, mapped, 0.9) for class_id in truth_classes),
             ),
         ),
     )
@@ -137,6 +150,60 @@ def test_incumbent_comparison_is_required_and_uses_the_same_frozen_dataset() -> 
             policy,
             expected_revision=1,
             incumbent_report=report(first),
+        )
+
+
+@pytest.mark.parametrize("gate", [PromotionPolicy(1, 0.9), PromotionPolicy(2, 0)])
+def test_better_candidate_can_replace_incumbent_below_current_absolute_gates(gate) -> None:
+    first, second = model(320), model(320, "second")
+    incumbent = report(first, missed=True)
+    evidence = report(second)
+    evidence = replace(
+        evidence,
+        overall=replace(
+            evidence.overall,
+            per_class={
+                key: replace(metrics, support=2)
+                for key, metrics in evidence.overall.per_class.items()
+            },
+        ),
+    )
+    state = RegistryState("project-1", first.recipe_id, 1, first)
+    with pytest.raises(ValueError):
+        gate.qualify(first, incumbent)
+    promoted = state.promote(
+        second, evidence, gate, expected_revision=1, incumbent_report=incumbent
+    )
+    assert promoted.champion == second and promoted.rollback == first
+    with pytest.raises(ValueError, match="atomic model release"):
+        state.promote(
+            second,
+            evidence,
+            gate,
+            expected_revision=1,
+            incumbent_report=replace(incumbent, weights_sha256="f" * 64),
+        )
+
+
+@pytest.mark.parametrize(
+    "before,after,digest",
+    [
+        (("object", "other"), ("object",), "c" * 64),
+        (("object",), ("object", "other"), "c" * 64),
+        (("object",), ("object",), "e" * 64),
+    ],
+)
+def test_catalogue_changes_cannot_skip_or_crash_incumbent_comparison(before, after, digest) -> None:
+    first = replace(model(320), class_ids=before)
+    second = replace(model(320, "second"), class_ids=after, class_map_sha256=digest)
+    state = RegistryState("project-1", first.recipe_id, 1, first)
+    with pytest.raises(ValueError, match="class catalogue"):
+        state.promote(
+            second,
+            report(second, truth_classes=after),
+            PromotionPolicy(1, 0),
+            expected_revision=1,
+            incumbent_report=report(first, truth_classes=before),
         )
 
 

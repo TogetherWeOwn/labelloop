@@ -106,6 +106,33 @@ def test_slices_track_source_scale_derived_scale_occlusion_and_truncation() -> N
     assert report.slices["source_large"].map50 is None
 
 
+def test_frozen_truth_digest_includes_complete_source_truth_independent_of_object_order() -> None:
+    image = EvaluationImage(
+        "source",
+        100,
+        100,
+        (
+            GroundTruth("one", "a", Box(0, 0, 10, 10)),
+            GroundTruth("outside-crop", "b", Box(80, 80, 90, 90), True, True),
+        ),
+        revision=2,
+        source_sha256="a" * 64,
+    )
+    assert image.truth_digest() == replace(image, objects=image.objects[::-1]).truth_digest()
+    for changed in (
+        replace(image, asset_id="other"),
+        replace(image, revision=1),
+        replace(image, source_sha256="b" * 64),
+        replace(image, width=101),
+        replace(image, height=101),
+        replace(image, objects=image.objects[:1]),
+    ):
+        assert changed.truth_digest() != image.truth_digest()
+    for changed in (replace(image, revision=None), replace(image, source_sha256=None)):
+        with pytest.raises(ValueError, match="requires revision and source digest"):
+            changed.truth_digest()
+
+
 def test_excluded_source_remains_in_evaluation_denominator() -> None:
     image = EvaluationImage("excluded", 100, 100, (GroundTruth("one", "a", Box(0, 0, 10, 10)),))
     report = evaluate((image,), ())

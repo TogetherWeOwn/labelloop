@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from labelloop_core.domain import CanonicalDatasetRelease, Recipe, ReleasedSample
+from labelloop_core.evaluation import EvaluationImage, GroundTruth
 from labelloop_core.geometry import (
     AffineTransform,
     Box,
@@ -318,6 +319,19 @@ def _compile_sample(
     record = {
         "asset_id": asset.asset_id,
         "source_sha256": asset.sha256,
+        "source_truth_sha256": EvaluationImage(
+            asset.asset_id,
+            asset.width,
+            asset.height,
+            tuple(
+                GroundTruth(
+                    obj.object_id, obj.class_id, obj.box, obj.occluded, obj.truncated_at_image_edge
+                )
+                for obj in revision.objects
+            ),
+            revision=revision.revision,
+            source_sha256=asset.sha256,
+        ).truth_digest(),
         "revision": revision.revision,
         "parent_revision": revision.parent_revision,
         "review_tier": revision.review_tier,

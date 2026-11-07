@@ -188,6 +188,26 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 save_model(
                     connection, training_run_key=request.run_id, release=model, export_evidence={}
                 )
+            for counts in (
+                (0,) * exported.sample_count,
+                (-1,) + (1,) * (exported.sample_count - 1),
+                (1.5,) * exported.sample_count,
+            ):
+                with pytest.raises(ValueError, match="export verification"):
+                    save_model(
+                        connection,
+                        training_run_key=request.run_id,
+                        release=model,
+                        export_evidence=asdict(exported) | {"detection_counts": counts},
+                    )
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.count())
+                        .select_from(db.model_release)
+                        .where(db.model_release.c.release_key == model.release_id)
+                    ).scalar_one()
+                    == 0
+                )
             for item in (
                 model,
                 replace(model, release_id=model.release_id + "-next"),

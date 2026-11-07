@@ -237,9 +237,16 @@ class LocalUltralyticsBackend:
         if (
             not samples
             or not validation_ids
-            or not {sample["asset_id"] for sample in samples} <= validation_ids
+            or len(validation_ids) != len(self.validation_images)
+            or {sample["asset_id"] for sample in samples} != validation_ids
         ):
-            raise ValueError("development validation truth must include every validation source")
+            raise ValueError("development validation truth must match every validation source")
+        truth_digests = {image.asset_id: image.truth_digest() for image in self.validation_images}
+        if any(
+            truth_digests[sample["asset_id"]] != sample.get("source_truth_sha256")
+            for sample in samples
+        ):
+            raise ValueError("development validation truth differs from frozen canonical truth")
         if any(
             sample["asset_id"] in validation_ids and sample["split"] != "val"
             for sample in manifest["samples"]

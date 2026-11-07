@@ -13,6 +13,7 @@ from support import canonical_release
 
 from labelloop_compiler.compiler import CompilerFailure, compile_dataset
 from labelloop_core.domain import DatasetObject
+from labelloop_core.evaluation import EvaluationImage, GroundTruth
 from labelloop_core.geometry import Box, Crop
 
 
@@ -169,6 +170,23 @@ def test_absent_crop_object_does_not_create_class_support(tmp_path):
     assert absent["status"] == "absent_after_crop"
     assert manifest["class_support"]["item"]["val"] == 1
     assert manifest["class_support"]["item"]["validation_supported"] is True
+    truth = EvaluationImage(
+        sample.asset.asset_id,
+        sample.asset.width,
+        sample.asset.height,
+        tuple(
+            GroundTruth(
+                obj.object_id, obj.class_id, obj.box, obj.occluded, obj.truncated_at_image_edge
+            )
+            for obj in sample.revision.objects
+        ),
+        revision=sample.revision.revision,
+        source_sha256=sample.asset.sha256,
+    )
+    assert compiled["source_truth_sha256"] == truth.truth_digest()
+    assert (
+        compiled["source_truth_sha256"] != replace(truth, objects=truth.objects[:1]).truth_digest()
+    )
 
 
 def test_tiny_visible_target_cannot_leave_partial_labels(tmp_path):

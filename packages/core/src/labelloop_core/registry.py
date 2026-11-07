@@ -69,7 +69,7 @@ class PromotionPolicy:
         ):
             raise ValueError("promotion targets must be explicit finite probabilities")
 
-    def qualify(self, release: ModelRelease, report: EvaluationReport) -> None:
+    def validate_identity(self, release: ModelRelease, report: EvaluationReport) -> None:
         if (
             report.run_id not in release.evaluation_run_ids
             or report.recipe_id != release.recipe_id
@@ -79,6 +79,9 @@ class PromotionPolicy:
             or set(report.overall.per_class) != set(release.class_ids)
         ):
             raise ValueError("evaluation does not describe this atomic model release")
+
+    def qualify(self, release: ModelRelease, report: EvaluationReport) -> None:
+        self.validate_identity(release, report)
         for metrics in report.overall.per_class.values():
             if not metrics.supported or metrics.support < self.min_class_support:
                 raise ValueError("unsupported class or insufficient per-class evidence")
@@ -123,7 +126,12 @@ class RegistryState:
         if self.champion:
             if incumbent_report is None:
                 raise ValueError("incumbent comparison evidence is required")
-            policy.qualify(self.champion, incumbent_report)
+            policy.validate_identity(self.champion, incumbent_report)
+            if (
+                candidate.class_ids != self.champion.class_ids
+                or candidate.class_map_sha256 != self.champion.class_map_sha256
+            ):
+                raise ValueError("candidate and incumbent must share the class catalogue")
             if (
                 incumbent_report.dataset_release_id != report.dataset_release_id
                 or incumbent_report.role != report.role

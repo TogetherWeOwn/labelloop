@@ -1,8 +1,10 @@
 """Original-frame, non-crowd detection metrics independent of vendor val output."""
 
+import hashlib
+import json
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from statistics import mean
 
 from .geometry import AffineTransform, Box
@@ -26,6 +28,17 @@ class EvaluationImage:
     width: int
     height: int
     objects: tuple[GroundTruth, ...]
+    revision: int | None = None
+    source_sha256: str | None = None
+
+    def truth_digest(self) -> str:
+        """Bind complete pre-crop truth to canonical pixels and annotation revision."""
+        if self.revision is None or self.revision < 1 or self.source_sha256 is None:
+            raise ValueError("frozen validation truth requires revision and source digest")
+        require_digest(self.source_sha256)
+        ordered = replace(self, objects=tuple(sorted(self.objects, key=lambda obj: obj.object_id)))
+        payload = json.dumps(asdict(ordered), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()
 
     def __post_init__(self) -> None:
         if not self.asset_id or min(self.width, self.height) < 1:

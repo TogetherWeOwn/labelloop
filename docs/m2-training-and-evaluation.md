@@ -1,6 +1,8 @@
-# Local training and evaluation — implementation checkpoint
+# Local training and evaluation — implementation reference
 
-Status: **partial implementation, not a qualified training pipeline**.
+These contracts describe the M2 pipeline, not model-quality qualification.
+Exact-head Actions results and review status are recorded in the PR's Verification
+section rather than duplicated here as time-bound status claims.
 Scope remains plan v0.3 §§9, 11 and acceptance checks 12–15, 17, 19 and 26.
 Implementation runtime binding was verified as `ANTHROPIC_MODEL=gpt-6.1-sol`.
 
@@ -40,7 +42,9 @@ The initial slices report source-area buckets, derived minimum side ≤6 pixels,
 occlusion, truncation, negative images and targets outside all derivative coverage.
 Object-cohort slices ignore detections matched to non-cohort ground truth while
 retaining unmatched false positives. They are cohort diagnostics, not pycocotools
-area-range summaries. Crop union area, wholly uncovered targets and partially
+area-range summaries: an unmatched detection counts as a false positive in every
+object-cohort slice, making slice precision/AP pessimistic relative to COCO's
+area-range ignoring. Crop union area, wholly uncovered targets and partially
 covered targets are recorded per source.
 
 Tests compare overall mAP50 and mAP50–95 with pinned `pycocotools==2.0.11` on
@@ -54,9 +58,11 @@ segmentation evaluation are outside this domain contract.
 compare-and-swap state transitions. A release binds weights, preprocessing,
 class map, recipe, inference thresholds, NMS/tiling, package versions, static
 ONNX signature, export digest and evaluation IDs. Promotion checks artifact and
-policy identity, per-class support/quality and incumbent non-regression on the
-same frozen evaluation release. Rollback swaps the complete previous release;
-it cannot cross project or recipe boundaries.
+policy identity, candidate per-class support/quality and incumbent non-regression
+on the same frozen evaluation release and identical class catalogue/map hash.
+The incumbent must have matching lineage, but need not meet today's absolute
+candidate gates. Rollback swaps the complete previous release; it cannot cross
+project or recipe boundaries. A second rollback toggles back to the demoted model.
 
 `labelloop_api.model_store` persists completed training runs, per-epoch evaluation
 reports, model release payloads and export evidence in PostgreSQL. It verifies the
@@ -70,21 +76,25 @@ pointers together with an append-only principal-attributed event. Each operation
 uses a savepoint inside the caller's outer transaction; even a caught event-write
 failure cannot leave an advanced pointer. Concurrent first promotions use an
 insert-on-conflict followed by row locking. Other recipes are never locked or
-advanced by that transition. Migration 0002 keeps model metadata separate from
-the initial canonical migration and adds immutable-evidence and registry-scope
+advanced by that transition. Migration 0002 freezes its table definitions locally,
+independent of future application metadata, and adds immutable-evidence and registry-scope
 guards. No HTTP promotion endpoint is exposed; authentication and admin
 authorization remain required at the future service boundary. The internal
 store's actor ID is provenance, not an authorization capability.
-
-These persistence and race assertions await corrected exact-head Actions evidence;
-they are implementation claims, not a successful database smoke result.
 
 ## Controlled CPU backend
 
 `labelloop_worker_ml.training.LocalUltralyticsBackend` consumes worker-owned paths,
 a hash-pinned initialization checkpoint, a compiled manifest and complete source
 validation truth. It verifies manifest/file/class-map hashes and request lineage
-before starting. A disposable dataset copy receives vendor label caches; the
+before starting. Validation membership must match exactly, without duplicates.
+Each compiled sample pins `source_truth_sha256`: SHA-256 of sorted-key compact JSON
+for the complete source `EvaluationImage`, with objects sorted by object ID. This
+binds original dimensions, pixel digest, annotation revision, object IDs/classes,
+source boxes and occlusion/truncation flags, including objects outside crops.
+Missing lineage or a stale truth digest fails before creating a run directory;
+derivative-retained boxes alone are not authoritative validation truth.
+A disposable dataset copy receives vendor label caches; the
 compiled release is never edited. The worker strips the test split from the run's
 data configuration and refuses validation sources present in training/test.
 
@@ -108,8 +118,8 @@ seeded yolo26n architecture from the pinned package without downloading pretrain
 weights, then trains one epoch on the 16-image CC0 interface fixture independently
 at 320 and 640. This is pipeline evidence, not model-quality qualification or a
 claim that pretrained weights were exercised. Linux Torch and torchvision use
-the CPU index. Audit records are uploaded as an Actions artifact. Execution and
-exact-head success remain to be verified in Actions.
+the CPU index. Audit records are uploaded as an Actions artifact; the PR records
+the run/job links and conclusions for its exact head.
 
 ## Static export and persistent registry smoke
 
@@ -117,16 +127,17 @@ exact-head success remain to be verified in Actions.
 CPU Runtime signature, then compares native and exported detections on identical
 observed tensors from recipe samples. Tolerances are 0.01 input pixels and 1e-5
 confidence, with exact class/count agreement. Wrong shapes, nonfinite output and
-geometry/score/class drift fail closed. The smoke asserts nonempty predictions
-rather than accepting vacuous empty-output agreement. This sample check is not a
-universal equivalence guarantee.
+geometry/score/class drift fail closed. Export verification and model persistence
+both require at least one detection across the sample set, rather than accepting
+vacuous empty-output agreement. Individual negative samples may still be empty;
+the synthetic smoke has stricter nonempty/below-cap assertions per sample.
+This sample check is not a universal equivalence guarantee.
 
 The real-loader boundary cases exercise the strict two-pixel cutoff, a greater-
 than-two-pixel target, four/six-pixel targets, edge boxes and verified negatives
-at both sizes. On the prior Actions head those cases passed; training/export
-smokes failed on an incorrect exporter-argument audit. Pinned Ultralytics keeps
-`args.imgsz` as an integer and its normalized size in `exporter.imgsz`; the audit
-now checks both without rewriting or relaxing requested arguments.
+at both sizes. Pinned Ultralytics keeps `args.imgsz` as an integer and its
+normalized size in `exporter.imgsz`; the audit checks both without rewriting or
+relaxing requested arguments.
 
 The extended Actions smoke uses a disposable pinned PostgreSQL service, runs
 Alembic, persists real training/evaluation/export lineage, promotes competing
@@ -139,8 +150,8 @@ quality threshold. Registry snapshots join the existing Actions audit artifacts.
 
 ## Fresh-context review corrections
 
-One fresh-context read-only pass found three correctness gaps, all addressed in
-code with regressions awaiting Actions (not yet accepted by formal review):
+One fresh-context read-only pass found three correctness gaps, addressed with
+regressions and accepted in the initial QA pass:
 
 - Training now rejects unlisted files and symlinks, copies only the frozen file
   allowlist, and hashes those actual copies. A late unlisted file cannot enter
@@ -159,23 +170,20 @@ code with regressions awaiting Actions (not yet accepted by formal review):
   regression exercises that distinct-release lineage; it does not claim another
   actual training run or independent final-test qualification.
 
-The next Actions head after the exporter audit repair passed the full 640 CPU,
-ONNX and PostgreSQL path, but the 320 comparison failed at the detection tolerance
-check. Its zero-confidence fixture policy hit max_det=300 inside a nearly tied
-random-score cohort. The smoke now uses explicit size-scaled confidence and a
-larger bound, asserts nonempty results strictly below that bound, and retains the
-same 0.01-pixel/1e-5 tolerances and exact class/count checks. This is a fixture
-stability correction, not permission to accept drifting real exports. Failed
-comparisons now preserve both detection arrays for diagnosis. Corrected 320 and
-640 results remain pending Actions.
+The synthetic smoke uses confidence 0.005 and max_det=1000 at both sizes. That
+retains the complete seeded coarse-score cohort without cutting through nearly
+tied random predictions at the detection cap. It asserts nonempty results
+strictly below the cap and retains the 0.01-pixel/1e-5 tolerances and exact
+class/count checks. This is fixture stability, not permission to accept drifting
+real exports. Failed comparisons preserve both detection arrays for diagnosis.
 
-## Remaining before milestone acceptance
+## Milestone acceptance gates
 
-- Verify and repair the corrected CPU export and PostgreSQL smoke in Actions.
-- Record exact-head Actions run/job conclusions and disposition the one
-  fresh-context review before marking the draft PR ready.
-- Complete the existing independent native review, security and merge gates.
-  No milestone acceptance is claimed while the draft remains unmerged.
+- Exact-head GitHub Actions run/job conclusions must be recorded in the PR,
+  including the CPU training/export/PostgreSQL smoke at both sizes.
+- Independent native review, applicable security checks, finding dispositions
+  and the merge gate remain required. Passing fixture tests alone do not qualify
+  model quality or complete an unmerged milestone.
 
 No paid Platform or LLM calls are needed. Full suites and CI gates run only on
 GitHub Actions. No local training or test execution is claimed by this checkpoint.

@@ -1,5 +1,13 @@
 """Cheap serialization/schema checks; real PostgreSQL transitions run in the CPU smoke."""
 
+import io
+import runpy
+from pathlib import Path
+
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+
 from labelloop_api import model_schema
 from labelloop_api.model_store import decode_release, decode_report, json_record, record_digest
 from labelloop_api.schema import metadata as canonical_metadata
@@ -71,6 +79,33 @@ def test_training_tables_do_not_change_the_initial_canonical_migration():
         "preprocessing_recipe",
         "model_release",
     }
+
+
+def test_model_migration_is_frozen_against_future_application_columns():
+    migration = runpy.run_path(
+        str(Path(__file__).parents[1] / "migrations/versions/0002_local_models.py")
+    )
+    future = sa.Column("future_column", sa.String)
+    model_schema.training_run.append_column(future)
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output}
+    )
+    try:
+        with Operations.context(context) as operations:
+            migration["upgrade"]()
+            assert "future_column" not in output.getvalue()
+            operations.add_column("training_run", sa.Column("future_column", sa.String))
+            migration["downgrade"]()
+    finally:
+        model_schema.training_run._columns.remove(future)
+    sql = output.getvalue()
+    assert sql.count("future_column") == 1
+    for table in model_schema.metadata.tables:
+        assert f"CREATE TABLE {table}" in sql
+        assert f"DROP TABLE {table}" in sql
+    assert "CREATE TRIGGER registry_scope" in sql
+    assert "DROP FUNCTION registry_recipe_scope" in sql
 
 
 def test_preprocessing_digest_ignores_mapping_insertion_order_but_not_policy():

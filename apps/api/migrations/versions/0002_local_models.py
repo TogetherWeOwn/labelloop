@@ -1,8 +1,8 @@
 """Immutable local training evidence and transactionally updated recipe heads."""
 
+import sqlalchemy as sa
 from alembic import op
-
-from labelloop_api.model_schema import metadata
+from sqlalchemy.dialects.postgresql import UUID
 
 revision = "0002_local_models"
 down_revision = "0001_canonical_foundation"
@@ -62,8 +62,73 @@ IMMUTABLE_TABLES = (
 )
 
 
+def record_columns() -> tuple[sa.Column, ...]:
+    return (
+        sa.Column("id", UUID, primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+    )
+
+
 def upgrade() -> None:
-    metadata.create_all(op.get_bind())
+    # Historical DDL must not depend on application metadata from a later release.
+    op.create_table(
+        "training_run",
+        *record_columns(),
+        sa.Column("run_key", sa.String, unique=True, nullable=False),
+        sa.Column("variant_id", UUID, sa.ForeignKey("yolo_dataset_variant.id"), nullable=False),
+        sa.Column("input_manifest", sa.JSON, nullable=False),
+        sa.Column("record", sa.JSON, nullable=False),
+    )
+    op.create_table(
+        "evaluation_run",
+        *record_columns(),
+        sa.Column("run_key", sa.String, unique=True, nullable=False),
+        sa.Column("training_run_id", UUID, sa.ForeignKey("training_run.id"), nullable=False),
+        sa.Column("variant_id", UUID, sa.ForeignKey("yolo_dataset_variant.id"), nullable=False),
+        sa.Column("record", sa.JSON, nullable=False),
+    )
+    op.create_table(
+        "model_release",
+        *record_columns(),
+        sa.Column("release_key", sa.String, unique=True, nullable=False),
+        sa.Column("training_run_id", UUID, sa.ForeignKey("training_run.id"), nullable=False),
+        sa.Column("project_id", UUID, sa.ForeignKey("project.id"), nullable=False),
+        sa.Column("recipe_id", UUID, sa.ForeignKey("preprocessing_recipe.id"), nullable=False),
+        sa.Column("record", sa.JSON, nullable=False),
+        sa.Column("export_evidence", sa.JSON, nullable=False),
+    )
+    op.create_table(
+        "model_evaluation",
+        sa.Column("model_id", UUID, sa.ForeignKey("model_release.id"), primary_key=True),
+        sa.Column("evaluation_id", UUID, sa.ForeignKey("evaluation_run.id"), primary_key=True),
+    )
+    op.create_table(
+        "registry_head",
+        sa.Column("project_id", UUID, sa.ForeignKey("project.id"), primary_key=True),
+        sa.Column("recipe_id", UUID, sa.ForeignKey("preprocessing_recipe.id"), primary_key=True),
+        sa.Column("revision", sa.Integer, nullable=False, server_default="0"),
+        sa.Column("champion_id", UUID, sa.ForeignKey("model_release.id")),
+        sa.Column("rollback_id", UUID, sa.ForeignKey("model_release.id")),
+        sa.CheckConstraint("revision >= 0"),
+    )
+    op.create_table(
+        "promotion_event",
+        *record_columns(),
+        sa.Column("project_id", UUID, sa.ForeignKey("project.id"), nullable=False),
+        sa.Column("recipe_id", UUID, sa.ForeignKey("preprocessing_recipe.id"), nullable=False),
+        sa.Column("revision", sa.Integer, nullable=False),
+        sa.Column("actor_id", sa.String, nullable=False),
+        sa.Column("action", sa.String, nullable=False),
+        sa.Column("record", sa.JSON, nullable=False),
+        sa.UniqueConstraint("project_id", "recipe_id", "revision"),
+        sa.CheckConstraint("revision > 0 AND length(trim(actor_id)) > 0"),
+        sa.CheckConstraint("action IN ('promote', 'rollback')"),
+    )
     op.execute(GUARDS)
     for name in IMMUTABLE_TABLES:
         op.execute(
@@ -82,4 +147,12 @@ def downgrade() -> None:
     for name in IMMUTABLE_TABLES:
         op.execute(f"DROP TRIGGER model_no_update ON {name}")
     op.execute("DROP FUNCTION model_record_immutable()")
-    metadata.drop_all(op.get_bind())
+    for name in (
+        "promotion_event",
+        "registry_head",
+        "model_evaluation",
+        "model_release",
+        "evaluation_run",
+        "training_run",
+    ):
+        op.drop_table(name)

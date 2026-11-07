@@ -225,6 +225,8 @@ def save_model(
         or export_evidence.get("policy") != asdict(release.policy)
         or export_evidence.get("sample_count", 0) < 1
         or len(export_evidence.get("detection_counts", ())) != export_evidence["sample_count"]
+        or any(type(count) is not int or count < 0 for count in export_evidence["detection_counts"])
+        or sum(export_evidence["detection_counts"]) < 1
         or export_evidence.get("coordinate_atol_px") != 0.01
         or export_evidence.get("confidence_atol") != 1e-5
     ):

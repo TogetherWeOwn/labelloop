@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,8 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
                 )
                 for obj in sample.revision.objects
             ),
+            revision=sample.revision.revision,
+            source_sha256=sample.asset.sha256,
         )
         for sample in fixture.release.samples
         if sample.split == "val"
@@ -191,6 +194,48 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         output=output,
         validation_images=validation_images,
     )
+    truth = next(image for image in validation_images if image.objects)
+    assert truth.revision is not None
+    obj = truth.objects[0]
+    stale_objects = (
+        replace(obj, object_id=obj.object_id + "-stale"),
+        replace(obj, class_id="stale-class"),
+        replace(obj, box=replace(obj.box, x_max=obj.box.x_max - 1)),
+        replace(obj, occluded=not obj.occluded),
+        replace(obj, truncated=not obj.truncated),
+    )
+    stale_images = (
+        replace(truth, revision=truth.revision + 1),
+        replace(truth, source_sha256="f" * 64),
+        replace(truth, width=truth.width + 1),
+        replace(truth, objects=()),
+        *(replace(truth, objects=(stale,) + truth.objects[1:]) for stale in stale_objects),
+    )
+    for stale in stale_images:
+        invalid = tuple(
+            stale if image.asset_id == truth.asset_id else image for image in validation_images
+        )
+        with pytest.raises(ValueError, match="differs from frozen canonical truth"):
+            LocalUltralyticsBackend(
+                dataset=dataset,
+                initialization=initialization,
+                output=output,
+                validation_images=invalid,
+            ).train(request)
+        assert not output.exists()
+    for invalid in (
+        validation_images + (validation_images[0],),
+        validation_images + (replace(truth, asset_id="unlisted-source"),),
+        validation_images[1:],
+    ):
+        with pytest.raises(ValueError, match="must match every validation source"):
+            LocalUltralyticsBackend(
+                dataset=dataset,
+                initialization=initialization,
+                output=output,
+                validation_images=invalid,
+            ).train(request)
+        assert not output.exists()
     rogue_image = dataset / "images/train/unlisted.png"
     rogue_label = dataset / "labels/train/unlisted.txt"
     rogue_image.write_bytes((dataset / manifest["samples"][0]["image_path"]).read_bytes())
@@ -265,6 +310,23 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     from registry_smoke import exercise_registry
 
     exercise_registry(result, exported, manifest, output)
+    if side == 320:
+        empty_weights = output / "empty-export.pt"
+        empty_weights.write_bytes(epoch_file.read_bytes())
+        empty_evidence = output / "empty-export.json"
+        with pytest.raises(ValueError, match="requires at least one detection"):
+            export_and_compare(
+                weights=empty_weights,
+                expected_weights_sha256=result.selected.sha256,
+                images=tuple(
+                    dataset / sample["image_path"]
+                    for sample in manifest["samples"]
+                    if sample["split"] == "val"
+                ),
+                policy=replace(request.policy, conf=1.0),
+                evidence=empty_evidence,
+            )
+        assert not empty_evidence.exists()
     # Fail closed before creating any run directory when a frozen input changes.
     initialization.write_bytes(b"modified checkpoint")
     with pytest.raises(ValueError, match="checkpoint digest mismatch"):

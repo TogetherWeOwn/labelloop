@@ -162,6 +162,8 @@ def export_and_compare(
             counts.append(len(rows))
     finally:
         hook.remove()
+    if sum(counts) < 1:
+        raise ValueError("export equivalence requires at least one detection")
     if file_digest(weights) != expected_weights_sha256:
         raise ValueError("checkpoint changed during export verification")
     result = ExportResult(
