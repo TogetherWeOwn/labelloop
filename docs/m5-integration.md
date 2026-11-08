@@ -459,6 +459,19 @@ That verifies preceding teacher-lineage mechanics, not this new persistence slic
 fresh canary qualification, independent quality, HTTP/UI/restore or final M5 acceptance.
 Required Devin, fresh-context and native reviews remain gates; the PR stays draft.
 
+At `87451d0`, [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462504127/job/128674641224)
+passed, including the new PostgreSQL measured-outcome exercise; CodeQL also passed.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462504127/job/128674641291)
+failed, so that head is not accepted. Inspection found that the migration-graph
+regression still expected `qualification_0006` despite the new `qualification_0007`
+head. The correction updates the expected head and adds the new ancestry assertion,
+retaining all earlier graph checks. The focused diagnostic command
+`uv run --no-sync pytest apps/api/tests/test_acceptance_store.py::test_qualification_and_proposal_histories_have_one_head_without_rewriting_ddl -q`
+could not start: `pytest` is not installed in the isolated worktree (exit 2).
+No dependencies were installed and no test ran locally. Raw-log escape protection
+was retained; without a complete failure transcript, no claim is made that the
+head assertion explains every unit failure. Corrected-head Actions remains required.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable
