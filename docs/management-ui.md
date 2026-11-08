@@ -27,7 +27,7 @@ second registry, status poller or full-screen navigation should be mounted.
 
 | Accepted screen | Fixture implementation | Contract/browser coverage |
 | --- | --- | --- |
-| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, scope/guide fields and save/error copy, approved-version summary, dependency explanation | Reviewer controls absent, individual class acceptance payload, step navigation, unapproved/proposed entries prevent approval |
+| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, scope/guide fields and save/error copy, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, individual class acceptance payload, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
 | 03 Dataset releases | Accepted-label provenance, distribution table, changed images, exclusions, gate/build/quarantine/identical/frozen states, in-place freeze confirmation | Frozen release exposes no edit/freeze, compiler reason visible, freeze pins expected revision |
 | 04 Size/crop recipes | Shared-scale J22 frames, recorded affine/box geometry, image-level exclusion consequences, locked recipe versioning, compilation/artifact surfaces | Browser rectangles cross-checked with the Python compiler geometry, 640 frame twice 320, compile pins recipe IDs |
 | 05 Local training | Local-only run table and selected details, explicit start/cancel panels, fixed-shape development selection, settings mismatch table, retention and checkpoint hashes | Start pins release/recipe/base hash, size not user-overridden, cancel explicit, no paid start |
@@ -41,8 +41,17 @@ or freshness changes enter the single polite status region, not every progress
 number. Recorded fixtures always identify their fixed timestamp as recorded,
 not as fresh live observations. Results are in place, never toasts.
 
+Setup detail projections are optional until the producer delivers them. A missing
+import report is not a successful import; missing source details never turn
+collection totals into invented image records. The recorded source digests are
+invented demonstration values, not hashes of delivered files. Validation errors
+and source metadata are inspectable only: they cannot accept classes, approve a
+step, assign a split or resolve a near-duplicate pair. Dataset ingestion, file
+upload, hash computation and source-pixel delivery are still unconnected.
+
 The browser harness exercises 1280 and 390 widths, both roles and the shared
-states with WCAG A/AA and best-practice axe rules, skip-link keyboard behavior,
+states plus all six setup steps with WCAG A/AA and best-practice axe rules,
+keyboard step activation, skip-link keyboard behavior,
 page-overflow checks, screenshots, and a separate command-payload capture mode.
 That mode has **no server connection and never claims to change a canonical
 record**. A separate dispatch-contract fixture exercises `ManagementModule`
@@ -118,6 +127,9 @@ retrospective provenance/age audit; these controls do not prove package safety.
 Only lockfile resolution was run locally. Frozen installation, lint, types,
 unit tests, build, browser/axe and compiler cross-check run on GitHub Actions.
 No local full suite or CI mirror is permitted. Artifact output is ignored by git.
+The web job pins Ubuntu 24.04 because the rolling Ubuntu 26.04 runner is not
+supported by the pinned Playwright 1.56.1 browser/dependency installer. Browser
+checks and failure-on-missing-evidence remain required, not skipped.
 
 REA angle: reuse the delivered canonical models, compiler geometry, local-run and
 atomic registry contracts plus the accepted kit/screen fixtures. No replacement

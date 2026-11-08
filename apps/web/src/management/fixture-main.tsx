@@ -23,7 +23,10 @@ if (scenario === 'paused') snapshot.paid_paused = true;
 if (scenario === 'empty') {
   snapshot.release = null; snapshot.recipes = []; snapshot.runs = []; snapshot.evaluations = []; snapshot.registry = [];
   snapshot.draft.classes = []; snapshot.draft.references = [];
+  snapshot.draft.dataset_import = null; snapshot.draft.source_assets = [];
+  snapshot.draft.sources = { images: 0, groups: 0, metadata_keys: '', pending_pairs: [], split_summary: 'No source assignments' };
 }
+if (scenario === 'source-details-missing') snapshot.draft.source_assets = null;
 if (scenario === 'frozen' && snapshot.release) {
   snapshot.release.state = 'Frozen'; snapshot.release.frozen_at = snapshot.updated_at; snapshot.release.frozen_by = 'Fixture admin';
 }

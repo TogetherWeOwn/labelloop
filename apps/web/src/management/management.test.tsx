@@ -46,6 +46,29 @@ describe('screen contracts and role rendering', () => {
     expect(html).toContain('Accept Almond milk 1 L');
     expect(html).toContain('Decide all Proposed items');
   });
+  it('shows import row errors as read-only evidence, not automatic acceptance', () => {
+    const html = render(NewProjectView);
+    expect(html).toContain('Import rows to fix');
+    expect(html).toContain('Class name is empty');
+    expect(html).toContain('Parent class is unknown');
+    expect(html).toContain('Recorded validation example only');
+    expect(html).toContain('Decide all Proposed items');
+    const data = structuredClone(fixtureSnapshot);
+    data.draft.dataset_import = { id: 'proposed-report', source_name: '<img src=x onerror=alert(1)>', rows: 1, state: 'Proposed', errors: [] };
+    const proposed = render(NewProjectView, data);
+    expect(proposed).toContain('No row errors reported. This is not class approval.');
+    expect(proposed).toContain('Decide all Proposed items');
+    expect(proposed).toContain('&lt;img');
+    expect(proposed).not.toContain('<img src=x');
+  });
+  it('keeps missing import reports explicit for both roles', () => {
+    const data = structuredClone(fixtureSnapshot); delete data.draft.dataset_import;
+    for (const role of ['admin', 'reviewer'] as const) {
+      const html = render(NewProjectView, data, role);
+      expect(html).toContain('No dataset import validation report is available.');
+      expect(html).not.toContain('Import rows to fix');
+    }
+  });
   it('never offers edits to a frozen canonical release', () => {
     const data = structuredClone(fixtureSnapshot);
     data.release!.state = 'Frozen';

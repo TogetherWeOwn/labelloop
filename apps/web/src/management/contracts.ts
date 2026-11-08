@@ -14,10 +14,23 @@ export interface ReferenceRow {
   id: string; class_id: string; source: string; permitted_use: string; view: string;
   lighting: string; scale: string; confused_with: string; provenance: 'Proposed' | 'Approved by an admin';
 }
+// Read-only view projections. Missing detail stays unavailable, never inferred
+// from collection totals; final field mapping belongs to the generated client adapter.
+export interface DatasetImportReport {
+  id: string; source_name: string; rows: number;
+  state: 'Rejected' | 'Proposed';
+  errors: readonly { row: number; field: string; message: string }[];
+}
+export interface SourceAssetFact {
+  id: string; width: number; height: number; sha256: string;
+  source_group: string; split: string | null; assignment_revision: string | null;
+}
 export interface ProjectDraft {
   id: string; revision: number; saved_at: string;
   scope: { name: string; detect: string; representation: string; intended_use: string; specificity: string; permitted_use: string; external_providers: string };
   classes: readonly ClassRow[]; references: readonly ReferenceRow[];
+  dataset_import?: DatasetImportReport | null;
+  source_assets?: readonly SourceAssetFact[] | null;
   guide: { extent: string; truncation: string; occlusion: string; reflections: string; min_target_px: number; exhaustive: boolean; background: string };
   sources: { images: number; groups: number; metadata_keys: string; pending_pairs: readonly { id: string; left: string; right: string }[]; split_summary: string };
   approved_steps: readonly SetupStep[];

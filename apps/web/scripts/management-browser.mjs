@@ -57,6 +57,24 @@ try {
           }
         }
       }
+      await page.goto(`${entry}?screen=new-project&role=${role}`);
+      await page.getByRole('navigation', { name: 'Setup steps' }).waitFor();
+      for (const step of ['Scope', 'Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish']) {
+        const key = `setup-${step}-${role}-${width}`;
+        try {
+          const button = page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: new RegExp(step) });
+          await button.focus();
+          await page.keyboard.press('Enter');
+          await page.getByRole('heading', { level: 2, name: new RegExp(step) }).waitFor();
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${key}: page overflow`);
+          await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+          const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })));
+          assert.deepEqual(violations, [], `${key}: ${JSON.stringify(violations)}`);
+          assert.deepEqual(errors, [], `${key}: browser errors`);
+          if (role === 'admin') await page.screenshot({ path: `${evidence}/${key}.png`, fullPage: true });
+          results.push({ key, pass: true, axe: 0, keyboard: 'step-enter', overflow: false });
+        } catch (error) { failures.push({ key, error: String(error) }); }
+      }
       await page.close();
     }
   }
@@ -109,6 +127,31 @@ try {
   await page.getByLabel('Reason for rollback').fill('Fixture drift evidence');
   await page.getByRole('button', { name: 'Confirm rollback' }).click();
   assert.deepEqual(await last(), { kind: 'rollback', project_id: 'shelf-fixture', recipe_id: 'full-letterbox-320-v1', expected_revision: 4, release_id: 'm-0004', reason: 'Fixture drift evidence' });
+  await open('new-project');
+  await page.getByRole('table', { name: 'Import rows to fix' }).waitFor();
+  assert.match(await page.getByRole('table', { name: 'Import rows to fix' }).innerText(), /14[\s\S]*Class name is empty/);
+  assert.match(await page.getByRole('region', { name: 'Dataset import validation' }).innerText(), /Recorded validation example only/);
+  assert.equal(await page.getByRole('button', { name: 'Approve classes and continue', exact: true }).isDisabled(), true, 'a validation report is not class approval');
+  assert.equal(await last(), null, 'reading import validation must not mutate');
+  await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Sources and groups/ }).click();
+  const sourceFacts = page.getByRole('table', { name: 'Returned source asset details (2 of 1326 images)', exact: true });
+  await sourceFacts.waitFor();
+  assert.match(await sourceFacts.innerText(), /1920 × 1080 px/);
+  assert.match(await sourceFacts.innerText(), /Not assigned/);
+  assert.match(await sourceFacts.innerText(), new RegExp('1'.repeat(64)));
+  await page.getByRole('button', { name: 'Compare source-0041 and source-0042', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Same group', exact: true }).isDisabled(), true, 'metadata is not pair-image evidence');
+  assert.equal(await page.getByRole('button', { name: 'Different groups', exact: true }).isDisabled(), true);
+  assert.equal(await last(), null, 'inspecting source facts must not assign groups or splits');
+  await page.goto(`${entry}?screen=new-project&state=source-details-missing`);
+  await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Sources and groups/ }).click();
+  await page.getByText('Source asset details are unavailable.', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('table', { name: /Returned source asset details/ }).count(), 0, 'missing details must not synthesize records from totals');
+  await page.goto(`${entry}?screen=new-project&state=empty`);
+  await page.getByText('No dataset import validation report is available.', { exact: true }).waitFor();
+  await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Sources and groups/ }).click();
+  await page.getByText('No source asset details returned.', { exact: true }).waitFor();
+  results.push({ key: 'setup-read-only-ingestion-evidence', pass: true, realCommands: false });
   await open('new-project');
   await page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true }).click();
   assert.deepEqual(await last(), { kind: 'accept_class', draft_id: 'draft-shelf', expected_revision: 7, id: 'almond' });

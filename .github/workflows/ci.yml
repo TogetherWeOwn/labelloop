@@ -131,7 +131,8 @@ jobs:
   web-build:
     needs: [changes, full-run]
     if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web
-    runs-on: ubuntu-latest
+    # Playwright 1.56.1 supports this image, not the rolling latest runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
