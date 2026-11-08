@@ -48,9 +48,9 @@ class AnnotationOutcomeRef:
             require_name(self.evidence_key)
 
 
-def _select_final_report(connection, release):
+def select_final_report(connection, release, *, dataset_key=None):
     # Select by persisted role/identity only, never scores, passing outcomes or the
-    # newest timestamp. Multiple final reports need an explicit trusted decision.
+    # newest timestamp. An incumbent comparison must use the candidate's population.
     reports = []
     for key in release.evaluation_run_ids:
         report = stored_report(connection, release, key)
@@ -63,7 +63,9 @@ def _select_final_report(connection, release):
             or report.role not in {"development", "calibration", "locked_final_test"}
         ):
             raise ValueError("linked evaluation differs from the selected model contract")
-        if report.role == "locked_final_test":
+        if report.role == "locked_final_test" and (
+            dataset_key is None or report.dataset_release_id == dataset_key
+        ):
             reports.append(report)
     if len(reports) != 1:
         raise ValueError("qualification requires one unambiguous linked final evaluation")
@@ -121,7 +123,7 @@ def load_qualification_context(
     if lineage is not None and not set(inputs.training) <= set(lineage.training_group_ids):
         raise ValueError("qualification lineage omits compiled training groups")
     report = (
-        _select_final_report(connection, release)
+        select_final_report(connection, release)
         if evaluation_key is None
         else stored_report(connection, release, evaluation_key)
     )

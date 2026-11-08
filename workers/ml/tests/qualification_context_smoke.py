@@ -890,6 +890,107 @@ def _exercise_recorded_selection(
             transaction.rollback()
 
 
+def _exercise_selected_promotion(connection, candidate, report, variant, arguments):
+    import json
+    from unittest.mock import patch
+
+    from labelloop_api import model_store
+    from labelloop_api.promotion_service import promote_candidate
+    from labelloop_core.qualification import QualificationContext
+    from labelloop_core.qualification_wire import loads
+    from labelloop_core.registry import RegistryState
+
+    scope = dict(project_key=candidate.project_id, recipe_key=candidate.recipe_id)
+
+    def snapshot():
+        return (
+            tuple(
+                connection.execute(
+                    sa.select(model_schema.registry_head).order_by(
+                        model_schema.registry_head.c.project_id,
+                        model_schema.registry_head.c.recipe_id,
+                    )
+                ).mappings()
+            ),
+            tuple(connection.execute(sa.select(model_schema.promotion_event)).mappings()),
+        )
+
+    original = snapshot()
+    with connection.begin_nested() as fixture:
+        before = load_registry(connection, **scope)
+        assert before.champion is not None
+        with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
+            promote_candidate(connection, **arguments)
+        assert snapshot() == original
+        comparison = replace(
+            report,
+            run_id=report.run_id + "-incumbent",
+            weights_sha256=before.champion.weights_sha256,
+            class_map_sha256=before.champion.class_map_sha256,
+            policy=before.champion.policy,
+        )
+        model_store.save_evaluation(
+            connection, model_key=before.champion.release_id, variant_id=variant, report=comparison
+        )
+        before = load_registry(connection, **scope)
+        for score in (0.0, 1.0):
+            with connection.begin_nested() as duplicate:
+                model_store.save_evaluation(
+                    connection,
+                    model_key=before.champion.release_id,
+                    variant_id=variant,
+                    report=replace(
+                        comparison,
+                        run_id=comparison.run_id + "-ambiguous",
+                        overall=replace(comparison.overall, map50_95=score),
+                    ),
+                )
+                captured = snapshot()
+                with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
+                    promote_candidate(connection, **arguments)
+                assert snapshot() == captured
+                duplicate.rollback()
+        captured = snapshot()
+        serialize = model_store.json_record
+
+        def fail_after_head_write(value):
+            if isinstance(value, RegistryState) and value.revision == before.revision + 1:
+                raise ValueError("injected selected-promotion event failure")
+            return serialize(value)
+
+        with patch.object(model_store, "json_record", side_effect=fail_after_head_write):
+            with pytest.raises(ValueError, match="injected selected-promotion event failure"):
+                promote_candidate(connection, **arguments)
+        assert snapshot() == captured
+        changed = promote_candidate(connection, **arguments)
+        assert changed == RegistryState(
+            candidate.project_id,
+            candidate.recipe_id,
+            before.revision + 1,
+            candidate,
+            before.champion,
+        )
+        assert load_registry(connection, **scope) == changed
+        after_heads, after_events = snapshot()
+        assert len(after_events) == len(captured[1]) + 1
+        assert len(after_heads) == len(captured[0])
+        assert len([row for row in after_heads if row not in captured[0]]) == 1
+        added = next(row for row in after_events if row not in captured[1])
+        assert added["actor_id"] == arguments["actor_id"] and added["action"] == "promote"
+        assert added["record"]["evaluation_key"] == report.run_id
+        assert added["record"]["incumbent_evaluation_key"] == comparison.run_id
+        persisted = loads(json.dumps(added["record"]["qualification"]), QualificationContext)
+        assert persisted.evidence.qualification_id
+        persisted.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
+        with pytest.raises(ValueError, match="stale registry revision"):
+            promote_candidate(connection, **arguments)
+        with pytest.raises(ValueError, match="candidate is already champion"):
+            promote_candidate(connection, **(arguments | {"expected_revision": changed.revision}))
+        assert snapshot() == (after_heads, after_events)
+        fixture.rollback()
+    assert snapshot() == original
+
+
 def _exercise_final_report_selection(connection, release, final, context, annotation, actor):
     """One synthetic candidate owns one final; never prune the shared model's history."""
     from evaluation_fixture import independent_evaluation_variant
@@ -996,6 +1097,20 @@ def _exercise_final_report_selection(connection, release, final, context, annota
         )
         assert load_qualification_context(connection, **selected_arguments) == unique_context
         from labelloop_api.annotation_evidence_store import load_annotation_evidence
+        from labelloop_api.promotion_service import promote_candidate
+
+        promotion = dict(
+            project_key=release.project_id,
+            recipe_key=release.recipe_id,
+            model_key=prefix,
+            annotation_release_key=annotation.release_key,
+            canary_release_key=unique_canary.release_key,
+            actor_id=actor,
+            expected_revision=load_registry(
+                connection, release.project_id, release.recipe_id
+            ).revision,
+        )
+        _exercise_selected_promotion(connection, candidate, candidate_final, variant, promotion)
 
         for reference, model_key in ((annotation, None), (unique_canary, prefix)):
             stored = load_annotation_evidence(
@@ -1028,6 +1143,10 @@ def _exercise_final_report_selection(connection, release, final, context, annota
                         ValueError, match="one unambiguous measured annotation outcome"
                     ):
                         load_qualification_context(connection, **selected_arguments)
+                    with pytest.raises(
+                        ValueError, match="one unambiguous measured annotation outcome"
+                    ):
+                        promote_candidate(connection, **promotion)
                     transaction.rollback()
                 assert (
                     load_qualification_context(connection, **selected_arguments) == unique_context

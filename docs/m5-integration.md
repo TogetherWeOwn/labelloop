@@ -6,7 +6,51 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Population-scoped measured-outcome selection — pending Actions
+## Trusted promotion orchestration — pending Actions
+
+The internal `promote_candidate` service takes a trusted candidate, two population
+release identities, authenticated actor identity and expected registry revision.
+It holds the existing project lock from current registry inspection through context
+assembly and the existing atomic head/event write. It accepts no evaluation or
+outcome keys, lineage, targets, scope or qualification claims. The assembler derives
+the sole final and sole ordinary/candidate-bound outcomes; configured targets supply
+the exact registry policy. The service generates the qualification identity.
+
+When an incumbent exists, the shared report selector requires exactly one linked
+final report on the candidate's frozen final population. Other populations cannot
+substitute for missing comparison evidence. All linked report contracts are checked,
+and every matching report counts regardless of score; duplicates fail closed.
+The registry retains current-policy/canonical-influence/final-state, durable veto,
+class/critical-slice non-regression and atomic rollback gates. Stale revisions and
+already-promoted candidates reject before qualification reads.
+
+New adapters cover both recipes with/without an incumbent, scoped delegation,
+invalid identities/revisions, stale/repeated decisions, read/write failure propagation
+and incumbent population ambiguity/substitution. Both-recipe PostgreSQL controls use
+the disposable sole-final candidate: reject absent or competing incumbent comparisons;
+inject a failure after the head update and require exact head/event rollback; then
+promote, verify complete candidate/rollback metadata, actor, selected report IDs and
+stored qualification, and reject stale/repeated decisions without changes. Additional
+ordinary/canary outcome competitors must also veto service orchestration. These new
+assertions are unverified pending exact-head Actions. No local tests/builds ran.
+
+This is not a new HTTP promotion route or independent measurement evidence. The
+trusted caller still owns candidate/population selection, original execution and
+measurement provenance; those authenticated producers/consumers remain incomplete.
+No schema, migration, dependency or second qualification/registry engine is added.
+REA angle: consume existing persisted selectors and the atomic registry transaction.
+
+## Population-scoped measured-outcome selection — verified baseline
+
+Exact `4b11fb5a0f0d2a357bcf863b3f7bf84e684189b0`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42528689428),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42528689084) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42528689046)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42528689428/job/128877879975),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42528689428/job/128877879865),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the population-scoped selection controls below, not
+the new promotion service or full M5 acceptance. Totals were not extracted.
 
 A trusted internal caller can supply an `AnnotationOutcomeRef` containing only the
 canonical population release key. Assembly selects the sole committed measured
@@ -26,7 +70,7 @@ after reconnect. A disposable sole-final candidate gets a separate unique canary
 population for automatic/explicit context equality; additional clean or low-score
 outcomes in either population must reject, and savepoint rollback recovers the
 unique control without changing registry heads/events or historical evidence.
-These new assertions are unverified pending exact-head Actions. No local tests ran.
+These assertions passed exact-head Actions at `4b11fb5`. No local tests ran.
 
 Population choice remains a trusted-service duty; uniqueness is not independent
 measurement truth, original pipeline execution, HTTP authorization or promotion.
