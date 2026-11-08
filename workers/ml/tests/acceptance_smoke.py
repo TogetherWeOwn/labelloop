@@ -9,7 +9,11 @@ import sqlalchemy as sa
 from qualification_context_smoke import exercise_context_assembly
 from qualification_fixture import qualification_context, synthetic_final
 from qualification_policy_smoke import exercise_policy, fixture_policy
-from registry_http_smoke import exercise_http_final_invalidation
+from registry_http_smoke import (
+    exercise_http_final_invalidation,
+    exercise_http_resume,
+    reject_http_resume,
+)
 
 from labelloop_api import model_schema, qualification_schema
 from labelloop_api.acceptance_store import (
@@ -155,6 +159,9 @@ def exercise_acceptance(
     paused = next(value for value in outcomes if value is not None)
     pause_ids = tuple(item.pause_id for item in paused.pauses)
     incidents = tuple(paused.incident_reference(value) for value in pause_ids)
+    with engine.begin() as connection:
+        original_registry = load_registry(connection, **scope)
+    reject_http_resume(engine, original_registry, paused, pause_ids)
 
     def qualify(connection, model_key, suffix, *, incumbent=None):
         # Separately frozen synthetic membership and copied scores, not model gold.
@@ -295,7 +302,7 @@ def exercise_acceptance(
         )
         with pytest.raises(ValueError, match="post-incident"):
             resume_acceptance(connection, **resume_args, qualification=unlinked)
-        resumed = resume_acceptance(connection, **resume_args, qualification=fresh_context)
+    resumed = exercise_http_resume(engine, promoted, paused, pause_ids, fresh_context)
     with engine.begin() as connection:
         assert load_acceptance(connection, **scope) == resumed
         saved = connection.execute(

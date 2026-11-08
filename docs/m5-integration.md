@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated scoped drift containment — pending Actions
+## Authenticated incident-linked resumption — pending Actions
+
+`POST /projects/{project_key}/registry/{recipe_key}/resumptions` accepts only
+expected acceptance/registry revisions and a bounded list of incident IDs, behind
+human-admin sessions, same-origin and CSRF. The service reuses the containment
+reader to select the current champion's committed promotion context and final
+report identity. It cannot accept a caller's candidate, evaluation, qualification,
+scope or actor. Missing historical promotion evidence fails closed.
+
+The existing resumption transaction rechecks current policy, canonical influence,
+final-test state and durable adverse-audit vetoes. Its domain transition requires
+a new qualified release covering affected scope, with qualification and fresh
+canary bound to every incident. Rollback or a historical promotion alone cannot
+resume acceptance. No evidence is manufactured from current policy, and this port
+does not create a qualification, measurement or promotion.
+
+Adapter cases cover identity substitution, service delegation, authentication,
+strict selectors and redacted outer rollback. Both-recipe persisted HTTP controls
+replace the successful direct-store resumption and retain reconnect/qualification
+and subsequent automatic-acceptance checks. They additionally require rejection
+of the original incident release, denial/stale/foreign/duplicate no-ops, post-insert
+failure rollback, exact session actor and unchanged history/registry/other recipe.
+New assertions await exact-head Actions; no local tests or builds ran. No migration,
+dependency, domain transition or duplicate drift engine. REA angle: revalidate
+committed promotion evidence through the existing append-only acceptance journal.
+
+## Containment fixture correction — verified baseline
+
+Exact `e16d0e29db8820d9a86ce5fc43e8b2dcd0d5227a`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42516579597),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42516579299) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42516579307)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42516579597/job/128840848870),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42516579597/job/128840848840),
+queue/migration cycles/all four parent upgrades, dev-stack/web-build/lint/types and
+import-contract. Corrected both-recipe typed foreign-history service rejection and
+persisted HTTP containment controls are verified, superseding pending notes below.
+No resumption, complete HTTP/UI/expanded-restore or milestone acceptance is inferred.
+Required independent/native review gates remain. Totals were not extracted.
+
+## Authenticated scoped drift containment — verified baseline
 
 `POST /projects/{project_key}/registry/{recipe_key}/pauses` requires the existing
 human-admin session, same-origin and CSRF boundary. Strict input accepts expected

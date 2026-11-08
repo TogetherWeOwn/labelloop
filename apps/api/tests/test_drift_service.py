@@ -74,6 +74,64 @@ def test_later_evaluation_links_and_rollback_do_not_erase_original_lineage(monke
     assert writer.call_args.kwargs["qualification_id"] == context.evidence.qualification_id
 
 
+@pytest.mark.parametrize("side", [320, 640])
+def test_resume_uses_only_current_champion_recorded_context_and_evaluation(monkeypatch, side):
+    connection, args, context, _, record, pause_writer = setup(monkeypatch, side)
+    record["evaluation_key"] = "committed-final-report"
+    writer = MagicMock(return_value="resumed-state")
+    monkeypatch.setattr(service.acceptance_store, "resume_acceptance", writer)
+    args.pop("reason")
+    args["pause_ids"] = ("camera-layout",)
+    assert service.resume_current_champion(connection, **args) == "resumed-state"
+    assert writer.call_args.kwargs == {
+        key: value for key, value in args.items() if key != "expected_registry_revision"
+    } | {"evaluation_key": "committed-final-report", "qualification": context}
+    pause_writer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["stale", "missing", "contract", "pipeline", "digest", "no-report"]
+)
+def test_resume_cannot_substitute_historical_authority(monkeypatch, mutation):
+    connection, args, context, _, record, _ = setup(monkeypatch)
+    record["evaluation_key"] = "committed-final-report"
+    writer = MagicMock()
+    monkeypatch.setattr(service.acceptance_store, "resume_acceptance", writer)
+    args.pop("reason")
+    args["pause_ids"] = ("camera-layout",)
+    if mutation == "stale":
+        args["expected_registry_revision"] -= 1
+    elif mutation == "missing":
+        connection.execute.return_value.scalars.return_value = []
+    elif mutation == "contract":
+        record["after"]["champion"]["weights_sha256"] = "a" * 64
+    elif mutation == "no-report":
+        record["evaluation_key"] = None
+    else:
+        evidence = context.evidence
+        evidence = (
+            replace(evidence, pipeline=replace(evidence.pipeline, recipe_id="foreign"))
+            if mutation == "pipeline"
+            else replace(evidence, release_sha256="b" * 64)
+        )
+        record["qualification"] = json.loads(dumps(replace(context, evidence=evidence)))
+    with pytest.raises(ValueError):
+        service.resume_current_champion(connection, **args)
+    writer.assert_not_called()
+
+
+def test_resume_propagates_current_policy_final_audit_and_incident_rejection(monkeypatch):
+    connection, args, _, _, record, _ = setup(monkeypatch)
+    record["evaluation_key"] = "committed-final-report"
+    args.pop("reason")
+    args["pause_ids"] = ("camera-layout",)
+    writer = MagicMock(side_effect=ValueError("post-incident qualification required"))
+    monkeypatch.setattr(service.acceptance_store, "resume_acceptance", writer)
+    with pytest.raises(ValueError, match="post-incident"):
+        service.resume_current_champion(connection, **args)
+    writer.assert_called_once()
+
+
 @pytest.mark.parametrize("axis", ["class_id", "source_id", "condition"])
 def test_unknown_scope_cannot_invent_new_cells(monkeypatch, axis):
     connection, args, _, _, _, writer = setup(monkeypatch)

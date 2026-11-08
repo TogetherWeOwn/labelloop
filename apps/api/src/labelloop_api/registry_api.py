@@ -57,6 +57,44 @@ def pause_drift(
     return record
 
 
+class DriftResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0)
+    expected_registry_revision: int = Field(ge=0)
+    pause_ids: list[Annotated[str, Field(min_length=1, max_length=128, pattern=r"^\S+$")]] = Field(
+        min_length=1, max_length=100
+    )
+
+
+@router.post("/projects/{project_key}/registry/{recipe_key}/resumptions", status_code=201)
+def resume_drift(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    recipe_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: DriftResumeRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = drift_service.resume_current_champion(
+                connection,
+                project_key=project_key,
+                recipe_key=recipe_key,
+                actor_id=actor.id,
+                expected_revision=payload.expected_revision,
+                expected_registry_revision=payload.expected_registry_revision,
+                pause_ids=tuple(payload.pause_ids),
+            )
+            record = model_store.json_record(changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="drift_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="drift_resume_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="drift_unavailable") from None
+    return record
+
+
 class RollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

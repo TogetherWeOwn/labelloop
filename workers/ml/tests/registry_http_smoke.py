@@ -235,6 +235,137 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
     return expected
 
 
+def reject_http_resume(engine, registry, history, pause_ids):
+    path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
+    scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
+    heads = snapshot(engine, registry.project_id)
+    with authenticated_client(engine) as (client, identities, _):
+        response = client.post(
+            path,
+            headers=login(client, identities["admin"][1]),
+            json={
+                "expected_revision": history.revision,
+                "expected_registry_revision": registry.revision,
+                "pause_ids": list(pause_ids),
+            },
+        )
+        assert response.status_code == 409
+        assert response.json() == {"detail": "drift_resume_rejected"}
+    with engine.begin() as connection:
+        assert load_acceptance(connection, **scope) == history
+    assert snapshot(engine, registry.project_id) == heads
+
+
+def exercise_http_resume(engine, registry, history, pause_ids, qualification):
+    path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
+    scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
+    payload = {
+        "expected_revision": history.revision,
+        "expected_registry_revision": registry.revision,
+        "pause_ids": list(pause_ids),
+    }
+
+    def journal_rows():
+        with engine.connect() as connection:
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(qualification_schema.acceptance_event).order_by(
+                        *qualification_schema.acceptance_event.primary_key.columns
+                    )
+                ).mappings()
+            )
+
+    before = journal_rows()
+    heads = snapshot(engine, registry.project_id)
+    with authenticated_client(engine) as (client, identities, workers):
+        assert client.post(path, json=payload).status_code == 401
+        reviewer = login(client, identities["reviewer"][1])
+        assert client.post(path, headers=reviewer, json=payload).status_code == 403
+        client.cookies.clear()
+        for token in workers.values():
+            assert (
+                client.post(
+                    path, headers={"authorization": "Bearer " + token}, json=payload
+                ).status_code
+                == 403
+            )
+        headers = login(client, identities["admin"][1])
+        for denied in (
+            {},
+            headers | {"origin": "https://untrusted.invalid"},
+            headers | {"x-csrf-token": "wrong"},
+        ):
+            assert client.post(path, headers=denied, json=payload).status_code == 403
+        for extra in (
+            {"qualification": {}},
+            {"evaluation_key": "invented"},
+            {"actor_id": "forged"},
+            {"candidate_key": "invented"},
+        ):
+            assert client.post(path, headers=headers, json=payload | extra).status_code == 422
+        for change in (
+            {"expected_revision": history.revision - 1},
+            {"expected_registry_revision": registry.revision - 1},
+            {"pause_ids": ["missing-http-incident"]},
+            {"pause_ids": [pause_ids[0], pause_ids[0]]},
+        ):
+            response = client.post(path, headers=headers, json=payload | change)
+            assert response.status_code == 409
+            assert response.json() == {"detail": "drift_resume_rejected"}
+        for missing in (
+            f"/projects/missing-http-project/registry/{registry.recipe_id}/resumptions",
+            f"/projects/{registry.project_id}/registry/missing-http-recipe/resumptions",
+        ):
+            assert client.post(missing, headers=headers, json=payload).status_code == 404
+        assert journal_rows() == before
+        assert snapshot(engine, registry.project_id) == heads
+        injected = []
+
+        def fail_after_insert(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.startswith("INSERT INTO qualification_acceptance_event"):
+                injected.append(True)
+                raise sa.exc.SQLAlchemyError("private fixture resumption failure")
+
+        sa.event.listen(engine, "after_cursor_execute", fail_after_insert)
+        try:
+            response = client.post(path, headers=headers, json=payload)
+        finally:
+            sa.event.remove(engine, "after_cursor_execute", fail_after_insert)
+        assert injected == [True]
+        assert response.status_code == 503
+        assert response.json() == {"detail": "drift_unavailable"}
+        assert journal_rows() == before
+        with engine.begin() as connection:
+            assert load_acceptance(connection, **scope) == history
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 201
+        assert response.headers["cache-control"] == "no-store"
+        with engine.begin() as connection:
+            changed = load_acceptance(connection, **scope)
+        assert response.json() == json_record(changed)
+        assert changed.revision == history.revision + 1
+        assert all(
+            item.resumed_by_release_id == registry.champion.release_id
+            for item in changed.pauses
+            if item.pause_id in pause_ids
+        )
+        after = journal_rows()
+        assert len(after) == len(before) + 1
+        assert all(row in after for row in before)
+        added = [row for row in after if row not in before]
+        assert len(added) == 1
+        assert added[0]["actor_id"] == identities["admin"][0]
+        assert added[0]["action"] == "resume"
+        assert added[0]["qualification"] == json.loads(dumps(qualification))
+        assert added[0]["record"] == json.loads(dumps(changed))
+        for change in ({}, {"expected_revision": changed.revision}):
+            assert client.post(path, headers=headers, json=payload | change).status_code == 409
+            assert journal_rows() == after
+        assert snapshot(engine, registry.project_id) == heads
+    return changed
+
+
 def exercise_http_pause(engine, registry, history):
     path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/pauses"
     cell = history.pauses[0].scope[0]
