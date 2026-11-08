@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from minio import Minio
 
+from labelloop_api.annotation_reads import router as annotation_router
 from labelloop_api.auth import authentication_boundary, router, validation_error
 from labelloop_api.registry_api import router as registry_router
 
@@ -21,6 +22,7 @@ app.middleware("http")(authentication_boundary)
 app.add_exception_handler(RequestValidationError, validation_error)
 app.include_router(router)
 app.include_router(registry_router)
+app.include_router(annotation_router)
 logger = logging.getLogger(__name__)
 
 

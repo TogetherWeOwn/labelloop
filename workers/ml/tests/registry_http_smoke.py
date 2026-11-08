@@ -10,6 +10,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from labelloop_api import auth, model_schema, registry_api
+from labelloop_api.acceptance_store import load_acceptance, pause_acceptance
 from labelloop_api.auth_schema import principal, service_token
 from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
 from labelloop_api.main import app
@@ -94,8 +95,27 @@ def snapshot(engine, project_key):
     return states, events
 
 
+def assert_operations_read(client, engine, expected):
+    scope = {"project_key": expected.project_id, "recipe_key": expected.recipe_id}
+    with engine.begin() as connection:
+        acceptance = load_acceptance(connection, **scope)
+    before = snapshot(engine, expected.project_id)
+    response = client.get(f"/projects/{expected.project_id}/registry/{expected.recipe_id}")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "registry": json_record(expected),
+        "acceptance": json_record(acceptance),
+    }
+    assert snapshot(engine, expected.project_id) == before
+    with engine.begin() as connection:
+        assert load_acceptance(connection, **scope) == acceptance
+    return acceptance
+
+
 def exercise_http_rollback(engine, request):
     path = f"/projects/{request.project_id}/promotions"
+    read_path = f"/projects/{request.project_id}/registry/{request.recipe_id}"
     before = snapshot(engine, request.project_id)
     index = 0 if request.policy.imgsz == 320 else 1
     original = before[0][index]
@@ -106,8 +126,10 @@ def exercise_http_rollback(engine, request):
     }
     with authenticated_client(engine) as (client, identities, workers):
         assert client.post(path, json=payload).status_code == 401
+        assert client.get(read_path).status_code == 401
         reviewer = login(client, identities["reviewer"][1])
         assert client.post(path, headers=reviewer, json=payload).status_code == 403
+        assert client.get(read_path + "?role=admin").status_code == 403
         client.cookies.clear()
         for token in workers.values():
             assert (
@@ -116,7 +138,20 @@ def exercise_http_rollback(engine, request):
                 ).status_code
                 == 403
             )
+            assert (
+                client.get(read_path, headers={"authorization": "Bearer " + token}).status_code
+                == 403
+            )
         headers = login(client, identities["admin"][1])
+        history = assert_operations_read(client, engine, original)
+        assert history.pauses and all(
+            item.resumed_by_release_id is not None for item in history.pauses
+        )
+        for missing in (
+            f"/projects/missing-http-project/registry/{request.recipe_id}",
+            f"/projects/{request.project_id}/registry/missing-http-recipe",
+        ):
+            assert client.get(missing).status_code == 404
         for denied in (
             {},
             headers | {"origin": "https://untrusted.invalid"},
@@ -167,6 +202,7 @@ def exercise_http_rollback(engine, request):
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-store"
             assert response.json() == json_record(expected)
+            assert assert_operations_read(client, engine, expected) == history
             after = snapshot(engine, request.project_id)
             assert after[0][index] == expected
             assert after[0][1 - index] == before[0][1 - index]
@@ -191,6 +227,37 @@ def exercise_http_rollback(engine, request):
             current = expected
         assert current.champion == original.champion
         assert current.rollback == original.rollback
+        with engine.begin() as connection:
+            paused = pause_acceptance(
+                connection,
+                project_key=request.project_id,
+                recipe_key=request.recipe_id,
+                actor_id=identities["admin"][0],
+                expected_revision=history.revision,
+                pause_id=request.recipe_id + "-http-inspection",
+                qualification_id=history.pauses[0].qualification_id,
+                scope=history.pauses[0].scope,
+                reason="synthetic persisted operational-read control",
+            )
+        assert assert_operations_read(client, engine, current) == paused
+        assert paused.is_paused(history.pauses[0].scope[0])
+
+        injected_reads = []
+
+        def fail_read(_conn, _cursor, statement, _parameters, _context, _many):
+            if "FROM qualification_acceptance_event" in statement:
+                injected_reads.append(True)
+                raise sa.exc.SQLAlchemyError("private fixture read failure")
+
+        sa.event.listen(engine, "before_cursor_execute", fail_read)
+        try:
+            response = client.get(read_path)
+        finally:
+            sa.event.remove(engine, "before_cursor_execute", fail_read)
+        assert injected_reads == [True]
+        assert response.status_code == 503
+        assert response.json() == {"detail": "registry_unavailable"}
+        assert assert_operations_read(client, engine, current) == paused
     return {
         "scope": "fixture-only HTTP recovery mechanics, not domain quality",
         "before": json_record(original),
@@ -199,6 +266,9 @@ def exercise_http_rollback(engine, request):
         "denials_and_stale_replays_unchanged": True,
         "event_failure_rolled_back_pointer": True,
         "other_recipe_unchanged": True,
+        "authenticated_registry_and_drift_reads": True,
+        "resumed_and_active_drift_history_recovered": True,
+        "read_failure_redacted_without_partial_state": True,
     }
 
 

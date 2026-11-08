@@ -6,7 +6,44 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Persisted authenticated rollback — pending Actions
+## Authenticated registry and drift inspection — pending Actions
+
+`GET /projects/{project_key}/registry/{recipe_key}` requires an authenticated human
+admin and returns complete registry metadata plus the persisted acceptance journal.
+It reuses the existing readers, taking the project lock before both reads in one
+outer transaction. Missing project/recipe returns 404; invalid stored state returns
+409; database errors return a redacted 503 without partial state. Responses remain
+`no-store`. A champion or an empty pause history is not a qualification grant. The
+response deliberately has no invented `qualified` flag or caller-supplied authority.
+Promotion and resumption remain closed until their trusted producer/service gaps close.
+
+New both-recipe adapter controls cover roles, scope validation, same-transaction
+read ordering, complete release/rollback metadata, active and resumed incident
+lineage, empty history and redacted partial-read failures. The existing disposable
+PostgreSQL HTTP smoke now reads the persisted resumed history before and after each
+rollback, appends a synthetic scoped pause through the existing store, then reloads
+it through actual authenticated HTTP. Reads must leave heads, promotion events and
+acceptance state unchanged, including after an injected read failure. These new
+assertions await exact-head Actions; the accepted UI is not yet connected to this
+port and no operational-view acceptance is claimed.
+
+Resolved the actual `main.py` conflict with delivered annotation reads, retaining
+both routers and the delivered module/tests unchanged. No new migration, dependency,
+UI design, runtime or policy engine. REA angle: reuse the existing registry and drift
+journal readers under their existing project-lock protocol, not another state store.
+
+## Persisted authenticated rollback — verified baseline
+
+Exact `156fc251c95264425137a3b5e7bf49559957ccfc`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506562699) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506562699/job/128810386259),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506562699/job/128810386345),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506562699/job/128810386287),
+migration cycles/all four parent upgrades, web-build, dev-stack and lint/types/import
+contract. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506565351)
+and [gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506567547)
+also succeeded. This verifies the previous rollback slice below, not the new read
+port, full operational UI, promotion or expanded-schema restore acceptance.
 
 The existing CPU registry smoke now drives the actual mounted HTTP route, session
 login, CSRF/admin permission boundary and registry transaction against Actions'
@@ -22,11 +59,12 @@ append duplicate events. After durable adverse ordinary-label observations and a
 clean replacement sample, actual admin HTTP rollback must still reject the affected
 recipes with complete heads/events unchanged.
 
-New assertions await exact-head Actions. They are fixture-only recovery mechanics,
-not original pipeline execution, domain quality, authenticated promotion or automatic
-annotation, operational views or expanded-schema restore acceptance. No production
-code, migration, dependency, policy or gate is changed. REA angle: reuse the delivered
-session/auth middleware and atomic registry store inside the existing CPU smoke.
+These assertions passed exact-head Actions at `156fc25`, linked above. They establish
+fixture-only recovery mechanics, not original pipeline execution, domain quality,
+authenticated promotion or automatic annotation, operational views or expanded-schema
+restore acceptance. That test-only slice changed no production code, migration,
+dependency, policy or gate. REA angle: reuse the delivered session/auth middleware
+and atomic registry store inside the existing CPU smoke.
 
 Baseline `3f835616b03bd91c9dbde4a5ed895e0f60c34643`
 [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504965433) succeeded,
