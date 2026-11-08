@@ -56,6 +56,24 @@ class ReferenceRead(Contract):
     approval: Literal["proposed", "admin_approved", "withdrawn"]
 
 
+class ReferenceLifecycleRead(Contract):
+    id: Identifier
+    asset_id: Identifier
+    class_id: Identifier
+    state: Literal["proposed", "accepted", "withdrawn"]
+    # Historical authority pins for explicit recovery, never current eligibility.
+    ontology_id: Identifier
+    assignment_version: Identifier
+    last_approval_revision: Annotated[int, Field(ge=1)] | None
+    eligibility: Literal["not_assessed"]
+
+
+class ReferenceLifecycleList(Contract):
+    project_id: Identifier
+    project_revision: Revision
+    references: Annotated[list[ReferenceLifecycleRead], Field(max_length=1000)]
+
+
 class GuideRead(Contract):
     extent: Literal["visible", "estimated"]
     truncation: Text

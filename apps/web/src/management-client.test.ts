@@ -42,6 +42,26 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('reads historical reference recovery pins without mutation authority', async () => {
+    const { request, result } = mockRequest();
+    const csrf = vi.fn(() => 'csrf');
+    const client = new ManagementClient(csrf);
+    await expect(client.readReferenceLifecycle({ project_id: 'project/../other' }))
+      .resolves.toEqual(result);
+    expect(request).toHaveBeenCalledWith(
+      '/api/projects/project%2F..%2Fother/references/lifecycle',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        body: undefined,
+      },
+    );
+    expect(csrf).not.toHaveBeenCalled();
+  });
+
   it('sends authoritative freeze membership with CSRF and idempotency headers', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

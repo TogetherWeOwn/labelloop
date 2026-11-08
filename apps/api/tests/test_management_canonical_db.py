@@ -275,10 +275,48 @@ def auth_management_client(database, restricted_auth_store):
     service, _, _ = database
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     operations = SimpleNamespace(
-        create_project=service.create_project, list_projects=reads.list_projects
+        create_project=service.create_project,
+        list_projects=reads.list_projects,
+        read_reference_lifecycle=reads.read_reference_lifecycle,
     )
     with TestClient(create_app(lambda: operations), base_url="https://testserver") as client:
         yield client
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_reference_lifecycle_composes_with_restricted_shared_sessions(
+    database, auth_account, auth_management_client, role
+):
+    from labelloop_api.auth_schema import principal
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, _ = revalidation_inputs(service, owner)
+    path = f"/projects/{created.id}/references/lifecycle"
+    assert auth_management_client.get(path).status_code == 401
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    login = auth_management_client.post(
+        "/auth/login", json=credentials, headers={"origin": "https://testserver"}
+    )
+    assert login.status_code == 200, login.text
+    before = counts(owner, created.id)
+    response = auth_management_client.get(path)
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["project_revision"] == 5
+    assert response.json()["references"][0]["last_approval_revision"] == 4
+    assert response.json()["references"][0]["eligibility"] == "not_assessed"
+    assert (
+        auth_management_client.get(f"/projects/{uuid4()}/references/lifecycle").status_code == 404
+    )
+    logout = auth_management_client.post(
+        "/auth/logout",
+        headers={"origin": "https://testserver", "x-csrf-token": login.json()["csrf_token"]},
+    )
+    assert logout.status_code == 204
+    assert auth_management_client.get(path).status_code == 401
+    assert counts(owner, created.id) == before
 
 
 def auth_snapshot(owner, identity):
@@ -2410,6 +2448,196 @@ def revalidation_inputs(service, owner):
     return created, source, payload
 
 
+@pytest.mark.parametrize("state", ["proposed", "accepted", "renewed", "retired", "withdrawn"])
+def test_reference_lifecycle_exposes_only_historical_recovery_pins(database, state):
+    service, owner, _ = database
+    created, source, approval = acceptance_inputs(service, owner)
+    revision = 3
+    if state in {"accepted", "renewed", "withdrawn"}:
+        accept(service, created.id, approval)
+        revision = 4
+    if state == "renewed":
+        save_scope(service, created.id, scope_payload(4))
+        revalidate(
+            service,
+            created.id,
+            ReferenceRevalidate(
+                **approval.model_dump(exclude={"expected_revision"}),
+                expected_revision=5,
+                previous_approval_revision=4,
+            ),
+        )
+        revision = 6
+    if state in {"retired", "withdrawn"}:
+        withdraw(service, created.id, withdrawal_payload(approval, revision))
+        revision += 1
+    before = counts(owner, created.id)
+    detail = CanonicalManagementReads(
+        service.engine, service.workspace_id
+    ).read_reference_lifecycle(Reader(), created.id)
+    assert detail.project_id == created.id and detail.project_revision == revision
+    assert len(detail.references) == 1
+    reference = detail.references[0]
+    assert reference.model_dump() == {
+        "id": approval.reference_id,
+        "asset_id": source.asset_key,
+        "class_id": "package",
+        "state": "accepted"
+        if state in {"accepted", "renewed"}
+        else ("withdrawn" if state in {"retired", "withdrawn"} else "proposed"),
+        "ontology_id": approval.base_ontology_id,
+        "assignment_version": approval.assignment_version,
+        "last_approval_revision": 6
+        if state == "renewed"
+        else (4 if state in {"accepted", "withdrawn"} else None),
+        "eligibility": "not_assessed",
+    }
+    assert counts(owner, created.id) == before
+
+
+def test_reference_lifecycle_recovers_latest_revision_for_explicit_renewal(database):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+    detail = reads.read_reference_lifecycle(Reader(), created.id)
+    reference = detail.references[0]
+    result = revalidate(
+        service,
+        created.id,
+        payload.model_copy(
+            update={
+                "expected_revision": detail.project_revision,
+                "previous_approval_revision": reference.last_approval_revision,
+            }
+        ),
+    )
+    assert result.revision == 6
+    save_guide(service, created.id, guide_payload(6))
+    recovery = reads.read_reference_lifecycle(Reader(), created.id)
+    assert recovery.project_revision == 7
+    assert recovery.references[0].last_approval_revision == 6
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        Actor(kind="service"),
+        Actor(role="reviewer"),
+        Actor(role="none"),
+        Actor(id=""),
+    ],
+)
+def test_reference_lifecycle_denies_untrusted_readers(database, actor):
+    service, owner, _ = database
+    created, _, _ = acceptance_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read_reference_lifecycle(actor, created.id)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("approved", False),
+        ("evidence_provenance", "{}"),
+        ("class_id", "unattributed"),
+        ("embedding_model", "unattributed"),
+    ],
+)
+def test_reference_lifecycle_refuses_corrupt_history_not_just_current_staleness(
+    database, field, value
+):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with owner.begin() as connection:
+        connection.execute(
+            reference_example.update()
+            .where(reference_example.c.id == payload.reference_id)
+            .values(**{field: value})
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_reference_lifecycle(Reader(), created.id)
+
+
+def test_reference_lifecycle_is_select_only_and_scoped_to_managed_workspace(database):
+    service, owner, role = database
+    created, _, _ = revalidation_inputs(service, owner)
+    foreign = replace(service, workspace_id=uuid4())
+    other = create(foreign, key="foreign")
+    with owner.begin() as connection:
+        legacy = connection.execute(
+            insert(project)
+            .values(
+                project_key=str(uuid4()),
+                workspace_id=service.workspace_id,
+                task="detect",
+                scope="Legacy",
+                domain="package",
+                access_policy={},
+            )
+            .returning(project.c.id)
+        ).scalar_one()
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    before = counts(owner, created.id)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert (
+        reads.read_reference_lifecycle(Reader(), created.id).references[0].eligibility
+        == "not_assessed"
+    )
+    for identifier in (other.id, str(legacy), str(uuid4()), "not-a-uuid"):
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read_reference_lifecycle(Reader(), identifier)
+    foreign_reads = CanonicalManagementReads(service.engine, foreign.workspace_id)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        foreign_reads.read_reference_lifecycle(Reader(), created.id)
+    assert counts(owner, created.id) == before
+
+
+def test_reference_lifecycle_empty_bank_is_explicit_not_missing_permission(database):
+    service, _, _ = database
+    created = create(service)
+    detail = CanonicalManagementReads(
+        service.engine, service.workspace_id
+    ).read_reference_lifecycle(Reader(), created.id)
+    assert detail.model_dump() == {
+        "project_id": created.id,
+        "project_revision": 1,
+        "references": [],
+    }
+
+
+def test_reference_lifecycle_snapshot_does_not_lock_or_mix_concurrent_withdrawal(database):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    writes = []
+
+    def retire(connection, cursor, statement, parameters, context, executemany):
+        if "FROM reference_example JOIN source_asset" in statement and not writes:
+            writes.append(True)
+            withdraw(service, created.id, withdrawal_payload(approval, 4))
+
+    event.listen(service.engine, "after_cursor_execute", retire)
+    try:
+        reads = CanonicalManagementReads(service.engine, service.workspace_id)
+        snapshot = reads.read_reference_lifecycle(Reader(), created.id)
+    finally:
+        event.remove(service.engine, "after_cursor_execute", retire)
+    assert writes == [True]
+    assert snapshot.project_revision == 4 and snapshot.references[0].state == "accepted"
+    current = reads.read_reference_lifecycle(Reader(), created.id)
+    assert current.project_revision == 5 and current.references[0].state == "withdrawn"
+    assert current.references[0].last_approval_revision == 4
+
+
 def test_reference_revalidation_preserves_history_and_binds_current_context(database):
     service, owner, _ = database
     created, _, payload = revalidation_inputs(service, owner)
@@ -2873,8 +3101,22 @@ def test_withdrawal_retires_stale_approval_without_renewing_eligibility(database
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     with pytest.raises(ManagementFailure, match="missing_evidence|revision_conflict"):
         reads.read_project(Reader(), created.id)
+    recovery = reads.read_reference_lifecycle(Reader(), created.id)
+    assert recovery.project_revision == revision
+    assert recovery.references[0].id == approval.reference_id
+    assert recovery.references[0].last_approval_revision == 4
+    assert recovery.references[0].state == "accepted"
+    assert recovery.references[0].eligibility == "not_assessed"
     assert (
-        withdraw(service, created.id, withdrawal_payload(approval, revision)).revision
+        withdraw(
+            service,
+            created.id,
+            ReferenceWithdraw(
+                expected_revision=recovery.project_revision,
+                reference_id=recovery.references[0].id,
+                reason="Retire stale evidence using history-only pins",
+            ),
+        ).revision
         == revision + 1
     )
     assert reads.read_project(Reader(), created.id).references[0].approval == "withdrawn"

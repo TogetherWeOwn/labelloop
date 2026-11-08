@@ -826,8 +826,20 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 28
-    assert sum(len(methods) for methods in spec["paths"].values()) == 29
+    assert len(spec["paths"]) == 29
+    assert sum(len(methods) for methods in spec["paths"].values()) == 30
+    assert (
+        spec["paths"]["/projects/{project_id}/references/lifecycle"]["get"]["operationId"]
+        == "readReferenceLifecycle"
+    )
+    assert "export type ReferenceLifecycleList =" in client
+    assert "export type ReferenceLifecycleRead =" in client
+    assert (
+        spec["components"]["schemas"]["ReferenceLifecycleRead"]["properties"]["eligibility"][
+            "const"
+        ]
+        == "not_assessed"
+    )
     assert (
         spec["paths"]["/projects/{project_id}/references/revalidate"]["post"]["operationId"]
         == "revalidateReference"

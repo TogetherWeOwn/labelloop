@@ -208,6 +208,35 @@ held-out sets or historical releases. New freezes fail closed until validated
 source-policy approval/publication and grouping binding are implemented.
 Real admission remains unbound pending exact-consuming-head Security acceptance.
 
+## Reference lifecycle recovery read (unmounted)
+
+`readReferenceLifecycle`, `GET /projects/{project_id}/references/lifecycle`, is a
+separate human admin/reviewer read for recovering server-issued reference IDs and
+last approval revisions after reconnecting or losing a mutation acknowledgement.
+It uses one SELECT-only REPEATABLE READ snapshot, scoped to the trusted workspace
+and an existing managed project. It validates the existing enrollment, acceptance,
+renewal and withdrawal chain against persisted reference rows. Corrupt or missing
+history fails closed. A bank is bounded to 1,000 references; no truncation or
+unbounded history response is permitted.
+
+The response carries the project revision and each reference's source/class IDs,
+historical state (`proposed`, `accepted` or `withdrawn`), historical ontology and
+assignment pins, and nullable `last_approval_revision`. Every entry explicitly
+has `eligibility: not_assessed`. These are **historical recovery pins**, not current
+ontology/grouping facts, approved references or retrieval input. No provenance
+text, URI/object key, context digest, raw event payload or actor identity is
+returned. An empty bank is an explicit empty list, not missing authorization.
+
+This read intentionally remains available when current scope, guide, source policy,
+ontology, holdout or pending-pair evidence invalidates the normal project detail.
+It cannot bypass those checks: `readProject.references` still refuses stale usable
+approval, renewal still validates all current evidence, and withdrawal still needs
+admin authority, expected revision, a fresh request key and intact history. An
+already withdrawn reference cannot reactivate. Use current authorized producer
+pins for renewal, never assume these historical pins are current. There is no
+state mutation, approval, pack publication, qualification or admission authority.
+The default app remains unmounted; source cases require exact-head Actions evidence.
+
 ## Reference revalidation (unmounted)
 
 `revalidateReference`, `POST /projects/{project_id}/references/revalidate`, renews

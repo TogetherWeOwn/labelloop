@@ -38,6 +38,8 @@ export type RecipeBoxRead = { "box": Box; "class_id": string; "clipped": boolean
 export type RecipePreviewRead = { "below_minimum_targets": number; "boxes": Array<RecipeBoxRead>; "checks": Array<CheckRead>; "clipped_targets": number; "excluded_images": number; "manifest_artifact_id": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "recipe_revision": number; "source_asset_id": string; "source_height": number; "source_width": number; "tiny_targets": number; "transform": AffineTransform; "validation_artifact_id": string | null };
 export type ReferenceAccept = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "reason": string; "reference_id": string };
 export type ReferenceEnroll = { "asset_id": string; "assignment_version": string; "base_ontology_id": string; "class_id": string; "confused_with": Array<string>; "expected_revision": number; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
+export type ReferenceLifecycleList = { "project_id": string; "project_revision": number; "references": Array<ReferenceLifecycleRead> };
+export type ReferenceLifecycleRead = { "asset_id": string; "assignment_version": string; "class_id": string; "eligibility": "not_assessed"; "id": string; "last_approval_revision": number | null; "ontology_id": string; "state": "proposed" | "accepted" | "withdrawn" };
 export type ReferenceRead = { "approval": "proposed" | "admin_approved" | "withdrawn"; "asset_id": string; "class_id": string; "confused_with": Array<string>; "id": string; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
 export type ReferenceRevalidate = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "previous_approval_revision": number; "reason": string; "reference_id": string };
 export type ReferenceWithdraw = { "expected_revision": number; "reason": string; "reference_id": string };
@@ -168,6 +170,11 @@ export class ManagementClient {
   acceptReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceAccept }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/references/accept`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  readReferenceLifecycle(input: { "project_id": string }): Promise<ReferenceLifecycleList> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/references/lifecycle`;
+    return this.request<ReferenceLifecycleList>(path, "GET");
   }
 
   revalidateReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceRevalidate }): Promise<Resource> {

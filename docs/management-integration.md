@@ -406,6 +406,30 @@ The endpoint remains unmounted. Disposable Actions cases cover SELECT-only roles
 historical reviews, denied/foreign IDs, missing evidence, exclusions and class
 count/revision deltas. New cases are commissioned, not a test-pass claim.
 
+## Reference lifecycle recovery (partial, unmounted)
+
+`read_reference_lifecycle` exposes a separate, authorized historical summary through
+`GET /projects/{project_id}/references/lifecycle`. It reuses the receipt-chain
+validator used by explicit renewal and retirement, under the existing workspace/
+managed-project scope and a REPEATABLE READ, READ ONLY snapshot. It returns at most
+1,000 source/class identities, historical lifecycle/pin values and the last
+approval revision alongside the project revision. Every entry explicitly says
+`eligibility: not_assessed`; it cannot supply `ReferenceRead` or approved retrieval
+evidence. It exposes no provenance text, source URI, object key, raw audit payload,
+context digest or actor identity.
+
+This supports explicit admin recovery even when a stale accepted reference makes
+the normal project detail fail closed. History corruption still fails; current
+scope/grouping/holdout validation is unchanged for normal reads and renewal.
+Withdrawal still requires its existing locks, admin/revision/retry authority and
+atomic receipt. The read takes no mutation lock, writes no event and needs only
+SELECT. Concurrent retirement cannot mix revision and receipt snapshots. Actions
+cases cover all lifecycle states, renewal-pin recovery, stale-context/source
+retirement, denied/foreign/legacy readers, persisted mismatch and SELECT-only/
+concurrent-writer behavior. These are commissioned cases, not verified until
+exact-head Actions completes. No pack publication, real admission, qualification,
+new table/migration/grant, final mount or producer composition is enabled.
+
 ## Receipt-bound setup approval
 
 `POST /projects/{project_id}/setup/approvals` (`approveSetupStep`) accepts

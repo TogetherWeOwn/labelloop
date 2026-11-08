@@ -45,6 +45,7 @@ from .management_details import (
     FreezePlanRead,
     ProjectDetail,
     RecipePreviewRead,
+    ReferenceLifecycleList,
     RegistryDetail,
     ReleaseDetail,
     TrainingDetail,
@@ -180,6 +181,10 @@ class ManagementOperations(Protocol):
     def read_export(self, actor: ManagementPrincipal, model_id: str) -> ExportRead: ...
 
     def read_project(self, actor: ManagementPrincipal, project_id: str) -> ProjectDetail: ...
+
+    def read_reference_lifecycle(
+        self, actor: ManagementPrincipal, project_id: str
+    ) -> ReferenceLifecycleList: ...
 
     def read_release(self, actor: ManagementPrincipal, release_id: str) -> ReleaseDetail: ...
 

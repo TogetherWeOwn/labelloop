@@ -4,11 +4,33 @@ import pytest
 from pydantic import ValidationError
 from test_management_contract import Actor, client_for
 
-from labelloop_api.management_details import TrainingProfileRead
+from labelloop_api.management_details import ReferenceLifecycleList, TrainingProfileRead
 from labelloop_core.geometry import full_frame_transform
 
 RESOURCE = {"id": "result", "project_id": "p", "kind": "project", "revision": 1, "state": "draft"}
+REFERENCE_LIFECYCLE_RESULT = {
+    "project_id": "p",
+    "project_revision": 5,
+    "references": [
+        {
+            "id": "ref-1",
+            "asset_id": "asset-1",
+            "class_id": "package",
+            "state": "accepted",
+            "ontology_id": "ontology-1",
+            "assignment_version": "assignment-1",
+            "last_approval_revision": 4,
+            "eligibility": "not_assessed",
+        }
+    ],
+}
 DETAIL_READS = [
+    (
+        "/projects/p/references/lifecycle",
+        "read_reference_lifecycle",
+        ("p",),
+        REFERENCE_LIFECYCLE_RESULT,
+    ),
     (
         "/projects/p",
         "read_project",
@@ -218,6 +240,39 @@ def test_detail_adapter_authorization_failure_is_not_an_empty_success(
     response = client.get(path)
     assert response.status_code == 404
     assert response.json() == {"detail": "not_found"}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("eligibility", "approved"),
+        ("state", "admin_approved"),
+        ("last_approval_revision", 0),
+        ("last_approval_revision", "4"),
+        ("approval", "admin_approved"),
+        ("context_sha256", "a" * 64),
+    ],
+)
+def test_reference_lifecycle_contract_cannot_supply_usable_approval(field, value):
+    result = REFERENCE_LIFECYCLE_RESULT
+    with pytest.raises(ValidationError):
+        ReferenceLifecycleList.model_validate(
+            {
+                **result,
+                "references": [{**result["references"][0], field: value}],
+            }
+        )
+
+
+def test_reference_lifecycle_contract_refuses_truncated_or_oversized_history():
+    result = REFERENCE_LIFECYCLE_RESULT
+    with pytest.raises(ValidationError):
+        ReferenceLifecycleList.model_validate(
+            {
+                **result,
+                "references": result["references"] * 1001,
+            }
+        )
 
 
 def test_registry_bounds_are_validated_before_port():

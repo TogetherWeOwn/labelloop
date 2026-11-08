@@ -41,6 +41,7 @@ from .management_details import (
     FreezePlanRead,
     ProjectDetail,
     RecipePreviewRead,
+    ReferenceLifecycleList,
     RegistryDetail,
     ReleaseDetail,
     TrainingDetail,
@@ -460,6 +461,18 @@ def management_router(
         service: Annotated[ManagementOperations, Depends(operations)],
     ) -> ExportRead:
         return invoke(lambda: service.read_export(actor, model_id))
+
+    @router.get(
+        "/projects/{project_id}/references/lifecycle",
+        response_model=ReferenceLifecycleList,
+        operation_id="readReferenceLifecycle",
+    )
+    def read_reference_lifecycle(
+        project_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> ReferenceLifecycleList:
+        return invoke(lambda: service.read_reference_lifecycle(actor, project_id))
 
     @router.get("/projects/{project_id}", response_model=ProjectDetail, operation_id="readProject")
     def read_project(

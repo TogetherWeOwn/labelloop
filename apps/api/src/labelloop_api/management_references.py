@@ -13,7 +13,7 @@ from .management_contracts import (
     ReferenceRevalidate,
     ReferenceWithdraw,
 )
-from .management_details import ReferenceRead
+from .management_details import ReferenceLifecycleList, ReferenceLifecycleRead, ReferenceRead
 from .management_grouping import load_grouping
 from .management_ports import ManagementFailure
 from .management_setup import read_setup_approvals
@@ -375,6 +375,31 @@ def require_retired_references(connection: Connection, project_row, workspace_id
         for ref, _, _ in _reference_history(connection, project_row, workspace_id)
     ):
         reject("missing_evidence")
+
+
+def reference_lifecycle(
+    connection: Connection, project_row, revision: int, workspace_id
+) -> ReferenceLifecycleList:
+    # Recover pins even when current context/grouping is stale. Intact history
+    # remains mandatory; this projection deliberately cannot supply approved refs.
+    history = _reference_history(connection, project_row, workspace_id)
+    return ReferenceLifecycleList(
+        project_id=str(project_row.id),
+        project_revision=revision,
+        references=[
+            ReferenceLifecycleRead(
+                id=ref.id,
+                asset_id=ref.asset_id,
+                class_id=ref.class_id,
+                state="accepted" if ref.approval == "admin_approved" else ref.approval,
+                ontology_id=(approval or enrollment)["ontology_id"],
+                assignment_version=(approval or enrollment)["assignment_version"],
+                last_approval_revision=approval["receipt_revision"] if approval else None,
+                eligibility="not_assessed",
+            )
+            for ref, enrollment, approval in history
+        ],
+    )
 
 
 def read_references(

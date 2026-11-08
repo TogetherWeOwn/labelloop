@@ -2333,6 +2333,116 @@
         "title": "ReferenceEnroll",
         "type": "object"
       },
+      "ReferenceLifecycleList": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_revision": {
+            "minimum": 0.0,
+            "title": "Project Revision",
+            "type": "integer"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceLifecycleRead"
+            },
+            "maxItems": 1000,
+            "title": "References",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "project_revision",
+          "references"
+        ],
+        "title": "ReferenceLifecycleList",
+        "type": "object"
+      },
+      "ReferenceLifecycleRead": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "assignment_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "class_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Class Id",
+            "type": "string"
+          },
+          "eligibility": {
+            "const": "not_assessed",
+            "title": "Eligibility",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_approval_revision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Approval Revision"
+          },
+          "ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "proposed",
+              "accepted",
+              "withdrawn"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "asset_id",
+          "class_id",
+          "state",
+          "ontology_id",
+          "assignment_version",
+          "last_approval_revision",
+          "eligibility"
+        ],
+        "title": "ReferenceLifecycleRead",
+        "type": "object"
+      },
       "ReferenceRead": {
         "additionalProperties": false,
         "properties": {
@@ -5583,6 +5693,101 @@
           }
         },
         "summary": "Accept Reference",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/references/lifecycle": {
+      "get": {
+        "operationId": "readReferenceLifecycle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceLifecycleList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read Reference Lifecycle",
         "tags": [
           "management"
         ]
