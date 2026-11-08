@@ -10,6 +10,9 @@ dev = [
   "labelloop-api",
   "labelloop-compiler",
   "labelloop-core",
+  "labelloop-credentials",
+  "labelloop-worker-llm",
+  "labelloop-worker-platform",
   "labelloop-llm",
   "labelloop-platform",
   "labelloop-worker-core",
@@ -25,12 +28,17 @@ runtime = [
   "labelloop-api",
   "labelloop-compiler",
   "labelloop-core",
+  "labelloop-credentials",
+  "labelloop-worker-llm",
+  "labelloop-worker-platform",
   "labelloop-llm",
   "labelloop-platform",
   "labelloop-worker-core",
 ]
 
 [tool.uv]
+exclude-newer-package = { cryptography = "P3D", cffi = "P3D", pycparser = "P3D" }
+no-build = true
 default-groups = ["dev"]
 package = false
 
@@ -38,6 +46,9 @@ package = false
 labelloop-api = { workspace = true }
 labelloop-compiler = { workspace = true }
 labelloop-core = { workspace = true }
+labelloop-credentials = { workspace = true }
+labelloop-worker-llm = { workspace = true }
+labelloop-worker-platform = { workspace = true }
 labelloop-llm = { workspace = true }
 labelloop-platform = { workspace = true }
 labelloop-worker-core = { workspace = true }
@@ -64,6 +75,9 @@ known-first-party = [
   "labelloop_api",
   "labelloop_compiler",
   "labelloop_core",
+  "labelloop_credentials",
+  "labelloop_worker_llm",
+  "labelloop_worker_platform",
   "labelloop_llm",
   "labelloop_platform",
   "labelloop_worker_core",
@@ -82,6 +96,7 @@ mypy_path = "packages/core/src:fixtures"
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 testpaths = [
+  "packages/credentials/tests",
   "packages/core/tests",
   "packages/compiler/tests",
   "packages/platform/tests",
@@ -91,6 +106,9 @@ testpaths = [
   "workers/ml/tests",
 ]
 pythonpath = [
+  "packages/credentials/src",
+  "workers/llm/src",
+  "workers/platform/src",
   "packages/core/src",
   "packages/compiler/src",
   "packages/platform/src",

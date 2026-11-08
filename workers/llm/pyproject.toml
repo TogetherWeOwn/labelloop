@@ -1,0 +1,16 @@
+[project]
+name = "labelloop-worker-llm"
+version = "0.0.0"
+description = "Typed llm credential worker port"
+requires-python = ">=3.12,<3.13"
+dependencies = ["labelloop-credentials"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/labelloop_worker_llm"]
+
+[tool.uv.sources]
+labelloop-credentials = { workspace = true }
