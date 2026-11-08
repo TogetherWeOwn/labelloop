@@ -10,7 +10,8 @@ from test_m5_integration_contract import make_release, make_report
 
 from labelloop_api import drift_service as service
 from labelloop_api.model_store import json_record
-from labelloop_core.qualification_wire import dumps
+from labelloop_core.qualification import QualificationContext
+from labelloop_core.qualification_wire import dumps, loads
 from labelloop_core.registry import PromotionPolicy, RegistryState
 
 
@@ -92,7 +93,6 @@ def test_unknown_scope_cannot_invent_new_cells(monkeypatch, axis):
         "pipeline",
         "digest",
         "canary",
-        "final",
         "root",
     ],
 )
@@ -118,19 +118,32 @@ def test_missing_or_substituted_provenance_never_appends_a_pause(monkeypatch, mu
             evidence = replace(evidence, release_sha256="b" * 64)
         elif mutation == "canary":
             evidence = replace(evidence, canary_release_sha256="b" * 64)
-        elif mutation == "final":
-            evidence = replace(
-                evidence,
-                final_test=replace(
-                    evidence.final_test,
-                    dataset=replace(evidence.final_test.dataset, project_id="foreign"),
-                ),
-            )
         changed = replace(context, evidence=evidence)
         record["qualification"] = json.loads(
             dumps(changed if mutation != "root" else evidence.final_test)
         )
     with pytest.raises(ValueError):
+        service.pause_current_champion(connection, **args)
+    writer.assert_not_called()
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_foreign_final_history_is_decodable_but_cannot_authorize_containment(monkeypatch, side):
+    connection, args, context, _, record, writer = setup(monkeypatch, side)
+    final = context.evidence.final_test
+    foreign = replace(
+        final,
+        dataset=replace(final.dataset, project_id="foreign"),
+        assessments=tuple(
+            replace(item, selection=replace(item.selection, project_id="foreign"))
+            for item in final.assessments
+        ),
+    )
+    changed = replace(context, evidence=replace(context.evidence, final_test=foreign))
+    encoded = dumps(changed)
+    assert loads(encoded, QualificationContext) == changed
+    record["qualification"] = json.loads(encoded)
+    with pytest.raises(ValueError, match="promotion qualification identity mismatch"):
         service.pause_current_champion(connection, **args)
     writer.assert_not_called()
 
