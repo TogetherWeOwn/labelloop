@@ -19,7 +19,7 @@ const authorizedEvents = role === 'reviewer' ? auditFixture.filter((event) => ev
 const auditPort = recordedAuditPort(authorizedEvents);
 const ready = <T,>(data: T): ViewState<T> => scenario === 'loading' ? { status: 'loading' } : scenario === 'error' ? { status: 'error', retry: () => location.reload() } : { status: 'ready', data, updatedAt: fixtureTime, stale: scenario === 'stale' };
 
-function FixtureApp() {
+export function FixtureApp() {
   const [costs, setCosts] = useState<CostsRecord>(scenario === 'empty' ? { ...costsFixture, entries: [], pause_reason: null } : scenario === 'unset' ? { ...costsFixture, policy: { monthly_limit: null, iteration_limit: null, operation_limit: null, autonomous_spend: false } } : costsFixture);
   const [auditQuery, setAuditQuery] = useState(query);
   const [refresh, setRefresh] = useState(0);

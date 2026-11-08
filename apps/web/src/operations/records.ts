@@ -42,7 +42,7 @@ export function totals(entries: readonly CostEntry[]) {
 
 // Neutralize spreadsheet formulas as well as CSV separators, quotes and newlines.
 export function ledgerCsv(entries: readonly CostEntry[]): string {
-  const cell = (value: string) => `"${(/^[\s]*[=+@\-]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`;
+  const cell = (value: string) => `"${(/^\s*[=+@-]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`;
   return [['UTC', 'Operation', 'Kind', 'Object', 'Recipe', 'Approved by', 'Estimate USD', 'Actual USD', 'State', 'Result'],
     ...entries.map((e) => [e.at, e.operation_id, e.kind, e.object_id, e.recipe_id ?? '', e.approved_by ?? 'Refused',
       usd(e.estimate), e.state === 'settled' && e.actual !== null ? usd(e.actual) : 'Unconfirmed', e.state, e.result]),

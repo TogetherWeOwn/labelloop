@@ -21,8 +21,8 @@ describe('recorded operational projections', () => {
   it('counts unconfirmed completed billing at estimate, but not refusals or cancellation', () => {
     const entries = costsFixture.entries.filter((entry) => entry.month === '2026-11');
     expect(totals(entries)).toEqual({ actual: 540_000, reserved: 1_380_000, unconfirmed: 1_320_000, delta: -1_190_000, exposure: 3_240_000 });
-    expect(totals([{ ...entries[0]!, state: 'cancelled' }]).exposure).toBe(0);
-    expect(() => totals([{ ...entries[0]!, state: 'settled', actual: null }])).toThrow();
+    expect(totals([{ ...entries[0], state: 'cancelled' }]).exposure).toBe(0);
+    expect(() => totals([{ ...entries[0], state: 'settled', actual: null }])).toThrow();
   });
   it('isolates project, iteration, run and review batch without losing refused attempts', () => {
     expect(scopedEntries(costsFixture, { kind: 'project', id: 'other' })).toHaveLength(0);
@@ -32,7 +32,7 @@ describe('recorded operational projections', () => {
     expect(scopedEntries(costsFixture, { kind: 'project', id: 'shelf-demo' }).some((e) => e.state === 'refused')).toBe(true);
   });
   it('escapes CSV syntax and spreadsheet formulas without presenting unconfirmed costs as actuals', () => {
-    const csv = ledgerCsv([{ ...costsFixture.entries[0]!, object_id: '=HYPERLINK("fixture")', result: 'line\nbreak, "quoted"' }]);
+    const csv = ledgerCsv([{ ...costsFixture.entries[0], object_id: '=HYPERLINK("fixture")', result: 'line\nbreak, "quoted"' }]);
     expect(csv).toContain('"\'=HYPERLINK(""fixture"")"');
     expect(csv).toContain('"Unconfirmed"');
     expect(csv).toContain('line\nbreak, ""quoted""');
@@ -86,7 +86,7 @@ describe('operational screen states', () => {
     expect(html).not.toContain('<button');
   });
   it('does not label training groups as fresh canary evidence', () => {
-    const record = recipesFixture[0]!;
+    const record = recipesFixture[0];
     const html = renderToStaticMarkup(<RecipeOperations state={ready([{ ...record, canary: { ...record.canary!, excluded_training_groups: ['fresh-1'] } }])} role="admin" />);
     expect(html).toContain('Fresh source-group evidence is inconsistent');
     expect(html).not.toContain('Canary · 3 of 10');
