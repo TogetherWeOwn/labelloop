@@ -6,6 +6,24 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Composite-key invalidation fixture repair — pending Actions
+
+Exact `004451c734951ffb9135dadc85144c9a80aff8c7`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42511849574) failed:
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42511849574/job/128826445149)
+reported **2 failed, 17 passed**. Both recipes reached the new HTTP invalidation
+fixture, but its pre-request journal snapshot raised `AttributeError: id`.
+Final-test and acceptance journals have composite primary keys, not an `id` column;
+none of the new HTTP invalidation assertions completed. Unit, queue PostgreSQL,
+migration cycles/all four parent upgrades, web-build, dev-stack, lint/types/import
+contract, CodeQL and gitleaks passed, but do not clear failed CI.
+
+The fixture now orders each journal by its actual primary key and identifies the
+new event by full-row difference, additionally requiring every prior row to remain
+unchanged. The existing failing both-recipe controls are the regression cases.
+No production store, transition, migration, dependency or gate changed. Corrected
+persisted assertions await exact-head Actions; no local tests or builds ran.
+
 ## Authenticated whole-test invalidation — pending Actions
 
 `POST /projects/{project_key}/dataset-releases/{release_key}/final-test-events`

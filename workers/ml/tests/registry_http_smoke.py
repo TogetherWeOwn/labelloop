@@ -126,7 +126,9 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
             return tuple(
                 tuple(
                     dict(row)
-                    for row in connection.execute(sa.select(table).order_by(table.c.id)).mappings()
+                    for row in connection.execute(
+                        sa.select(table).order_by(*table.primary_key.columns)
+                    ).mappings()
                 )
                 for table in (
                     qualification_schema.final_test_event,
@@ -215,7 +217,8 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
         after = journal_rows()
         assert after[1] == before[1]
         assert len(after[0]) == len(before[0]) + 1
-        added = [row for row in after[0] if row["id"] not in {old["id"] for old in before[0]}]
+        assert all(row in after[0] for row in before[0])
+        added = [row for row in after[0] if row not in before[0]]
         assert len(added) == 1
         assert added[0]["actor_id"] == identities["admin"][0]
         assert added[0]["action"] == action
