@@ -119,8 +119,14 @@ network-enabled credential fixtures are used.
 age to the added cryptography chain (cryptography/cffi/pycparser); existing pins are
 unchanged. A global filter could not resolve the already delivered Platform SDK
 pin, so broad retrospective workspace policy is not claimed. `no-build=true`
-rejects third-party source builds. First-party Hatchling workspace builds are
-reviewed local source; wheel-only installation does not guarantee package safety.
+rejects third-party source builds, including build-backend dependencies. The
+container explicitly invokes `uv build --wheel --package` for named first-party
+Hatchling workspace packages, then installs the resulting wheels with `--no-deps`.
+This is the reviewed first-party build exception; it does not disable `no-build`
+for dependency installation. The existing manifests use `hatchling.build` with
+only source-package selection and no custom build hooks. This exception lasts
+while those reviewed backends/manifests are unchanged; backend or hook changes
+require a new review. Wheel-only installation does not guarantee package safety.
 Clean frozen installation and all test/build qualification run on GitHub Actions,
 not on the shared host. Native Applied Cryptography acceptance is required before
 this proposal can be marked accepted.

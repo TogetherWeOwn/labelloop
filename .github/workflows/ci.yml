@@ -167,6 +167,12 @@ jobs:
           enable-cache: false
       - run: uv sync --frozen
       - run: make dev
+      - name: Check installed credential worker packages
+        run: >-
+          docker compose run --rm --no-deps api python -c
+          "import labelloop_credentials;
+          import labelloop_worker_llm.credentials;
+          import labelloop_worker_platform.credentials"
       - run: curl --fail --show-error --silent --retry 5 --retry-connrefused http://localhost:5173/api/readyz
       - run: docker compose logs --no-color
         if: always()

@@ -14,19 +14,25 @@ COPY workers workers
 ARG UV_GROUPS=runtime
 # The ML vendor requires the GUI opencv-python, while the compiler requires the
 # headless implementation. The two distributions must not share one environment.
+# Build only named first-party wheels explicitly; dependency installation retains
+# no-build=true, including build-backend dependencies, then installs those wheels.
 RUN uv sync --frozen --only-group ${UV_GROUPS} --no-install-project --no-install-workspace && \
     if [ "${UV_GROUPS}" = "ml" ]; then \
       uv pip uninstall opencv-python && \
       uv pip install --no-deps opencv-python-headless==4.13.0.92; \
     fi && \
-    uv pip install --no-deps --no-editable ./packages/core && \
     if [ "${UV_GROUPS}" = "ml" ]; then \
-      uv pip install --no-deps --no-editable ./workers/ml; \
+      set -- labelloop-core labelloop-worker-ml; \
     else \
-      uv pip install --no-deps --no-editable \
-        ./packages/compiler ./packages/platform ./packages/llm \
-        ./apps/api ./workers/core; \
-    fi
+      set -- labelloop-core labelloop-compiler labelloop-platform labelloop-llm \
+        labelloop-credentials labelloop-worker-llm labelloop-worker-platform \
+        labelloop-api labelloop-worker-core; \
+    fi && \
+    for package in "$@"; do \
+      uv build --wheel --package "$package" --out-dir /tmp/workspace-wheels || exit 1; \
+    done && \
+    uv pip install --no-deps /tmp/workspace-wheels/*.whl && \
+    rm -rf /tmp/workspace-wheels
 
 USER labelloop
 CMD ["labelloop-api"]
