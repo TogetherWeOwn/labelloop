@@ -265,6 +265,11 @@ try {
     results.push({ key: `assistant-request-${width}`, pass: true, axe: 0, keyboard: 'open-capture-discard-enter', realCommands: false });
   }
   await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
+  const oatRows = page.getByRole('table', { name: 'Classes in this draft', exact: true }).getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Oat milk 1 L', exact: true }) });
+  await oatRows.waitFor();
+  assert.equal(await oatRows.count(), 1, 'the fixture starts with one approved class sharing the proposal display name');
+  const approvedOat = await oatRows.innerText();
+  assert.match(approvedOat, /Approved by an admin/);
   await openAssistant.click();
   await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
   await assistantPanel.getByText('The draft changed while this request was open.', { exact: false }).waitFor();
@@ -280,9 +285,11 @@ try {
   const acceptAssistant = page.getByRole('button', { name: 'Accept Oat milk 1 L', exact: true });
   await acceptAssistant.waitFor();
   assert.equal(await assistantPanel.count(), 0);
-  const proposedRow = page.getByRole('table', { name: 'Classes in this draft', exact: true }).getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Oat milk 1 L', exact: true }) });
+  const proposedRow = oatRows.filter({ has: acceptAssistant });
+  assert.equal(await oatRows.count(), 2, 'the proposal is added without replacing the existing same-name class');
   assert.equal(await proposedRow.count(), 1, 'the returned proposal must appear exactly once in the draft catalog');
   assert.match(await proposedRow.innerText(), /Proposed/);
+  assert.equal(await oatRows.filter({ hasNot: acceptAssistant }).innerText(), approvedOat, 'drafting must not alter the existing approved class');
   assert.equal(await page.getByRole('button', { name: 'Approve classes and continue', exact: true }).isDisabled(), true);
   assert.equal((await last()).kind, 'draft_assistant_classes', 'returning a proposal never accepts it');
   await acceptAssistant.click();
