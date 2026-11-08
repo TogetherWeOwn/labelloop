@@ -142,6 +142,150 @@ def exercise_http_promotion(connection, candidate, before, arguments):
     assert qualification_journals(engine) == journals
 
 
+def exercise_http_quality_vetoes(engine, release, final, context, actor):
+    import pytest
+    from qualification_context_smoke import _outcome, prepare_sole_final_candidate
+
+    from labelloop_api.model_store import load_registry, save_evaluation
+    from labelloop_api.promotion_service import promote_candidate
+
+    target = context.evidence.targets.critical_slices[0]
+    class_id = target.class_id
+    metrics = final.overall.per_class[class_id]
+    critical = final.slices[target.slice_name]
+    sliced = critical.per_class[class_id]
+    unsupported = replace(
+        metrics, supported=False, support=0, map50=None, map50_95=None, precision=None, recall=None
+    )
+    cases = (
+        (
+            "unsupported-class",
+            replace(
+                final,
+                overall=replace(
+                    final.overall, per_class=final.overall.per_class | {class_id: unsupported}
+                ),
+            ),
+            "unsupported class or insufficient qualification support",
+        ),
+        (
+            "insufficient-class-support",
+            replace(
+                final,
+                overall=replace(
+                    final.overall,
+                    per_class=final.overall.per_class | {class_id: replace(metrics, support=0)},
+                ),
+            ),
+            "unsupported class or insufficient qualification support",
+        ),
+        (
+            "missing-critical-slice",
+            replace(
+                final,
+                slices={
+                    key: value for key, value in final.slices.items() if key != target.slice_name
+                },
+            ),
+            "missing critical-slice evidence",
+        ),
+        (
+            "insufficient-critical-support",
+            replace(
+                final,
+                slices=final.slices
+                | {
+                    target.slice_name: replace(
+                        critical,
+                        per_class=critical.per_class | {class_id: replace(sliced, support=0)},
+                    )
+                },
+            ),
+            "unsupported class or insufficient qualification support",
+        ),
+        (
+            "critical-ap50-regression",
+            replace(
+                final,
+                slices=final.slices
+                | {
+                    target.slice_name: replace(
+                        critical,
+                        per_class=critical.per_class | {class_id: replace(sliced, map50=0.0)},
+                    )
+                },
+            ),
+            "unacceptable critical-slice AP50 regression",
+        ),
+    )
+    scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
+    for name, adverse, message in cases:
+        # Only one metric dimension changes; preserve the aggregate quality numbers.
+        assert adverse.overall.map50_95 == final.overall.map50_95
+        with engine.begin() as connection:
+            candidate, report, variant = prepare_sole_final_candidate(
+                connection, release, adverse, context, actor, suffix="-http-" + name
+            )
+            incumbent = load_registry(connection, **scope).champion
+            assert incumbent is not None
+            comparison = replace(
+                final,
+                run_id=report.run_id + "-incumbent",
+                dataset_release_id=report.dataset_release_id,
+                weights_sha256=incumbent.weights_sha256,
+                class_map_sha256=incumbent.class_map_sha256,
+                policy=incumbent.policy,
+            )
+            if name == "critical-ap50-regression":
+                comparison = replace(
+                    comparison,
+                    slices=comparison.slices
+                    | {
+                        target.slice_name: replace(
+                            critical,
+                            per_class=critical.per_class | {class_id: replace(sliced, map50=1.0)},
+                        )
+                    },
+                )
+            save_evaluation(
+                connection, model_key=incumbent.release_id, variant_id=variant, report=comparison
+            )
+            annotation = _outcome(connection, candidate, context, actor, canary=False)
+            canary = _outcome(
+                connection, candidate, context, actor, canary=True, alternatives=False
+            )
+        # All adverse evidence is committed, scoped and uniquely selectable. Reject
+        # for its specific quality gate, not an absent report, stale digest or ambiguity.
+        original = snapshot(engine, release.project_id)
+        journals = qualification_journals(engine)
+        arguments = dict(
+            **scope,
+            model_key=candidate.release_id,
+            annotation_release_key=annotation.release_key,
+            canary_release_key=canary.release_key,
+            expected_revision=original[0][0 if release.policy.imgsz == 320 else 1].revision,
+        )
+        with engine.begin() as connection:
+            with pytest.raises(ValueError, match=message):
+                promote_candidate(
+                    connection, **arguments, actor_id=actor, require_fixture_policy=True
+                )
+        with authenticated_client(engine) as (client, identities, _workers):
+            headers = login(client, identities["admin"][1])
+            response = client.post(
+                f"/projects/{release.project_id}/promotions",
+                headers=headers,
+                json={key: value for key, value in arguments.items() if key != "project_key"}
+                | {"action": "promote"},
+            )
+            assert response.status_code == 409
+            assert response.json() == {"detail": "registry_change_rejected"}
+            assert response.headers["cache-control"] == "no-store"
+        assert snapshot(engine, release.project_id) == original
+        assert qualification_journals(engine) == journals
+    return len(cases)
+
+
 def exercise_durable_http_promotion(engine, release, final, context, actor):
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
@@ -154,6 +298,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     from labelloop_core.qualification_wire import loads
     from labelloop_core.registry import PromotionPolicy
 
+    quality_vetoes = exercise_http_quality_vetoes(engine, release, final, context, actor)
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
         candidate, report, variant = prepare_sole_final_candidate(
@@ -278,6 +423,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     assert qualification_journals(engine) == journals
     return {
         "scope": "fixture-only copied metrics, not independent measurements or domain quality",
+        "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,

@@ -6,7 +6,36 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP promotion and rollback — pending Actions
+## Committed HTTP support and critical-slice vetoes — pending Actions
+
+Both-recipe CPU smoke now commits five separate synthetic candidates with one
+adverse dimension each: unsupported class, insufficient class support, missing
+critical slice, insufficient critical-slice support, or critical-slice AP50
+regression against a same-population incumbent. Aggregate mAP remains unchanged.
+Each candidate retains its own canonical final population, real selection/exposure,
+unique ordinary and candidate-bound canary outcomes, and incumbent comparison.
+The internal service must reject with the specific quality-gate error; an otherwise
+valid authenticated admin promotion must then return redacted 409/no-store and
+preserve both complete registry heads, every promotion event and qualification
+journal after client close/reconnect. The existing successful committed promotion
+and rollback remain the positive control. No guard, policy, schema, migration or
+dependency changed. These new assertions await exact-head Actions; no local tests
+ran. Synthetic copied metrics prove software gates only, never model quality.
+REA: reuse the real promotion service, canonical fixture and HTTP transactions.
+Automatic annotation remains an internal port until trusted execution and scope
+producers exist; no HTTP acceptance authority is introduced here.
+
+## Committed HTTP promotion and rollback — verified baseline
+
+Exact `ad58f2dc02c00f63c6a32896b9ae84138cf097e2`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42534166735),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42534166369) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42534166415)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42534166735/job/128894691496),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42534166735/job/128894691512),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies committed HTTP recovery below, not the new support
+and slice controls, independent measurements or full M5 acceptance. Totals not extracted.
 
 Both-recipe CPU smoke now prepares a separate synthetic sole-final candidate using
 one shared fixture helper; earlier savepoint ambiguity controls retain their exact
@@ -23,8 +52,8 @@ all prior promotion events and qualification journals are compared after reconne
 The rollback returns the prior champion without deleting either new event or any
 fixture evidence. This runs after the existing drift acceptance controls, before
 the shared adverse audit. Copied metrics and synthetic sources remain explicitly
-fixture-only, not independent measurement or domain gold. New assertions await
-exact-head Actions; no local tests/builds ran. No production code, schema, migration,
+fixture-only, not independent measurement or domain gold. These assertions passed
+exact-head Actions at `ad58f2d`; no local tests/builds ran. No production code, schema, migration,
 dependency or gate changed. REA: reuse the sole-final fixture and real registry/auth
 transactions rather than build another engine or claim savepoints prove durability.
 
