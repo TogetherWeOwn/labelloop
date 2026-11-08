@@ -348,7 +348,7 @@ class IterationState:
             if record is None or record.receipt is None:
                 raise ValueError("prerequisite incomplete")
             # Failed recipe chains may only advance to an explicit retain decision.
-            if record.receipt.outcome == "failed" and key.stage != "select_next":
+            if record.receipt.outcome == "failed":
                 raise ValueError("prerequisite failed")
             parents.append(asdict(record.receipt))
         return _digest({"manifest": self.manifest.digest, "stage": asdict(key), "parents": parents})
@@ -358,6 +358,7 @@ class IterationState:
             r
             for r in self.records
             if r.key.recipe_id == recipe_id
+            and r.key.stage != "promote_retain"
             and r.receipt is not None
             and r.receipt.outcome == "failed"
         )
@@ -414,10 +415,30 @@ def operation_id(state: IterationState, key: StageKey) -> str:
 def begin_stage(
     state: IterationState, key: StageKey, *, budget: DurableBudgetAuthorization | None = None
 ) -> IterationState:
-    """Prepare one durable intent; repeated delivery returns the existing intent.
+    """Authorize a prepared intent for atomic ledger/job commit before worker I/O.
 
-    Persist BEFORE any worker invocation. An existing intent never means invoke
-    again: recovery_action always requires remote/job reconciliation instead.
+    The trusted store preflights with prepare_stage before budget dispatch, then
+    commits this result and that ledger together. Existing intents are reconcile-only.
+    """
+    prepared = prepare_stage(state, key)
+    record = prepared.record(key)
+    if record is None or state.record(key) is not None:
+        return prepared
+    paid = (key.stage == "review" and state.manifest.paid_review) or (
+        key.stage in {"sync", "train"} and state.manifest.backend == "ultralytics_platform"
+    )
+    if paid:
+        if budget is None:
+            raise ValueError("durable budget authorization required")
+        budget.validate(state, record.operation_id, record.input_sha256)
+    return prepared
+
+
+def prepare_stage(state: IterationState, key: StageKey) -> IterationState:
+    """Pure eligibility preview, never authorization to persist or dispatch a job.
+
+    A refusal prepares no intent. The store must not dispatch its ledger entry in
+    that case, and must discard the ledger transition if the atomic CAS fails.
     """
     if state.status != "running":
         raise ValueError("iteration is not running")
@@ -427,13 +448,6 @@ def begin_stage(
         raise ValueError("stage is not ready")
     inputs = state.input_digest(key)
     op = operation_id(state, key)
-    paid = (key.stage == "review" and state.manifest.paid_review) or (
-        key.stage in {"sync", "train"} and state.manifest.backend == "ultralytics_platform"
-    )
-    if paid:
-        if budget is None:
-            raise ValueError("durable budget authorization required")
-        budget.validate(state, op, inputs)
     rounds = state.rounds
     if key.stage == "train" and not any(r.iteration_id == state.iteration_id for r in rounds):
         count = sum(r.source_batch_id == state.manifest.source_batch_id for r in rounds)
@@ -480,7 +494,10 @@ def finish_stage(state: IterationState, key: StageKey, receipt: StageReceipt) ->
     loops = _merge_corrections(state, record, receipt)
     if receipt.decision is not None and key.stage != "promote_retain":
         raise ValueError("only recipe decisions select models")
-    if key.stage == "promote_retain":
+    if key.stage == "promote_retain" and receipt.outcome == "failed":
+        if receipt.decision is not None or receipt.selected_model is not None:
+            raise ValueError("a failed registry transaction cannot select a model")
+    elif key.stage == "promote_retain":
         incumbent = next(
             p.incumbent for p in state.manifest.recipes if p.recipe_id == key.recipe_id
         )
@@ -670,8 +687,13 @@ def next_iteration(
         or any(r.iteration_id == iteration_id for r in state.rounds)
     ):
         raise ValueError("new iteration requires the same project and a fresh ID")
-    if manifest.source_batch_id == state.manifest.source_batch_id and (
-        manifest.round_evidence == state.started_round_evidence
+    if (
+        manifest.source_batch_id == state.manifest.source_batch_id
+        and manifest.round_evidence == state.started_round_evidence
+    ) or any(
+        r.source_batch_id == manifest.source_batch_id
+        and r.evidence_sha256 == manifest.round_evidence
+        for r in state.rounds
     ):
         raise ValueError("new round requires new evidence, recipe or explicit policy renewal")
     policies = _policy_transition(state, manifest)

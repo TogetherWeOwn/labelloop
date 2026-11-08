@@ -61,9 +61,16 @@ store's registry revision comparison, never silently updates this manifest.
 ## Durable integration contract
 
 1. Existing job/store code loads the manifest, history and current revision.
-2. It calls `begin_stage` for a ready stage and **CAS-commits** the returned
-   projection plus its fenced job intent before any I/O. Only a newly inserted
-   intent may be dispatched, never an idempotent return of an existing intent.
+2. It calls `prepare_stage` on the current revision before reserving or dispatching
+   any budget. This pure preview checks readiness and training-round eligibility;
+   it is not permission to persist or invoke a worker. If no new intent is prepared
+   (including a round-limit pause or an existing intent), no new ledger dispatch is
+   allowed. For a new paid intent, the trusted transaction prepares the ledger's
+   dispatch transition, calls `begin_stage` on the same original projection with
+   that authorization, and **CAS-commits** the ledger, returned projection and fenced
+   job intent together before any I/O. CAS failure discards all those transitions;
+   a refused preview never commits a dispatched reservation without an intent.
+   Only a newly inserted intent may be invoked, never an idempotent return.
 3. A worker validates the typed port result and atomically commits its artifact
    plus `finish_stage` receipt. Complete validation accounts for every source's
    terminal `CorrectionLoop`; unresolved results still require adjudication,
@@ -104,7 +111,10 @@ configured ceiling still applies; extending it requires a fresh explicit renewal
 artifact not previously used for that batch. Per-batch ceiling/renewal history
 survives switches away from and back to a batch; it is not inferred from only the
 immediately preceding manifest. A renamed batch or iteration is not new evidence. The service
-must preserve canonical source-batch IDs and the retained round ledger.
+must preserve canonical source-batch IDs and the retained round ledger. New
+iteration admission rejects evidence already consumed by that batch anywhere in
+retained round history, before shared stages (including paid review) can run;
+switching batches or alternating evidence does not make old evidence new.
 
 Correction pass counts and object-hash histories cannot decrease or reset on
 resume/new rounds; they reuse the delivered one/two-pass `CorrectionLoop` bound.
@@ -114,7 +124,12 @@ instead of admitting a subsequent validation contract that cannot be satisfied.
 A failed recipe skips further training/evaluation and can only produce an
 explicit retain decision. Another recipe may continue, but is never implicitly
 promoted. An unqualified candidate retains the incumbent through its own
-validated decision receipt.
+validated decision receipt. A confirmed failed registry transaction records a failed
+receipt with no decision or selected model: it settles the intent but blocks
+select-next. It cannot be retried implicitly. After an explicit stop/pause and
+reconciliation of all other intents, new evidence can start a fresh iteration;
+the failed receipt and consumed rounds remain in history. Failed registry receipts
+do not change their own input digest or become successful retain decisions.
 
 Trusted policy evaluation can stop for sufficient scoped quality, no informative
 data or plateau; pause for insufficient evidence, oscillation, drift/regression,

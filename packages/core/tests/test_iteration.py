@@ -28,6 +28,7 @@ from labelloop_core.iteration import (
     invalidate,
     next_iteration,
     operation_id,
+    prepare_stage,
     reconcile_retired,
     recover_stage,
     resume,
@@ -237,6 +238,101 @@ def test_retired_validation_uses_intents_original_sources_and_correction_policy(
     state = reconcile_retired(state, receipt)
     assert dict(state.correction_loops)["image-a"].passes == 1
     assert state.manifest.sources[0].asset_id == "image-b"
+
+
+@pytest.mark.parametrize("failed_predecessor", [False, True])
+def test_failed_registry_readback_settles_intent_without_selecting_model(
+    failed_predecessor: bool,
+) -> None:
+    state = shared()
+    if failed_predecessor:
+        key = StageKey("compile", "full320")
+        state = begin_stage(state, key)
+        state = finish_stage(state, key, receipt_for(state, key, outcome="failed"))
+    else:
+        for stage in PER_RECIPE[:-1]:
+            state = complete(state, StageKey(stage, "full320"))
+    key = StageKey("promote_retain", "full320")
+    state = begin_stage(state, key)
+    receipt = replace(receipt_for(state, key, outcome="failed"), decision=None, selected_model=None)
+    for invalid in (
+        replace(receipt, decision="retain"),
+        replace(receipt, selected_model=ref("uncommitted-model")),
+    ):
+        with pytest.raises(ValueError, match="failed registry"):
+            finish_stage(state, key, invalid)
+    state = finish_stage(state, key, receipt)
+    assert finish_stage(state, key, receipt) == state
+    assert recover_stage(state, key) == "reuse"
+    state = resume(state, tuple(r.receipt for r in state.records if r.receipt is not None))
+    for stage in PER_RECIPE:
+        state = complete(state, StageKey(stage, "full640"))
+    assert StageKey("select_next") not in state.ready()
+    with pytest.raises(ValueError, match="not ready"):
+        begin_stage(state, StageKey("select_next"))
+    state = stop(state, "insufficient_evidence", ref("registry-failure"))
+    restarted = next_iteration(
+        state, "iteration-2", replace(state.manifest, evidence=ref("new-evidence"))
+    )
+    assert restarted.ready() == (StageKey("freeze"),)
+    assert restarted.rounds == state.rounds
+    assert receipt in tuple(r.receipt for r in restarted.retired)
+
+
+@pytest.mark.parametrize("switch_batch", [False, True])
+def test_new_iteration_refuses_previously_consumed_round_evidence(switch_batch: bool) -> None:
+    state = stop(trained(), "plateau", ref("pause"))
+    original = state.manifest
+    changed = replace(original, evidence=ref("new-evidence"))
+    if switch_batch:
+        changed = replace(changed, source_batch_id="batch-b")
+    state = next_iteration(state, "iteration-2", changed)
+    state = stop(trained(state), "plateau", ref("pause"))
+    state = pickle.loads(pickle.dumps(state))
+    for reused in (original, replace(original, paid_review=True)):
+        with pytest.raises(ValueError, match="new evidence"):
+            next_iteration(state, "iteration-3", reused)
+    renewed = replace(original, policy_renewal=ref("fresh-renewal"))
+    assert next_iteration(state, "iteration-3", renewed).ready() == (StageKey("freeze"),)
+
+
+def test_exhausted_paid_training_preflight_never_dispatches_budget() -> None:
+    state = stop(trained(round_two()), "plateau", ref("pause"))
+    state = next_iteration(
+        state,
+        "iteration-3",
+        replace(state.manifest, evidence=ref("third"), backend="ultralytics_platform"),
+    )
+    state = shared(state)
+    state = complete(state, StageKey("compile", "full320"))
+    sync = StageKey("sync", "full320")
+    state = begin_stage(state, sync, budget=budget_for(state, sync))
+    state = finish_stage(state, sync, receipt_for(state, sync))
+    train = StageKey("train", "full320")
+    ledger = BudgetGate(state.manifest.project_id, BudgetPolicy(100, 100, 100))
+    preview = prepare_stage(state, train)
+    # The trusted transaction must not reserve/dispatch when no new intent is prepared.
+    if preview.record(train) is not None:
+        ledger = budget_for(state, train).ledger
+    assert ledger.entries == ()
+    assert preview.status == "paused" and preview.reason == "round_limit"
+    assert preview.rounds == state.rounds and preview.records == state.records
+    assert begin_stage(state, train) == preview
+
+
+def test_paid_preflight_is_not_dispatch_authorization() -> None:
+    state = IterationState("iteration-1", replace(manifest(), paid_review=True))
+    for stage in SHARED[:2]:
+        state = complete(state, StageKey(stage))
+    key = StageKey("review")
+    preview = prepare_stage(state, key)
+    assert preview.record(key) is not None
+    with pytest.raises(ValueError, match="durable budget"):
+        begin_stage(state, key)
+    committed = begin_stage(state, key, budget=budget_for(state, key))
+    assert committed == preview
+    assert prepare_stage(committed, key) == committed
+    assert begin_stage(committed, key) == committed
 
 
 def test_manifest_pins_complete_inputs_and_order() -> None:
