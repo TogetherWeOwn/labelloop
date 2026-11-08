@@ -236,6 +236,15 @@ reviewed scanner changes are inherited unchanged; this conflict resolution adds
 no scanner ignore, waiver or gate reduction. No source-selection pass is inferred
 from this repair; all changed behavior requires new exact-head Actions evidence.
 
+A later real conflict after operational module #21 landed requires another
+restack. Both package script pairs are retained. Actions keeps all four builds,
+all three fixture browser gates and required artifacts, the inherited application/
+operational bundle scan, Platform sentinels, one browser install, supported runner,
+exact-head identity and compiler cross-check. Main's paired CPU ML dependency
+refresh (#28) is inherited unchanged, not reimplemented here. The inherited
+browser/axe dependency pins need new management compatibility evidence. No gate,
+scanner policy or dependency-script exception is removed or weakened.
+
 ## Unknown setup evidence alignment
 
 The producer's `9cbc85100b7cbe87c09f3ecee434c50b07313799` management-only generated
@@ -354,8 +363,10 @@ These remain open; merging fixture components does not discharge them:
 
 `pnpm@10.28.2` supports `minimumReleaseAge: 4320` and `ignoreScripts: true` in the
 workspace config. Root and web manifests contain no lifecycle install hooks, and
-no pnpm hook file is present. Browser-only dependencies are pinned to
-`@playwright/test@1.56.1` and `axe-core@4.11.0`, matching the parallel UI modules.
+no pnpm hook file is present. The operational-module restack inherits main's
+`@playwright/test@1.64.1` and `axe-core@4.12.1` pins and frozen lockfile unchanged.
+The earlier management evidence used `1.56.1`/`4.11.0`; it is not verification of
+the inherited versions. No dependency resolution or install ran locally.
 No install-script exception was added. The explicit Playwright browser install
 runs only on the disposable Actions runner. Existing lock entries are not a
 retrospective provenance/age audit; these controls do not prove package safety.
