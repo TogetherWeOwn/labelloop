@@ -3,5 +3,17 @@ title = "Labelloop secret scanning"
 [extend]
 useDefault = true
 
-# No path allowlist: the example's public local-only values must not create an
-# exemption for a future high-entropy provider credential in the same file.
+# Recognize the short, inert upstream example before the unchanged default
+# private-key alternative. Its 64-character minimum otherwise spans the next PEM
+# header, so an allowlist must not classify that oversized match as harmless.
+[[rules]]
+id = "private-key"
+regex = '''-----BEGIN[ ]PRIVATE[ ]KEY-----\\{1,2}nYOUR_GCP_PRIVATE_KEY\\{1,2}n-----END PRIVATE KEY-----|(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\s\S-]{64,}?KEY(?: BLOCK)?-----'''
+
+# Both the exact snapshot path and the complete literal secret must match.
+# No commit/path-only/rule-wide ignore; real payloads in this file still fail.
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''(^|/)packages/platform/src/labelloop_platform/contract/openapi\.json$''']
+regexTarget = "secret"
+regexes = ['''^-----BEGIN[ ]PRIVATE[ ]KEY-----\\{1,2}nYOUR_GCP_PRIVATE_KEY\\{1,2}n-----END PRIVATE KEY-----$''']

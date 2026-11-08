@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:management-fixture": "vite build --config vite.management.config.ts",
-    "test:management-browser": "node scripts/management-browser.mjs"
+    "test:management-browser": "node scripts/management-browser.mjs",
+    "build:platform-fixture": "vite build --config vite.platform.config.ts",
+    "test:platform-browser": "node scripts/platform-browser.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",
