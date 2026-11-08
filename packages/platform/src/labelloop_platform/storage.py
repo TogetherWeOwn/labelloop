@@ -27,14 +27,23 @@ class SignedStorage:
         if (
             host != host.lower()
             or host == "platform.ultralytics.com"
-            or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host)
+            or len(host) > 253
+            or not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
+                host,
+            )
             or host.endswith((".localhost", ".local", ".internal"))
         ):
             return False
         try:
             return ipaddress.ip_address(host).is_global
         except ValueError:
-            return True
+            # Strict-IP parse failure is not proof of DNS: reject legacy numeric
+            # address spellings (short, octal and hex components) without resolving.
+            return (
+                re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", host) is None
+            )
 
     def _transfer(self, method: str, target: StorageTarget, content: bytes | None) -> StorageResult:
         try:
@@ -66,6 +75,8 @@ class SignedStorage:
             return StorageResult(Outcome.SUCCEEDED, status, response.content)
         if status == 412 or (method == "PUT" and (status == 408 or status >= 500)):
             return StorageResult(Outcome.RECONCILE_REQUIRED, status)
+        if status == 408 or status >= 500:
+            return StorageResult(Outcome.UNAVAILABLE, status)
         return StorageResult(Outcome.REJECTED, status)
 
     def put(self, target: StorageTarget, content: bytes) -> StorageResult:

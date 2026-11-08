@@ -55,7 +55,8 @@ serializes its SDK capture state and write latch; independent clients may procee
 ## Transport policy
 
 - Fixed `https://platform.ultralytics.com` origin, explicit reviewed operation enum/table,
-  exact path parameter names, ASCII resource segments and contract-owned query names.
+  exact path parameter names, ASCII resource segments validated against pinned ID/slug schemas,
+  and contract-owned query names.
   No caller-controlled server URL, SDK extras, redirect following, ambient credentials,
   environment proxy, or localhost wake. Ingest is session-only, with explicit class mapping,
   no `targetSplit`, remote `sourceUrl`, or connected/on-premise reference.
@@ -94,7 +95,7 @@ admission before dispatch; this in-process throttle is not a distributed rate li
 | `rate_limited` | Schedule no earlier than `retry_at`; explicit rejection can be redispatched |
 | `paid_paused` (402) | Persist project paid-stage pause; never automatically retry |
 | `reconcile_required` | Read the known remote resource/status before deciding any new mutation |
-| `unavailable` (read 503) | Terminal for this attempt; no internal retry |
+| `unavailable` (read 408 / 5xx, Platform or storage) | Terminal for this attempt; no internal retry |
 | `malformed` / `transport_error` (reads) | Fail the attempt without copying raw error text |
 | `rejected` | Stop; inspect trusted request/policy or sanitized status |
 
@@ -121,6 +122,23 @@ PUT is create-only in the inspected contract: 412 and uncertain PUT outcomes req
 signed URL/session after reconciliation, not a blind repeat. The storage port never retries.
 GET returns bytes, not a persistent artifact identity; consumers hash and verify artifacts.
 Storage targets and response bytes must not be put in canonical manifests or logs.
+
+## Scanner classification
+
+The raw official snapshot stays byte-pinned. Its four JSON/code-sample PEM examples
+contain only the public `YOUR_GCP_PRIVATE_KEY` marker, not a key. Historical commit
+fingerprints cannot cover a squash/new import. The scanner therefore recognizes that
+complete literal (one or two JSON escape layers) before its unchanged default private-key
+alternative and classifies it only when the **exact snapshot path AND complete secret**
+match. The default minimum length otherwise spans into a following example header; a
+prefix-only allowlist would be unsafe. No whole-path, rule-wide or commit ignore exists.
+
+The Actions scanner regression creates two distinct disposable import commit identities
+and checks default detection, corrected classification, changed and extended payloads,
+an adjacent non-key canary, and the same literal outside the snapshot path. It uses the
+same digest-pinned scanner image as the unchanged full-history scan. Synthetic canaries
+are public invalid key material. Native Security acceptance is required for this policy;
+a passing scan is not that acceptance or live credential qualification.
 
 ## Verification boundary
 

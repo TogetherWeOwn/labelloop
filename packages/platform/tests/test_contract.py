@@ -2,6 +2,7 @@ import hashlib
 import json
 import runpy
 import shutil
+import tomllib
 from importlib.metadata import version
 from pathlib import Path
 
@@ -23,10 +24,10 @@ def test_valid_bbox_tuple_and_boolean_remainder_schema() -> None:
     request = PlatformRequest(
         Operation.REPLACE_LABELS,
         "replace-1",
-        path={"imageId": "fixture-image"},
+        path={"imageId": "507f1f77bcf86cd799439011"},
         body={"labels": [{"classId": 0, "bbox": [0.5, 0.5, 0.2, 0.2]}]},
     )
-    assert prepare(request)[1] == "/api/images/fixture-image"
+    assert prepare(request)[1] == "/api/images/507f1f77bcf86cd799439011"
     tuple_schema = {"type": "array", "prefixItems": [{"type": "number"}], "items": False}
     validate_shape([0.5], tuple_schema)
     for invalid in ([0.5, 0.2], ["not-a-number"]):
@@ -79,21 +80,85 @@ def test_sdk_snapshot_provenance_and_generated_client_do_not_drift() -> None:
     assert ROOT.joinpath("operations.json").read_text() == GENERATOR["render"]()
 
 
-def test_scan_fingerprints_cover_only_upstream_placeholder_examples() -> None:
-    ignore = PACKAGE.parents[1] / ".gitleaksignore"
+def test_scan_classification_has_no_commit_or_path_only_exemption() -> None:
+    repo = PACKAGE.parents[1]
     fingerprints = [
-        line for line in ignore.read_text().splitlines() if line and not line.startswith("#")
+        line
+        for line in (repo / ".gitleaksignore").read_text().splitlines()
+        if line and not line.startswith("#")
     ]
-    expected_path = "packages/platform/src/labelloop_platform/contract/openapi.json"
+    assert fingerprints == []
+    config = tomllib.loads((repo / ".gitleaks.toml").read_text())
+    assert config["extend"] == {"useDefault": True}
+    assert "allowlist" not in config and "allowlists" not in config
+    assert len(config["rules"]) == 1
+    rule = config["rules"][0]
+    assert rule["id"] == "private-key"
+    assert len(rule["allowlists"]) == 1
+    allowlist = rule["allowlists"][0]
+    assert allowlist["condition"] == "AND"
+    assert allowlist["regexTarget"] == "secret"
+    assert len(allowlist["paths"]) == len(allowlist["regexes"]) == 1
     lines = ROOT.joinpath("openapi.json").read_text().splitlines()
-    assert len(fingerprints) == 2
-    for fingerprint, line_number in zip(fingerprints, (22480, 22704), strict=True):
-        assert fingerprint == (
-            f"0ff72807746152c3dc7327d69891a1285f34a18c:{expected_path}:private-key:{line_number}"
-        )
+    for line_number in (22480, 22704):
         example = json.loads("{" + lines[line_number - 1].strip() + "}")["example"]
         assert example.splitlines()[1] == "YOUR_GCP_PRIVATE_KEY"
         assert len(example.splitlines()) == 3
+
+
+@pytest.mark.parametrize(
+    "operation", [Operation.READ_IMAGE, Operation.REPLACE_LABELS, Operation.PREDICT_IMAGE]
+)
+@pytest.mark.parametrize("image_id", ["fixture-image", "a" * 23, "a" * 25, "g" * 24])
+def test_path_image_id_schema_rejected(operation, image_id) -> None:
+    with pytest.raises(WireError):
+        prepare(PlatformRequest(operation, path={"imageId": image_id}))
+
+
+@pytest.mark.parametrize("image_id", ["0" * 24, "F" * 24, "507f1f77bcf86cd799439011"])
+def test_path_image_id_schema_valid_boundaries(image_id) -> None:
+    assert prepare(PlatformRequest(Operation.READ_IMAGE, path={"imageId": image_id}))[1].endswith(
+        image_id
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("owner", "abc"),
+        ("owner", "a" * 33),
+        ("owner", "Uppercase"),
+        ("owner", "under_score"),
+        ("owner", "-owner"),
+        ("owner", "owner-"),
+        ("owner", "owner--slug"),
+        ("dataset", ""),
+        ("dataset", "x" * 129),
+        ("dataset", "data_set"),
+        ("project", "project--slug"),
+        ("project", "x" * 129),
+        ("model", "Model"),
+        ("model", "x" * 129),
+    ],
+)
+def test_path_slug_schema_rejected(field, value) -> None:
+    path = (
+        {"owner": "fixture", "dataset": "release"}
+        if field in ("owner", "dataset")
+        else {"owner": "fixture", "project": "project", "model": "model"}
+    )
+    operation = Operation.READ_DATASET if "dataset" in path else Operation.READ_MODEL
+    with pytest.raises(WireError):
+        prepare(PlatformRequest(operation, path={**path, field: value}))
+
+
+@pytest.mark.parametrize("owner", ["abcd", "a" * 32])
+@pytest.mark.parametrize("slug", ["x", "x" * 128, "valid-slug-2"])
+def test_path_slug_schema_valid_boundaries(owner, slug) -> None:
+    prepare(PlatformRequest(Operation.READ_DATASET, path={"owner": owner, "dataset": slug}))
+    prepare(
+        PlatformRequest(Operation.READ_MODEL, path={"owner": owner, "project": slug, "model": slug})
+    )
 
 
 def test_snapshot_corruption_fails_regeneration(tmp_path) -> None:

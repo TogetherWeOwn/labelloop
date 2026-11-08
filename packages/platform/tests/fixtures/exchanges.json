@@ -25,6 +25,17 @@
     "json": {"error": "fixture-platform-bearer-not-a-credential"}
   },
   "unavailable": {"status": 503, "json": {"error": "temporarily unavailable"}},
+  "transient_408": {"status": 408, "json": {"error": "request timeout"}},
+  "transient_500": {"status": 500, "json": {"error": "internal server error"}},
+  "transient_502": {"status": 502, "json": {"error": "bad gateway"}},
+  "transient_503": {"status": 503, "json": {"error": "temporarily unavailable"}},
+  "transient_504": {"status": 504, "json": {"error": "gateway timeout"}},
+  "rejected_400": {"status": 400, "json": {"error": "bad request"}},
+  "rejected_401": {"status": 401, "json": {"error": "unauthorized"}},
+  "rejected_403": {"status": 403, "json": {"error": "forbidden"}},
+  "rejected_404": {"status": 404, "json": {"error": "not found"}},
+  "rejected_422": {"status": 422, "json": {"error": "unprocessable request"}},
+  "labels_updated": {"status": 200, "json": {"success": true, "labels": [], "labelCount": 0}},
   "malformed": {
     "status": 200,
     "headers": {"Content-Type": "application/json"},

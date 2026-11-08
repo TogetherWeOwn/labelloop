@@ -117,13 +117,14 @@ def prepare(request: PlatformRequest) -> tuple[dict[str, Any], str]:
         raise WireError()
     route = ROUTES[request.operation.value]
     parameters = route["parameters"]
-    expected_path = {p["name"] for p in parameters if p["in"] == "path"}
-    if set(request.path) != expected_path:
+    path_parameters = {p["name"]: p for p in parameters if p["in"] == "path"}
+    if set(request.path) != path_parameters.keys():
         raise WireError()
     path = route["path"]
     for name, value in request.path.items():
         if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
             raise WireError()
+        validate_shape(value, path_parameters[name]["schema"])
         path = path.replace("{" + name + "}", value)
     query = {p["name"]: p for p in parameters if p["in"] == "query"}
     if set(request.query) - query.keys():

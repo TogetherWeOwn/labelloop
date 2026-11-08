@@ -1,4 +1,2 @@
-# Upstream OpenAPI examples contain only YOUR_GCP_PRIVATE_KEY inside PEM markers.
-# Exact historical fingerprints only; no path/rule exemption or future-commit suppression.
-0ff72807746152c3dc7327d69891a1285f34a18c:packages/platform/src/labelloop_platform/contract/openapi.json:private-key:22480
-0ff72807746152c3dc7327d69891a1285f34a18c:packages/platform/src/labelloop_platform/contract/openapi.json:private-key:22704
+# No commit fingerprints: classification must survive squash and new commit identities.
+# The sole inert OpenAPI example is matched by exact content AND path in .gitleaks.toml.

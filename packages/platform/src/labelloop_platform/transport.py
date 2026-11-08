@@ -291,7 +291,7 @@ class PlatformAdapter:
             return PlatformResult(Outcome.RATE_LIMITED, status, retry_at=retry_at)
         if status == 409 or (mutation and (status == 408 or status >= 500)):
             return PlatformResult(Outcome.RECONCILE_REQUIRED, status)
-        if status == 503:
+        if status == 408 or status >= 500:
             return PlatformResult(Outcome.UNAVAILABLE, status)
         return PlatformResult(Outcome.REJECTED, status)
 

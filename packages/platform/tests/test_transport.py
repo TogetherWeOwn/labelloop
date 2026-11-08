@@ -331,8 +331,105 @@ def test_storage_is_separate_no_bearer_cookies_redirects_or_secret_logs(caplog) 
 
 
 @pytest.mark.parametrize(
-    "host", ["127.0.0.1", "platform.ultralytics.com", "localhost", "host.local"]
+    "host",
+    [
+        "127.0.0.1",
+        "127.1",
+        "0177.0.0.1",
+        "0x7f.0.0.1",
+        "0x7f.1",
+        "2130706433",
+        "0x7f000001",
+        "127.0.0.01",
+        "8.8.8.010",
+        "platform.ultralytics.com",
+        "localhost",
+        "host.local",
+        "-bucket.example",
+        "bucket-.example",
+    ],
 )
-def test_storage_policy_rejects_local_or_platform_hosts(host) -> None:
+def test_storage_policy_rejects_local_or_ambiguous_hosts(host) -> None:
     with pytest.raises(ValueError, match="Invalid trusted storage host policy"):
         SignedStorage(frozenset({host}))
+
+
+@pytest.mark.parametrize(
+    "host", ["fixture-storage.example", "bucket-123.storage.example", "8.8.8.8"]
+)
+def test_storage_policy_accepts_approved_public_hosts(host) -> None:
+    replay = Replay("storage_created")
+    storage = SignedStorage(frozenset({host}), transport=httpx.MockTransport(replay))
+    assert storage.get(StorageTarget(f"https://{host}/artifact")).outcome == Outcome.SUCCEEDED
+    assert len(replay.requests) == 1
+    storage.close()
+
+
+@pytest.mark.parametrize("status", [408, 500, 502, 503, 504])
+@pytest.mark.parametrize("mutation", [False, True])
+def test_transient_platform_status_is_not_policy_rejection_or_automatic_retry(
+    status, mutation
+) -> None:
+    replay = Replay(f"transient_{status}")
+    client = adapter(replay)
+    request = training() if mutation else PlatformRequest(Operation.GPU_AVAILABILITY)
+    result = client.execute(request)
+    assert result.status_code == status
+    assert result.outcome == (Outcome.RECONCILE_REQUIRED if mutation else Outcome.UNAVAILABLE)
+    if mutation:
+        assert client.execute(request) == result
+    assert len(replay.requests) == 1
+    client.close()
+
+
+@pytest.mark.parametrize("status", [408, 500, 502, 503, 504])
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_transient_storage_status_preserves_read_write_semantics_without_retry(
+    status, method
+) -> None:
+    replay = Replay(f"transient_{status}")
+    storage = SignedStorage(
+        frozenset({"fixture-storage.example"}), transport=httpx.MockTransport(replay)
+    )
+    target = StorageTarget("https://fixture-storage.example/artifact")
+    result = storage.put(target, b"fixture") if method == "put" else storage.get(target)
+    assert result.status_code == status
+    assert result.outcome == (
+        Outcome.RECONCILE_REQUIRED if method == "put" else Outcome.UNAVAILABLE
+    )
+    assert len(replay.requests) == 1
+    storage.close()
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_request_errors_still_reject_for_platform_and_storage_reads(status) -> None:
+    replay = Replay(f"rejected_{status}", f"rejected_{status}")
+    client = adapter(replay)
+    storage = SignedStorage(
+        frozenset({"fixture-storage.example"}), transport=httpx.MockTransport(replay)
+    )
+    result = client.execute(PlatformRequest(Operation.GPU_AVAILABILITY))
+    assert (result.outcome, result.status_code) == (Outcome.REJECTED, status)
+    result = storage.get(StorageTarget("https://fixture-storage.example/artifact"))
+    assert (result.outcome, result.status_code) == (Outcome.REJECTED, status)
+    assert len(replay.requests) == 2
+    client.close()
+    storage.close()
+
+
+@pytest.mark.parametrize("image_id", ["fixture-image", "a" * 23, "a" * 25, "g" * 24])
+def test_invalid_path_does_not_consume_throttle_or_latch_mutation_id(image_id) -> None:
+    replay = Replay("labels_updated")
+    client = adapter(replay)
+    request = PlatformRequest(
+        Operation.REPLACE_LABELS, "replace-1", path={"imageId": image_id}, body={"labels": []}
+    )
+    assert client.execute(request).outcome == Outcome.REJECTED
+    assert replay.requests == []
+    assert client._throttle._calls == {}
+    assert client._writes == {}
+    corrected = replace(request, path={"imageId": "507f1f77bcf86cd799439011"})
+    assert client.execute(corrected).outcome == Outcome.SUCCEEDED
+    assert client.execute(corrected).outcome == Outcome.SUCCEEDED
+    assert len(replay.requests) == 1
+    client.close()
