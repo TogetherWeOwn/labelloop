@@ -76,6 +76,13 @@ auth events. No canonical annotation or model record is modified. Downgrade remo
 these authentication tables, so all existing sessions and audit history are lost;
 back up before an authorized rollback. There is no startup auto-migration.
 
+`auth_budget_0001` is a no-DDL merge of `0003_authentication` and the independently
+landed `budget_0002` head. It preserves both historical migration chains, giving
+`alembic upgrade head` one unambiguous target. Alembic metadata includes canonical,
+model, authentication and budget tables. Actions exercises clean upgrade, downgrade
+to base and re-upgrade against PostgreSQL; the graph regression checks that both
+histories remain reachable. No live/shared database is migrated by this change.
+
 Login successes/failures, logout and authenticated permission/CSRF refusals record
 the resolved principal (or null for unknown logins). Events never contain supplied
 names, passwords, tokens, headers, request paths or bodies. Validation errors return
