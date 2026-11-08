@@ -966,14 +966,23 @@ def exercise_context_assembly(engine, release, final, context, actor):
         with connection.begin_nested() as real_policy_transaction:
             current = load_qualification_policy(connection, **scope)
             targets = replace(current.policy.targets, fixture_only=False)
+            from labelloop_core.qualification_data import record_sha256
+
+            pipeline = replace(
+                current.policy.pipeline, acceptance_policy_sha256=record_sha256(targets)
+            )
             append_qualification_policy(
                 connection,
                 **scope,
                 actor_id=actor,
                 expected_revision=current.revision,
-                policy=replace(current.policy, targets=targets),
+                policy=replace(current.policy, pipeline=pipeline, targets=targets),
             )
-            replay = replace(loaded, evidence=replace(loaded.evidence, targets=targets))
+            replay = replace(
+                loaded,
+                current_pipeline=pipeline,
+                evidence=replace(loaded.evidence, pipeline=pipeline, targets=targets),
+            )
             message = "audit sample lacks the exact original acceptance pipeline"
             with pytest.raises(ValueError, match=message):
                 load_qualification_context(connection, **arguments)

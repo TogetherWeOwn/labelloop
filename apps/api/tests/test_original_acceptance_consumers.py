@@ -73,12 +73,10 @@ def test_strict_recovery_never_backfills_or_filters(monkeypatch, side, failure):
         reader.assert_not_called()
     if failure == "legacy":
         # Historical adverse inspection stays available, but is not provenance proof.
-        assert (
-            store.load_audit_sample(
-                StoredSample(saved), project_id="project-uuid", sample_key=frozen.sample.sample_id
-            )
-            == frozen
-        )
+        assert store.load_audit_sample(
+            StoredSample(saved), project_id="project-uuid", sample_key=frozen.sample.sample_id
+        ) == replace(frozen, population_sha256=saved["population_sha256"])
+        assert saved["population_sha256"] != frozen.population_sha256
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -115,9 +113,14 @@ def test_real_consumers_require_both_original_samples_without_promoting_fixture_
     connection, args, context, readers = setup(monkeypatch, side)
     policy = readers["load_qualification_policy"].return_value
     targets = replace(context.evidence.targets, fixture_only=fixture_only)
-    context = replace(context, evidence=replace(context.evidence, targets=targets))
+    pipeline = replace(context.evidence.pipeline, acceptance_policy_sha256=record_sha256(targets))
+    context = replace(
+        context,
+        current_pipeline=pipeline,
+        evidence=replace(context.evidence, pipeline=pipeline, targets=targets),
+    )
     readers["load_qualification_policy"].return_value = replace(
-        policy, policy=replace(policy.policy, targets=targets)
+        policy, policy=replace(policy.policy, pipeline=pipeline, targets=targets)
     )
     guard = MagicMock(side_effect=ValueError("unproven original population"))
     monkeypatch.setattr(assembler, "require_automatic_audit_samples", guard)
