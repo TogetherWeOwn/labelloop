@@ -282,6 +282,34 @@ audit-failure rollback. New cases are commissioned, **not passing evidence until
 exact-head Actions completes**. These cases do not establish sessions/CSRF, full
 setup lifecycle, grouping publication, fenced jobs or project-to-export.
 
+## Shared queue transaction composition (preparation, unmounted)
+
+`JobStore.enqueue_in_transaction(connection, ...)` accepts an already-active
+psycopg transaction and appends intent to the **existing** `worker_job` table.
+It opens no connection and does not begin, commit, roll back or close the caller's
+transaction. Idle connections (including autocommit connections) are refused.
+The existing standalone `enqueue` wraps this same implementation in its own
+transaction, preserving one input-validation/replay path. Project/operation
+uniqueness, canonical JSON comparison and the bounded retry budget are unchanged;
+claiming, fenced leases, stage artifacts and result publication are untouched.
+
+This is the producer prerequisite for committing management state, attributed
+canonical events and async intent together. The existing standalone enqueue is
+**not** safe to call after a management commit and describe as atomic. The final
+adapter must supply the same database transaction, retain authenticated ownership,
+aggregate/expected-revision and actor-scoped retry checks, and let any enqueue,
+audit or state failure roll the entire transaction back. This helper grants none
+of that authority and does not resolve a handler, endpoint, credential or spend
+from request/model data.
+
+Disposable Actions queue cases cover state/event/job visibility before commit,
+commit versus caller/audit-failure rollback under both connection autocommit modes,
+existing-worker consumption, replay normalization, kind/input/budget conflicts,
+concurrent unique-key callers, idle-connection refusal and unchanged invalid-input
+controls. These new cases are commissioned, not verified until exact-head Actions
+completes. No new queue/table/migration/runtime grant, management async binding,
+worker handler, default route mount or project-to-export acceptance is enabled.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
