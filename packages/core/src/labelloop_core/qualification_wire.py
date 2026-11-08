@@ -13,7 +13,7 @@ from typing import Any, Literal, Union, cast, get_args, get_origin, get_type_hin
 from .audit import AuditSample
 from .drift import AcceptanceState
 from .evaluation_lifecycle import CandidateSelection, FinalTestState
-from .qualification import QualificationContext, QualificationEvidence
+from .qualification import QualificationContext, QualificationEvidence, QualificationPolicy
 from .qualification_data import canonical_record
 
 SCHEMA = "labelloop.qualification.v1"
@@ -25,6 +25,7 @@ _ROOTS = (
     FinalTestState,
     QualificationContext,
     QualificationEvidence,
+    QualificationPolicy,
 )
 type QualificationRecord = (
     AuditSample
@@ -33,6 +34,7 @@ type QualificationRecord = (
     | FinalTestState
     | QualificationContext
     | QualificationEvidence
+    | QualificationPolicy
 )
 
 
@@ -127,6 +129,7 @@ def loads[
         FinalTestState,
         QualificationContext,
         QualificationEvidence,
+        QualificationPolicy,
     )
 ](payload: str, record_type: type[Record]) -> Record:
     if record_type not in _ROOTS or len(payload.encode()) > MAX_RECORD_BYTES:

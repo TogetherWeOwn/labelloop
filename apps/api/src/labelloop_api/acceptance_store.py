@@ -13,6 +13,7 @@ from labelloop_api import model_schema, qualification_schema
 from labelloop_api.annotation_audit_store import lock_project, require_no_annotation_veto
 from labelloop_api.final_test_store import current_qualification_context
 from labelloop_api.model_store import load_registry, stored_report
+from labelloop_api.qualification_policy_store import current_policy_context
 from labelloop_api.schema import preprocessing_recipe
 from labelloop_core.drift import AcceptanceState
 from labelloop_core.qualification import QualificationContext
@@ -132,7 +133,8 @@ def _qualified_champion(connection, project_key, recipe_key, evaluation_key, qua
     ).scalar_one()
     project_id = lock_project(connection, project_key)
     require_no_annotation_veto(connection, project_id=project_id, model_id=model_id)
-    context = current_qualification_context(connection, qualification)
+    context = current_policy_context(connection, qualification)
+    context = current_qualification_context(connection, context)
     report = stored_report(connection, release, evaluation_key)
     return release, report, context
 

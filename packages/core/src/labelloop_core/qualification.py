@@ -111,6 +111,20 @@ class QualificationTargets:
             raise ValueError("null critical slice targets retain the incumbent")
 
 
+@dataclass(frozen=True, slots=True)
+class QualificationPolicy:
+    """Versioned service-owned configuration, not proof of pipeline execution."""
+
+    pipeline: PipelineIdentity
+    scope: tuple[ScopeCell, ...]
+    targets: QualificationTargets
+
+    def __post_init__(self) -> None:
+        require_scope(self.scope)
+        if self.pipeline.acceptance_policy_sha256 != record_sha256(self.targets):
+            raise ValueError("qualification pipeline must bind the exact configured targets")
+
+
 def audit_sample_size(error_target: float | None, audit_min_sample: int | None) -> int:
     """Independent error-free cases for the one-sided 95% bound; null is reporting only."""
     if audit_min_sample is not None:

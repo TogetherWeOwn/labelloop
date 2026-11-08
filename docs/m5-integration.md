@@ -333,6 +333,47 @@ gitleaks and standards passed; web-build was path-skipped. This verifies the ear
 current-group checks with the repaired locked-assignment fixture, not this new loader
 or milestone acceptance. Required reviews remain gates and the PR stays draft.
 
+## Current qualification configuration journal — new assertions pending Actions
+
+`qualification_policy_store` persists the exact targets, full pipeline identity and
+supported class/source/condition scope as append-only, expected-revision versions.
+Null targets remain valid configuration but cannot qualify. Strict typed decoding
+rejects substituted roots and foreign project/recipe records. The pipeline fingerprint
+must bind the exact targets. `qualification_0005` follows `qualification_0004` and
+adds `qualification_policy_event`; historical migration DDL is unchanged. Restore
+inventory must include the new table and its full history.
+
+Registry promotion, drift resumption and each automatic-acceptance guard now load
+current configuration under the shared project lock before the current final-test
+journal. Missing configuration or different evidence targets, scope or pipeline fails
+closed. Historical contexts cannot select a permissive old configuration; rollback
+remains distinct from automatic acceptance. Synthetic fixtures explicitly persist their
+fixture-only configurations instead of bypassing the new gate. The Actions PostgreSQL
+exercise checks reconnects, changed pipeline/scope/null-target rejection by the actual
+registry and acceptance stores with unchanged heads/event counts, a restored-configuration
+control, one expected-revision race winner, immutable update/delete/truncate and failed
+append rollback. New assertions await exact-head Actions; no local tests were run.
+
+This configuration store is not authentication or proof that a declared pipeline ran.
+The authorized service must still validate canonical pipeline inputs, original acceptance
+and score/threshold provenance, independent audit measurements, teacher lineage and
+fresh canary evidence. Full qualification assembly, authenticated promotion/annotation/
+operational wiring and expanded restore/UI acceptance remain incomplete. No new HTTP
+endpoint, runtime, spend, credential change or production action is introduced.
+
+The preceding audit-loader head `aa66860e699e6774d1f5064d7b64fb83f936e2da` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42457825894) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42457825561).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42457825894/job/128660559967)
+reported **1131 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42457825894/job/128660559968)
+reported **19 passed**, plus **24 passed** in the separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42457825894/job/128660559947)
+reported **39 passed**. Migration cycles/dev-stack/lint/types/import-contract/gitleaks/
+standards passed; web-build was path-skipped. This verifies the prior audit loader,
+not the new policy journal, HTTP/UI/restore acceptance or domain quality. Native,
+fresh-context and required Devin reviews remain gates; the PR stays draft.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

@@ -6,11 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 import sqlalchemy as sa
 
-from labelloop_api import final_test_store, model_store
+from labelloop_api import final_test_store, model_store, qualification_policy_store
 
 
 @pytest.mark.parametrize(
-    "scenario", ["current", "missing", "foreign-project", "foreign-recipe", "foreign-final"]
+    "scenario",
+    ["current", "missing", "missing-policy", "foreign-project", "foreign-recipe", "foreign-final"],
 )
 def test_registry_requires_current_scoped_final_journal_before_promotion(scenario):
     pipeline = SimpleNamespace(project_id="project", recipe_id="recipe")
@@ -47,6 +48,9 @@ def test_registry_requires_current_scoped_final_journal_before_promotion(scenari
         patch.object(model_store, "asdict", return_value={}),
         patch.object(model_store, "qualification_json", return_value='{"current":true}'),
         patch.object(
+            qualification_policy_store, "current_policy_context", side_effect=lambda _, value: value
+        ) as policy_reload,
+        patch.object(
             final_test_store, "current_qualification_context", return_value=current
         ) as reload,
     ):
@@ -62,6 +66,11 @@ def test_registry_requires_current_scoped_final_journal_before_promotion(scenari
         )
         if scenario.startswith("foreign"):
             with pytest.raises(ValueError, match="cross project or recipe"):
+                model_store.change_registry(connection, **kwargs)
+            reload.assert_not_called()
+        elif scenario == "missing-policy":
+            policy_reload.side_effect = ValueError("missing current qualification policy")
+            with pytest.raises(ValueError, match="missing current qualification policy"):
                 model_store.change_registry(connection, **kwargs)
             reload.assert_not_called()
         elif scenario == "missing":

@@ -402,9 +402,9 @@ def change_registry(
 
     candidate_key=None requests rollback. The caller must authenticate/authorize the admin;
     this internal store deliberately does not expose principal claims through HTTP.
-    Qualification is a trusted read port, not a request body. Current final-test
-    state is always reloaded under the project lock. Until authenticated, locked
-    policy/pipeline/audit/canary loaders are wired, production callers must omit the
+    Qualification is a trusted read port, not a request body. Current configuration
+    and final-test state are always reloaded under the project lock. Until authenticated
+    audit/canary and pipeline-execution provenance loaders are wired, callers must omit the
     context and promotion fails closed. Synthetic fixtures exercise the port explicitly.
     """
     if not actor_id.strip():
@@ -463,6 +463,7 @@ def change_registry(
             if qualification is not None:
                 # The journal also reads persisted model reports via this module.
                 from labelloop_api.final_test_store import current_qualification_context
+                from labelloop_api.qualification_policy_store import current_policy_context
 
                 if (
                     qualification.evidence.final_test.dataset.project_id != project_key
@@ -472,6 +473,7 @@ def change_registry(
                     raise ValueError(
                         "promotion qualification cannot cross project or recipe boundaries"
                     )
+                qualification = current_policy_context(connection, qualification)
                 qualification = current_qualification_context(connection, qualification)
             incumbent = (
                 stored_report(connection, state.champion, incumbent_evaluation_key)

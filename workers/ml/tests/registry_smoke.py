@@ -192,6 +192,9 @@ def fixture_change_registry(connection, **kwargs):
             lineage=replace(context.evidence.lineage, development=development_set),
         ),
     )
+    from qualification_policy_smoke import fixture_policy
+
+    fixture_policy(connection, kwargs["qualification"], actor)
     return change_registry(connection, **kwargs)
 
 

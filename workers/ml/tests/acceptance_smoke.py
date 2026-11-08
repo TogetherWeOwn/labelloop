@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 import sqlalchemy as sa
 from qualification_fixture import qualification_context, synthetic_final
+from qualification_policy_smoke import exercise_policy, fixture_policy
 
 from labelloop_api import model_schema, qualification_schema
 from labelloop_api.acceptance_store import (
@@ -66,6 +67,9 @@ def exercise_acceptance(
             .all()
         )
 
+    with engine.begin() as connection:
+        fixture_policy(connection, context, actor)
+    policy_evidence = exercise_policy(engine, context, actor, final.run_id)
     with engine.begin() as connection:
         before = load_acceptance(connection, **scope)
         assert before.revision == 0
@@ -226,6 +230,7 @@ def exercise_acceptance(
             ),
         )
         qualified.require_qualified(model, report)
+        fixture_policy(connection, qualified, actor)
         return model, report, qualified, incumbent_report
 
     with engine.begin() as connection:
@@ -379,6 +384,7 @@ def exercise_acceptance(
                 )
     return {
         "scope": "synthetic scoped drift persistence, not domain quality or HTTP authorization",
+        "current_policy_journal": policy_evidence,
         "registry_reloaded_final_after_adaptation_and_quarantine": True,
         "stale_final_preserved_complete_head_and_event_count": True,
         "paused_and_resumed_across_connections": True,
