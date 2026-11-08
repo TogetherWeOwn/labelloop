@@ -106,6 +106,422 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_training(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
+    from uuid import UUID
+
+    from labelloop_api.management_training import (
+        ApprovedTrainingProfile,
+        CanonicalManagementTraining,
+    )
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+    assert JobRunner(
+        compiler_worker.store,
+        "compile_variant",
+        (Stage("compilation", compiler_worker.compile),),
+        compiler_worker.publish,
+        job_id=accepted.job_id,
+    ).run_once("fixture-compiler")
+    profiles = (ApprovedTrainingProfile(UUID(created.id), "baseline", 1, recipe, "1" * 64),)
+    return CanonicalManagementTraining(service, compilation.enqueue, profiles), created, accepted
+
+
+@pytest.fixture
+def training_ready(database, compilation, compiler_worker):
+    return prepared_training(database, compilation, compiler_worker)
+
+
+def training_request(
+    training, variant_id, *, key="train", actor=None, revision=1, profile="baseline"
+):
+    from labelloop_api.management_contracts import TrainingStart
+
+    actor = actor or Actor()
+    payload = TrainingStart(expected_revision=revision, training_profile_id=profile)
+    context = MutationContext.bind(actor, key, "start_training", variant_id, payload)
+    return training.start_training(actor, context, payload)
+
+
+def training_receipts(owner, variant_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.start_training",
+                canonical_event.c.aggregate_id == variant_id,
+            )
+        ).all()
+
+
+def training_jobs(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            text("SELECT * FROM worker_job WHERE project_key=:key AND kind='train_local'"),
+            {"key": pack_key(owner, project_id)},
+        ).all()
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_training_intent_pins_real_compilation_and_server_profile_in_caller_transaction(
+    database, compilation, compiler_worker, recipe
+):
+    import hashlib
+
+    from labelloop_compiler.compiler import json_bytes
+    from labelloop_core.training import InferencePolicy, TrainingRequest
+
+    training, created, compiled = prepared_training(database, compilation, compiler_worker, recipe)
+    service, owner, role = database
+
+    def enqueue(connection, *args, **kwargs):
+        assert connection.execute("SELECT current_user").fetchone()[0] == role
+        job_id = training.enqueue(connection, *args, **kwargs)
+        assert training_jobs(owner, created.id) == []
+        assert training_receipts(owner, compiled.resource.id) == []
+        return job_id
+
+    accepted = training_request(replace(training, enqueue=enqueue), compiled.resource.id)
+    rows = training_jobs(owner, created.id)
+    receipts = training_receipts(owner, compiled.resource.id)
+    assert len(rows) == len(receipts) == 1
+    row = rows[0]
+    assert row.job_id == accepted.job_id and row.status == "queued" and row.max_attempts == 3
+    assert receipts[0].actor_id == Actor().id and receipts[0].actor_kind == "human"
+    assert row.input == receipts[0].payload["evidence"]["inputs"]
+    assert row.input["variant_id"] == compiled.resource.id
+    assert row.input["compile_job_id"] == compiled.job_id
+    assert row.input["workspace_id"] == str(service.workspace_id)
+    assert row.input["requested_by"] == Actor().id
+    request = row.input["request"].copy()
+    request["policy"] = InferencePolicy(**request["policy"])
+    request = TrainingRequest(**request)
+    assert request.run_id == accepted.resource.id and request.project_id == created.id
+    assert request.recipe_id == recipe and request.policy.imgsz == (320 if "320" in recipe else 640)
+    manifest = publication_state(owner, compiled)[0]
+    assert request.dataset_manifest_sha256 == hashlib.sha256(json_bytes(manifest)).hexdigest()
+    assert request.class_map_sha256 == manifest["file_hashes"]["class-map.json"]
+    assert request.initialization_sha256 == "1" * 64
+    assert row.input["profile"]["arguments"] == request.arguments()
+    assert row.input["initialization_key"] == "sha256/11/" + "1" * 64
+    lease = compiler_worker.store.claim("train_local", "fixture-ml", job_id=accepted.job_id)
+    assert lease is not None and lease.input == row.input
+    assert training_request(training, compiled.resource.id) == accepted
+    # Profile removal cannot erase or replace an already-authorized retry receipt.
+    assert training_request(replace(training, profiles=()), compiled.resource.id) == accepted
+    assert len(training_jobs(owner, created.id)) == 1
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read(Actor(), "project", created.id)
+        .revision
+        == 3
+    )
+
+
+@pytest.mark.parametrize(
+    "grant", ["INSERT ON worker_job", "SELECT ON worker_job", "INSERT ON canonical_event"]
+)
+def test_training_intent_grant_failure_rolls_back_queue_and_audit(database, training_ready, grant):
+    from psycopg.errors import InsufficientPrivilege
+
+    training, created, compiled = training_ready
+    _, owner, role = database
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{role}"'))
+    with pytest.raises((DBAPIError, InsufficientPrivilege)):
+        training_request(training, compiled.resource.id)
+    assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{role}"'))
+    assert training_request(training, compiled.resource.id).resource.state == "queued"
+
+
+def test_training_intent_caller_failure_rolls_back_real_queue(database, training_ready):
+    training, created, compiled = training_ready
+    _, owner, _ = database
+
+    def enqueue(*args, **kwargs):
+        training.enqueue(*args, **kwargs)
+        raise RuntimeError("synthetic training caller failure")
+
+    with pytest.raises(RuntimeError, match="synthetic training caller failure"):
+        training_request(replace(training, enqueue=enqueue), compiled.resource.id)
+    assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_training_intent_concurrent_retry_and_unique_profile(database, training_ready, same_key):
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait(timeout=10)
+        try:
+            return training_request(
+                training, compiled.resource.id, key="same" if same_key else str(index)
+            )
+        except ManagementFailure as exc:
+            return exc.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    if same_key:
+        assert results[0] == results[1]
+    else:
+        assert results.count("revision_conflict") == 1
+    assert len(training_jobs(owner, created.id)) == 1
+    assert len(training_receipts(owner, compiled.resource.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        Actor(role="reviewer"),
+        Actor(kind="service", role="worker_core"),
+        Actor(kind="service", role="worker_ml"),
+        Actor(kind="service", role="worker_llm"),
+        Actor(kind="service", role="worker_platform"),
+    ],
+)
+def test_training_intent_denies_nonadmin_before_queue(database, training_ready, actor):
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    with pytest.raises(ManagementFailure) as exc:
+        training_request(training, compiled.resource.id, actor=actor)
+    assert exc.value.error.detail == "permission_denied"
+    assert training_jobs(owner, created.id) == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "foreign_workspace",
+        "unknown_variant",
+        "unknown_profile",
+        "foreign_profile",
+        "wrong_recipe",
+        "stale_revision",
+        "forged_context",
+        "unpublished_variant",
+    ],
+)
+def test_training_intent_refuses_untrusted_or_inaccessible_inputs(
+    database, training_ready, failure
+):
+    from labelloop_api.management_contracts import TrainingStart
+
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    variant_id = compiled.resource.id
+    profile = training.profiles[0]
+    expected = "not_found"
+    if failure == "foreign_workspace":
+        training = replace(training, mutations=replace(training.mutations, workspace_id=uuid4()))
+    elif failure == "unknown_variant":
+        variant_id = str(uuid4())
+    elif failure == "unknown_profile":
+        training = replace(training, profiles=())
+    elif failure == "foreign_profile":
+        training = replace(training, profiles=(replace(profile, project_id=uuid4()),))
+    elif failure == "wrong_recipe":
+        training = replace(
+            training, profiles=(replace(profile, recipe_id="full-letterbox-640-v1"),)
+        )
+        expected = "incompatible_recipe"
+    elif failure == "stale_revision":
+        expected = "revision_conflict"
+    elif failure == "forged_context":
+        expected = "invalid_request"
+    elif failure == "unpublished_variant":
+        from labelloop_api.management_compilation import CanonicalManagementCompilation
+
+        manifest = publication_state(owner, compiled)[0]
+        queued = compile_request(
+            CanonicalManagementCompilation(training.mutations, training.enqueue),
+            manifest["release_id"],
+            key="queued-640",
+            recipe="full-letterbox-640-v1",
+        )
+        variant_id = queued.resource.id
+    payload = TrainingStart(
+        expected_revision=2 if failure == "stale_revision" else 1, training_profile_id="baseline"
+    )
+    context = MutationContext.bind(Actor(), "train", "start_training", variant_id, payload)
+    if failure == "forged_context":
+        context = replace(context, actor_id="forged")
+    with pytest.raises(ManagementFailure) as exc:
+        training.start_training(Actor(), context, payload)
+    assert exc.value.error.detail == expected
+    assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing_receipt",
+        "duplicate_receipt",
+        "compile_not_completed",
+        "forged_job_input",
+        "missing_freeze",
+    ],
+)
+def test_training_requires_fenced_compiler_and_historical_snapshot(
+    database, training_ready, failure
+):
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    with owner.begin() as connection:
+        if failure in {"missing_receipt", "missing_freeze"}:
+            connection.execute(
+                canonical_event.delete().where(
+                    canonical_event.c.event_type
+                    == (
+                        "management.variant_compiled"
+                        if failure == "missing_receipt"
+                        else "management.freeze_release"
+                    ),
+                    canonical_event.c.aggregate_id
+                    == (compiled.resource.id if failure == "missing_receipt" else created.id),
+                )
+            )
+        elif failure == "duplicate_receipt":
+            receipt = connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.event_type == "management.variant_compiled",
+                    canonical_event.c.aggregate_id == compiled.resource.id,
+                )
+            ).one()
+            connection.execute(
+                insert(canonical_event).values(
+                    event_type=receipt.event_type,
+                    aggregate_id=receipt.aggregate_id,
+                    expected_revision=receipt.expected_revision,
+                    payload=receipt.payload,
+                    actor_kind=receipt.actor_kind,
+                    actor_id=receipt.actor_id,
+                )
+            )
+        elif failure == "compile_not_completed":
+            connection.execute(
+                text("UPDATE worker_job SET status='failed' WHERE job_id=:id"),
+                {"id": compiled.job_id},
+            )
+        else:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET input=jsonb_set(input,'{variant_id}','\"forged\"') "
+                    "WHERE job_id=:id"
+                ),
+                {"id": compiled.job_id},
+            )
+    with pytest.raises(ManagementFailure) as exc:
+        training_request(training, compiled.resource.id)
+    assert exc.value.error.detail == "missing_evidence"
+    assert training_jobs(owner, created.id) == []
+
+
+def test_training_profiles_are_select_only_project_scoped_and_retries_precede_revision(
+    database, training_ready
+):
+    training, created, compiled = training_ready
+    _, owner, role = database
+    profiles = training.list_training_profiles(Actor(), created.id)
+    assert [item.id for item in profiles.profiles] == ["baseline"]
+    profile = training.profiles[0]
+    other = replace(profile, id="experiment", seed=9)
+    training = replace(training, profiles=(profile, other))
+    first = training_request(training, compiled.resource.id)
+    with pytest.raises(ManagementFailure) as exc:
+        training_request(training, compiled.resource.id, revision=2)
+    assert exc.value.error.detail == "idempotency_conflict"
+    with pytest.raises(ManagementFailure) as exc:
+        training_request(training, compiled.resource.id, key="new-key")
+    assert exc.value.error.detail == "revision_conflict"
+    second = training_request(
+        training, compiled.resource.id, key="experiment", profile="experiment"
+    )
+    third = training_request(
+        replace(training, profiles=(replace(profile, revision=2),)),
+        compiled.resource.id,
+        key="revision-two",
+    )
+    assert len({first.job_id, second.job_id, third.job_id}) == 3
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    reader = type(
+        "Reader",
+        (),
+        {
+            "id": "reviewer",
+            "kind": "human",
+            "role": "reviewer",
+            "permits": lambda self, p: p == "review",
+        },
+    )()
+    assert training.list_training_profiles(reader, created.id).profiles[0] == profiles.profiles[0]
+    with pytest.raises(ManagementFailure) as exc:
+        training.list_training_profiles(reader, str(uuid4()))
+    assert exc.value.error.detail == "not_found"
+    with pytest.raises(ManagementFailure) as exc:
+        training.list_training_profiles(Actor(kind="service"), created.id)
+    assert exc.value.error.detail == "permission_denied"
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_training_intent_binds_real_shared_session_and_csrf(
+    database, training_ready, restricted_auth_store, auth_account, role
+):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.main import create_app
+
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    identity, credentials = auth_account
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    origin = "https://testserver"
+    operations = SimpleNamespace(
+        start_training=training.start_training,
+        list_training_profiles=training.list_training_profiles,
+    )
+    body = {"expected_revision": 1, "training_profile_id": "baseline"}
+    path = f"/variants/{compiled.resource.id}/training-runs"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200
+        assert client.get(f"/projects/{created.id}/training-profiles").status_code == 200
+        assert client.post(path, json=body, headers={"Idempotency-Key": "train"}).status_code == 403
+        assert training_jobs(owner, created.id) == []
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "train",
+        }
+        response = client.post(path, json=body, headers=headers)
+        if role == "reviewer":
+            assert response.status_code == 403
+            assert training_jobs(owner, created.id) == []
+        else:
+            assert response.status_code == 202, response.text
+            assert client.post(path, json=body, headers=headers).json() == response.json()
+            assert training_receipts(owner, compiled.resource.id)[0].actor_id == identity
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
 @pytest.fixture
 def compilation(database):
     from labelloop_api.management_compilation import CanonicalManagementCompilation

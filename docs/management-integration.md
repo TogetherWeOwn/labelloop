@@ -395,6 +395,51 @@ not verified until exact-head Actions completes. Training/evaluation/export,
 operational grants, final mounts and actual project-to-export acceptance remain
 incomplete; neither this handler nor its fixture claims model qualification.
 
+### Canonical local-training producer (partial, unmounted)
+
+`CanonicalManagementTraining(mutations, enqueue, profiles)` binds local training
+intent to the same SQLAlchemy/psycopg transaction and existing queue, not a second
+training controller. `ApprovedTrainingProfile` is immutable trusted server
+configuration scoped to one canonical project, with unique public ID/revision,
+recipe, initialization digest, epochs, batch and seed. Construction validates the
+delivered `TrainingRequest` and public read contract; no caller can pass arbitrary
+arguments, checkpoint paths, endpoints, GPU or paid backend. The delivered recipe
+supplies 320/640 shape and the existing baseline supplies every resolved argument.
+Production profile approval/provisioning and checkpoint storage remain deployment
+prerequisites; accepting this configuration does not create an approval UI.
+
+The authorized profile read is SELECT-only and exposes only profiles for the
+owned managed project. `start_training` requires a human admin, bound context,
+workspace ownership, the immutable variant revision and a compatible project
+profile. It takes the existing project/retry locks. A queued compile identity is
+not a published variant. Before enqueue it verifies the real system-attributed
+compiler completion, succeeded job and matching application generation, saved
+stage artifact, manifest/content/class-map hashes and immutable recipe/variant
+records. It reuses the compiler's historical snapshot/receipt rehydration; later
+canonical reviews cannot silently replace the compiled training inputs.
+
+The training input pins the exact compiled variant, producer job, manifest,
+profile ID/revision/arguments, initialization content key, core `TrainingRequest`
+and authenticated requester. One variant/profile revision has one intent across
+actors/keys; distinct profiles/revisions can express distinct controlled
+experiments. Exact retries return the accepted job even after claim or profile
+configuration removal, never re-resolve historical intent from current config.
+Changing a key's body conflicts. The receipt and job commit or roll back together;
+neither dispatch nor replay advances the project revision or claims a completed
+training run. The trusted queue kind is `train_local`; no handler is registered.
+
+Disposable Actions cases compose actual project/freeze/compile publication with
+this producer at both sizes and test precommit invisibility, restricted-role
+queue/audit/caller rollback, concurrent retry/unique-profile intents, profile and
+workspace isolation, revision/context/principal refusals, missing/ambiguous
+compiler authority, SELECT-only profiles and real shared-session/CSRF dispatch.
+Profile configuration cases validate immutable bounds and baseline arguments.
+These are commissioned cases, not a pass until exact-head Actions completes.
+No new table/migration, dependency, production grant, default mount, paid call or
+model loading is introduced. The actual training handler, checkpoint byte
+verification, fenced model completion, training detail reads, evaluation/export
+and full CPU project-to-export acceptance remain incomplete.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
