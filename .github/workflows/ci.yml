@@ -231,6 +231,10 @@ jobs:
           EXPECTED_LINT_MATCHER: "11.0.4"
       - name: Require the generated lockfile to be committed
         run: git diff --exit-code -- pnpm-lock.yaml
+      - name: Check generated API client drift
+        run: |
+          pnpm --dir apps/web generate:api
+          git diff --exit-code -- apps/web/src/api/schema.d.ts
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test

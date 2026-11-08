@@ -69,9 +69,9 @@ no DDL or write transaction; existing PostgreSQL migration Actions remain mandat
 GitHub Actions is the CI of record; no local full suite or CI mirror is required.
 
 Pydantic response contracts appear in the application's generated OpenAPI structure;
-the public schema route remains disabled. A checked-in generated OpenAPI artifact,
-generated web client and drift check remain part of the complete S2 contract delivery,
-not established by checking route presence here. Subsequent review-view assembly must
+the public schema route remains disabled. The subsequent [API consumer contract](m3-api-client.md)
+adds a checked-in generated OpenAPI snapshot, typed annotation-read browser consumer
+and Actions drift checks for the delivered routes, not complete S2. Subsequent review-view assembly must
 add undecided proposals, approved nonholdout references, queue/audit state and history
 with the correct per-object provenance. Expected-revision writes, human completeness,
 exclusions, worker-operation scopes, adjudication/audit and the accepted review UI
