@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
+from annotation_evidence_smoke import exercise_annotation_evidence
 
 from labelloop_api import qualification_schema
 from labelloop_api.annotation_audit_store import (
@@ -12,6 +13,7 @@ from labelloop_api.annotation_audit_store import (
     lock_project,
     record_annotation_audit,
 )
+from labelloop_api.annotation_evidence_store import load_annotation_evidence
 from labelloop_api.audit_sample_store import freeze_audit_sample, load_audit_sample
 from labelloop_api.schema import (
     annotation_revision,
@@ -351,8 +353,10 @@ def exercise_audit_sampling(engine, request):
             ).scalar_one()
             == 0
         )
+    measured = exercise_annotation_evidence(engine, request)
     exercise_current_groups(engine, request, arguments, project_id, frozen, observations)
     return {
+        "measured_outcomes": measured,
         "scope": "synthetic sampling/persistence only, not independent truth or HTTP acceptance",
         "current_transitive_group_checks_and_writer_fence": True,
         "observations_bound_to_sample_and_release": True,
@@ -503,6 +507,19 @@ def exercise_current_groups(engine, request, arguments, project_id, frozen, obse
             )
             with pytest.raises(ValueError, match="cross pinned splits"):
                 load_annotation_audit(connection, **result_args)
+            measured_args = dict(
+                project_key=request.project_id,
+                release_key=request.dataset_release_id,
+                audit_key="sample-complete",
+                evidence_key="measured-complete",
+            )
+            with pytest.raises(ValueError, match="cross pinned splits"):
+                load_annotation_evidence(connection, **measured_args)
+            measured = load_annotation_evidence(
+                connection, **measured_args, require_current_groups=False
+            )
+            assert measured.evidence.sample == frozen.sample
+            assert measured.evidence.truth_basis == "constructive_synthetic"
             historical = load_annotation_audit(
                 connection, **result_args, require_current_groups=False
             )

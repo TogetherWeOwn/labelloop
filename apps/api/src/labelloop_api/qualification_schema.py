@@ -105,6 +105,23 @@ final_test_event = sa.Table(
     sa.CheckConstraint("revision >= 0 AND length(trim(actor_id)) > 0"),
     sa.CheckConstraint("action IN ('register','expose','adapt','quarantine')"),
 )
+annotation_evidence = sa.Table(
+    "qualification_annotation_evidence",
+    metadata,
+    sa.Column("project_id", UUID, sa.ForeignKey(project.c.id), primary_key=True),
+    sa.Column("evidence_key", sa.String, primary_key=True),
+    sa.Column("audit_id", UUID, sa.ForeignKey("qualification_annotation_audit.id"), nullable=False),
+    sa.Column("actor_id", sa.String, nullable=False),
+    sa.Column("record", sa.JSON, nullable=False),
+    sa.Column("canary_model_id", UUID, sa.ForeignKey(model_release.c.id), nullable=True),
+    sa.Column("canary_release_sha256", sa.String(64), nullable=True),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    ),
+    sa.CheckConstraint("length(trim(actor_id)) > 0 AND length(trim(evidence_key)) > 0"),
+    sa.CheckConstraint("(canary_model_id IS NULL) = (canary_release_sha256 IS NULL)"),
+    sa.CheckConstraint("canary_release_sha256 IS NULL OR canary_release_sha256 ~ '^[0-9a-f]{64}$'"),
+)
 annotation_audit = sa.Table(
     "qualification_annotation_audit",
     metadata,

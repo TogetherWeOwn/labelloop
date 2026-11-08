@@ -420,6 +420,45 @@ original acceptance/score/threshold and source/condition provenance, full audit/
 assembly, authenticated promotion/operational adapters and expanded restore/UI
 acceptance remain incomplete. The PR stays draft and all existing reviews remain gates.
 
+## Measured audit and candidate-bound canary outcome persistence
+
+`annotation_evidence_store` retains the existing typed `AnnotationEvidence` contract,
+including measured numerators/denominators, geometry error, truth-basis marker,
+source/condition metadata and incident links. It binds every outcome to an exact
+committed project/release/audit, sample, observations and canonical group map.
+Complete, partial and adverse outcomes are preserved; storage never selects a clean
+result or turns a membership verdict into quality. Historical writes remain possible
+after a grouping conflict so evidence is not discarded. Default reads recheck current
+canonical groups; explicitly historical reads do not confer qualification.
+
+A canary outcome additionally binds the complete persisted candidate release hash,
+not just weights. Readers must explicitly select that same model; ordinary audits,
+another recipe's model and changed complete release metadata cannot substitute.
+This is candidate-bound **outcome storage**, not proof that the candidate ran or that
+groups are fresh. The trusted producer must still establish independent measurements,
+source/condition and original-pipeline provenance. Full qualification assembly must
+consume the committed outcomes and enforce current policy, freshness, final-test and
+scope gates before authenticated promotion, resumption or automatic acceptance.
+No endpoint or consumer bypass is added; real null targets remain fail-closed.
+
+Migration `qualification_0007` follows `qualification_0006` and adds immutable
+`qualification_annotation_evidence`; restore must inventory its audit/model links
+and every outcome, including failures. The strict codec now supports a caller-selected
+`AnnotationEvidence` root, without allowing input-selected types. Adapter assertions
+cover exact bindings, malformed measurements and cross-model/result substitution.
+Actions PostgreSQL assertions cover reconnects, both recipe model bindings, partial
+and adverse retention, current-group conflict versus historical reads, same-key races,
+immutable update/delete/truncate and failed append. New assertions await exact-head
+Actions; no local tests, builds or live/shared database operations were run.
+
+The preceding exact `4178c3ab45d12c1845e66280e8e311248d6f1c06` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42460833619)
+and [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42460833528),
+including unit, ML smoke, migration cycles and dev-stack. Web-build was path-skipped.
+That verifies preceding teacher-lineage mechanics, not this new persistence slice,
+fresh canary qualification, independent quality, HTTP/UI/restore or final M5 acceptance.
+Required Devin, fresh-context and native reviews remain gates; the PR stays draft.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

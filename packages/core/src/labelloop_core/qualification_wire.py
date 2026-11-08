@@ -13,13 +13,19 @@ from typing import Any, Literal, Union, cast, get_args, get_origin, get_type_hin
 from .audit import AuditSample
 from .drift import AcceptanceState
 from .evaluation_lifecycle import CandidateSelection, FinalTestState
-from .qualification import QualificationContext, QualificationEvidence, QualificationPolicy
+from .qualification import (
+    AnnotationEvidence,
+    QualificationContext,
+    QualificationEvidence,
+    QualificationPolicy,
+)
 from .qualification_data import canonical_record
 
 SCHEMA = "labelloop.qualification.v1"
 MAX_RECORD_BYTES = 2_000_000
 _ROOTS = (
     AuditSample,
+    AnnotationEvidence,
     AcceptanceState,
     CandidateSelection,
     FinalTestState,
@@ -29,6 +35,7 @@ _ROOTS = (
 )
 type QualificationRecord = (
     AuditSample
+    | AnnotationEvidence
     | AcceptanceState
     | CandidateSelection
     | FinalTestState
@@ -124,6 +131,7 @@ def _decode(value: object, annotation: Any) -> Any:
 def loads[
     Record: (
         AuditSample,
+        AnnotationEvidence,
         AcceptanceState,
         CandidateSelection,
         FinalTestState,
