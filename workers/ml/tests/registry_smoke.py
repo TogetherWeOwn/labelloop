@@ -903,12 +903,14 @@ def exercise_annotation_veto(engine, request, common, gate):
                 audit_key="dependent",
                 observations=(replace(ordinary_wrong, reviewer_id="fixture-original-reviewer"),),
             )
-        record_annotation_audit(
-            connection, **audit_args, audit_key="wrong-identity", observations=(ordinary_wrong,)
-        )
-        record_annotation_audit(
-            connection, **audit_args, audit_key="missed-object", observations=(missed_object,)
-        )
+    from registry_http_smoke import exercise_http_audit_write
+
+    actor = exercise_http_audit_write(
+        engine, audit_request, sampling["sample_id"], positive, negative
+    )
+    ordinary_wrong = replace(ordinary_wrong, reviewer_id=actor)
+    missed_object = replace(missed_object, reviewer_id=actor)
+    audit_args["actor_id"] = actor
     # A new connection and a new clean sample cannot erase either historical veto.
     with engine.begin() as connection:
         record_annotation_audit(

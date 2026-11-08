@@ -4,11 +4,12 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.exc import NoResultFound, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 
-from labelloop_api import acceptance_store, model_store
-from labelloop_api.auth import auth_store, require_admin
+from labelloop_api import acceptance_store, annotation_audit_store, model_store
+from labelloop_api.auth import auth_store, require_admin, require_reviewer
 from labelloop_api.auth_store import Principal
+from labelloop_core.audit import AuditObservation
 
 router = APIRouter(tags=["registry"])
 
@@ -19,6 +20,59 @@ class RollbackRequest(BaseModel):
     action: Literal["rollback"]
     recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
     expected_revision: int = Field(ge=0)
+
+
+class AuditObservationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    revision: int = Field(ge=1)
+    blind_full_image_inspected: bool
+    labels_correct: bool
+    scope_complete: bool
+    output_truncated: bool = False
+
+
+class AuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    audit_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    sample_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    observations: list[AuditObservationRequest] = Field(min_length=1, max_length=1000)
+
+
+@router.post("/projects/{project_key}/dataset-releases/{release_key}/audits", status_code=201)
+def record_audit(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: AuditRequest,
+    actor: Annotated[Principal, Depends(require_reviewer)],
+) -> dict:
+    # Observations are human claims, not qualification. Membership, independence,
+    # vetoes and sample binding come from the store; the session owns attribution.
+    observations = tuple(
+        AuditObservation(reviewer_id=actor.id, **item.model_dump()) for item in payload.observations
+    )
+    try:
+        with auth_store().engine.begin() as connection:
+            annotation_audit_store.record_annotation_audit(
+                connection,
+                project_key=project_key,
+                release_key=release_key,
+                audit_key=payload.audit_key,
+                actor_id=actor.id,
+                observations=observations,
+                sample_key=payload.sample_key,
+            )
+    except NoResultFound:
+        raise HTTPException(404, detail="audit_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="audit_rejected") from None
+    except IntegrityError:
+        raise HTTPException(409, detail="audit_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="audit_unavailable") from None
+    return {"audit_key": payload.audit_key, "recorded": True}
 
 
 @router.get("/projects/{project_key}/registry/{recipe_key}")

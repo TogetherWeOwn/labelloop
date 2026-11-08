@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated registry and drift inspection — pending Actions
+## Authenticated sample-bound audit writes — pending Actions
+
+`POST /projects/{project_key}/dataset-releases/{release_key}/audits` accepts bounded,
+strict human observations against an existing persisted sample. Admins and reviewers
+use the existing human-session, same-origin and CSRF boundary; service principals
+cannot write independent human observations. The session supplies both actor and
+reviewer identities. Request bodies cannot supply a verdict, qualification, policy,
+reviewer identity or sample membership. The existing store checks exact frozen
+membership, sample selection, revision and independence before appending evidence.
+The outer transaction commits before the 201 response; failures are redacted and
+roll back. Duplicate audit identities reject with 409 and cannot replace evidence.
+The response acknowledges storage only, never qualification or independent truth.
+
+Twenty-eight adapter cases cover authority, strict input, session attribution,
+transaction rollback and redacted scope/conflict/database errors. The existing
+PostgreSQL registry-veto smoke now records its actual wrong-identity and missed-object
+observations through authenticated reviewer HTTP rather than a direct store call.
+It checks denial and stale/foreign/duplicate observations without writes, injected
+post-insert failure rollback, persisted actor/sample recovery and replay rejection.
+The existing clean-replacement, actual promotion/rollback and descendant veto
+assertions then consume those HTTP-written records with unchanged heads/events.
+These new assertions await exact-head Actions; there is no local test result.
+
+No new store, migration, dependency, independent measurement producer or qualification
+engine. The service cannot sample arbitrary request-supplied candidates, clear old
+vetoes, or turn a clean membership observation into promotion authority. Original
+execution/measurement/score/threshold/source/condition provenance, service-owned
+outcome selection, authenticated promotion/automatic-annotation/operational consumers
+and expanded restore/UI acceptance remain unfinished. REA angle: mount the existing
+sample-bound immutable audit writer behind the delivered session boundary and retain
+its actual registry-veto smoke, rather than create another audit engine.
+
+## Authenticated registry and drift inspection — verified baseline
+
+Exact `cdb9fc5a9f0f22ebde70d30fdb07867fd3c03c3c`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42508299861) succeeded,
+including unit, ML smoke, queue PostgreSQL, migration cycles/all four parent upgrades,
+[web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42508299861/job/128815664656),
+[dev-stack](https://github.com/TogetherWeOwn/labelloop/actions/runs/42508299861/job/128815664703)
+and lint/types/import-contract. CodeQL and gitleaks also passed. The read controls
+below are verified on that head, not the new audit-write controls or final M5 acceptance.
 
 `GET /projects/{project_key}/registry/{recipe_key}` requires an authenticated human
 admin and returns complete registry metadata plus the persisted acceptance journal.
@@ -23,9 +63,9 @@ lineage, empty history and redacted partial-read failures. The existing disposab
 PostgreSQL HTTP smoke now reads the persisted resumed history before and after each
 rollback, appends a synthetic scoped pause through the existing store, then reloads
 it through actual authenticated HTTP. Reads must leave heads, promotion events and
-acceptance state unchanged, including after an injected read failure. These new
-assertions await exact-head Actions; the accepted UI is not yet connected to this
-port and no operational-view acceptance is claimed.
+acceptance state unchanged, including after an injected read failure. These read
+assertions passed exact-head Actions at `cdb9fc5`; the accepted UI is not yet connected
+to this port and no operational-view acceptance is claimed.
 
 Resolved the actual `main.py` conflict with delivered annotation reads, retaining
 both routers and the delivered module/tests unchanged. No new migration, dependency,

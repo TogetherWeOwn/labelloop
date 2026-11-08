@@ -9,7 +9,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from labelloop_api import auth, model_schema, registry_api
+from labelloop_api import auth, model_schema, qualification_schema, registry_api
 from labelloop_api.acceptance_store import load_acceptance, pause_acceptance
 from labelloop_api.auth_schema import principal, service_token
 from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
@@ -270,6 +270,119 @@ def exercise_http_rollback(engine, request):
         "resumed_and_active_drift_history_recovered": True,
         "read_failure_redacted_without_partial_state": True,
     }
+
+
+def exercise_http_audit_write(engine, request, sample_key, positive, negative):
+    path = f"/projects/{request.project_id}/dataset-releases/{request.dataset_release_id}/audits"
+    observation = {
+        "asset_id": positive,
+        "revision": 1,
+        "blind_full_image_inspected": True,
+        "labels_correct": False,
+        "scope_complete": True,
+    }
+    payload = {
+        "audit_key": "wrong-identity",
+        "sample_key": sample_key,
+        "observations": [observation],
+    }
+
+    def audit_snapshot():
+        with engine.connect() as connection:
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(qualification_schema.annotation_audit).order_by(
+                        qualification_schema.annotation_audit.c.id
+                    )
+                ).mappings()
+            )
+
+    before = audit_snapshot()
+    registry_before = snapshot(engine, request.project_id)
+    with authenticated_client(engine) as (client, identities, workers):
+        assert client.post(path, json=payload).status_code == 401
+        for token in workers.values():
+            assert (
+                client.post(
+                    path, headers={"authorization": "Bearer " + token}, json=payload
+                ).status_code
+                == 403
+            )
+        headers = login(client, identities["reviewer"][1])
+        for denied in (
+            {},
+            headers | {"origin": "https://untrusted.invalid"},
+            headers | {"x-csrf-token": "wrong"},
+        ):
+            assert client.post(path, headers=denied, json=payload).status_code == 403
+        for extra in ({"actor_id": "forged"}, {"passed": True}, {"qualification": {}}):
+            assert client.post(path, headers=headers, json=payload | extra).status_code == 422
+        for change, status in (
+            ({"sample_key": "missing-http-sample"}, 404),
+            ({"observations": [observation | {"revision": 2}]}, 409),
+            ({"observations": [observation | {"asset_id": "foreign-http-asset"}]}, 409),
+            ({"observations": [observation, observation]}, 409),
+            ({"observations": [observation | {"reviewer_id": "forged"}]}, 422),
+        ):
+            assert client.post(path, headers=headers, json=payload | change).status_code == status
+        missing = (
+            f"/projects/missing-http-project/dataset-releases/{request.dataset_release_id}/audits"
+        )
+        assert client.post(missing, headers=headers, json=payload).status_code == 404
+        assert audit_snapshot() == before
+
+        injected = []
+
+        def fail_after_insert(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.startswith("INSERT INTO qualification_annotation_audit"):
+                injected.append(True)
+                raise sa.exc.SQLAlchemyError("private fixture post-insert failure")
+
+        sa.event.listen(engine, "after_cursor_execute", fail_after_insert)
+        try:
+            response = client.post(path, headers=headers, json=payload)
+        finally:
+            sa.event.remove(engine, "after_cursor_execute", fail_after_insert)
+        assert injected == [True]
+        assert response.status_code == 503
+        assert response.json() == {"detail": "audit_unavailable"}
+        assert audit_snapshot() == before
+        for key, item in (
+            ("wrong-identity", observation),
+            (
+                "missed-object",
+                observation
+                | {"asset_id": negative, "labels_correct": True, "scope_complete": False},
+            ),
+        ):
+            body = payload | {"audit_key": key, "observations": [item]}
+            response = client.post(path, headers=headers, json=body)
+            assert response.status_code == 201
+            assert response.json() == {"audit_key": key, "recorded": True}
+            assert response.headers["cache-control"] == "no-store"
+            saved = audit_snapshot()
+            replay = client.post(path, headers=headers, json=body)
+            assert replay.status_code == 409
+            assert replay.json() == {"detail": "audit_rejected"}
+            assert audit_snapshot() == saved
+        actor = identities["reviewer"][0]
+    assert snapshot(engine, request.project_id) == registry_before
+    with engine.begin() as connection:
+        from labelloop_api.annotation_audit_store import load_annotation_audit
+
+        for key, asset in (("wrong-identity", positive), ("missed-object", negative)):
+            stored = load_annotation_audit(
+                connection,
+                project_key=request.project_id,
+                release_key=request.dataset_release_id,
+                audit_key=key,
+            )
+            assert len(stored.observations) == 1
+            assert stored.observations[0].reviewer_id == actor
+            assert stored.verdict.blocking_asset_ids == (asset,)
+            assert not stored.verdict.passed
+    return actor
 
 
 def exercise_http_audit_veto(engine, request):
