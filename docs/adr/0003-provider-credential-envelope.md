@@ -87,9 +87,11 @@ these tables: it destroys credential/audit records and requires backup/explicit
 operational approval if ever used beyond a disposable CI database.
 
 Migration revision `0004_provider_credentials` is reserved separately from auth
-revision `0003_authentication`. On the current delivered base it follows 0002 for
-independent CI. The integrator must reconcile the single Alembic head and attach
-after 0003 when authentication merges, without rewriting either feature's DDL.
+revision `0003_authentication`. On the current delivered base it follows the
+accepted `budget_0002` head for independent CI; credential and budget metadata and
+PostgreSQL checks are both retained. The integrator must preserve a single Alembic
+head and attach after 0003 when authentication merges, without rewriting either
+feature's DDL.
 No shared/staging/production database mutation is part of this change.
 
 ## Leakage and limitations

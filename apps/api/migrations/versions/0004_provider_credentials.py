@@ -5,8 +5,8 @@ from alembic import op
 
 revision = "0004_provider_credentials"
 # The authentication integration will attach this reserved revision after 0003.
-# Until that integration, qualify independent storage on the delivered main schema.
-down_revision = "0002_local_models"
+# Until that integration, follow the accepted budget chain on delivered main.
+down_revision = "budget_0002"
 branch_labels = None
 depends_on = None
 
