@@ -11,8 +11,10 @@ execution engine is added. Supervision calls a bounded `run_once`; it does not e
 handlers, endpoints, paths or credentials supplied by model output.
 
 Jobs pin a project-scoped operation key and JSON input. Re-enqueue with identical
-inputs returns the existing job; changed inputs are a conflict. Each claim increments
-a generation and attempt count. The database clock determines expiration. Every
+inputs returns the existing job; changed inputs are a conflict. Comparison uses
+canonical JSON after key/tuple normalization, preserving boolean-versus-number types.
+Each claim increments a generation and attempt count. The database clock determines
+expiration. Every
 heartbeat, artifact write and completion requires a matching worker and generation,
 a running job and an unexpired lease under a row lock. Cancellation increments the
 generation and is terminal. Failures retry with capped exponential backoff, at most
@@ -26,6 +28,8 @@ call the injected heartbeat at safe boundaries. Late computations may finish but
 cannot save/apply results; no attempt is made to kill vendor code inside a thread.
 
 Completed stage artifacts are immutable bounded JSON records with SHA-256 hashes.
+Normalize JSON object keys and tuple values before hashing/storage; subsequent stages
+receive that normalized representation on both fresh and resumed execution.
 A reclaimed job skips completed stages. Final application locks the job, inserts a
 unique application marker, invokes a trusted **same-database transactional** sink,
 rechecks the lease deadline and marks success in one transaction. Sink errors or
@@ -50,6 +54,8 @@ result is saved even on zero-detection images. The offline injectable provider p
 is not a hosted detector or LLM implementation. It must be supplied by the authorized
 evidence/transport integration; no automatic default claims that empty output proves
 an image negative. Partial, cropped and truncated discovery are recorded explicitly.
+All three coverage flags require actual booleans at provider ingress and again when
+validating resumed discovery artifacts, before teacher inference.
 
 `ProposalProvider` reuses the M2 controlled `predict_samples` path with its actual
 input-tensor hook, explicit square shape, `rect=False`, `tile=False`, NMS and inverse
@@ -58,8 +64,9 @@ argument; the existing AP default remains unchanged. Candidate confidence is sto
 separately from deployment confidence. The checkpoint digest, recipe digest, classes
 and runtime are checked against the pinned champion. Decoder/encoder/interpolation
 and raster gains follow the compiler recipe; library versions and transforms remain
-in the run record. Full-frame `end2end` outputs are not subjected to extra IoU
-suppression; the recorded NMS-free release policy is preserved.
+in the run record, including native libjpeg-turbo and JPEG compatibility versions
+from the compiler's shared imaging toolchain. Full-frame `end2end` outputs are not
+subjected to extra IoU suppression; the recorded NMS-free release policy is preserved.
 
 Source order is qualifying recipe champion, then admin-pinned initial detector from
 a frozen project release, then `source: none` human-first seeding. Initial detector
@@ -86,11 +93,12 @@ is introduced by this slice.
 ## Migrations and integration
 
 The reserved identity `0006_proposal_jobs` owns only `worker_*` tables and guards.
-It starts from the delivered `0002_local_models` revision on this independent branch,
-with branch label `proposal_jobs`. Authentication and credential/budget owners keep
-their separate revisions. Before merging branches, the integrator must chain or
-merge their Alembic heads without rewriting any already-applied revision. All CI
-uses isolated disposable PostgreSQL; no shared database or evidence window is used.
+Following the conflict-driven main restack, this unpublished queue migration chains
+from delivered `budget_0002`, with branch label `proposal_jobs`, so this tree has one
+upgrade head. No delivered budget revision or already-applied shared/production
+migration is rewritten. Authentication and credential owners keep their separate
+revisions; the integrator still owns their eventual combined-head integration.
+All CI uses isolated disposable PostgreSQL; no shared database or evidence window is used.
 Queue identifiers are application keys, deliberately not guesses at unmerged API
 principal IDs. The trusted producer validates project access before enqueue.
 

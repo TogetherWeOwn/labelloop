@@ -126,6 +126,76 @@ def test_partial_or_truncated_discovery_never_proves_completeness(flags):
     assert result["output_partial"] or result["output_truncated"]
 
 
+@pytest.mark.parametrize("field", ["full_image", "partial", "truncated"])
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+@pytest.mark.parametrize("resume", [False, True])
+def test_discovery_rejects_non_boolean_coverage_before_teacher(field, value, resume):
+    original, request, registry, evidence = inputs()
+    events = []
+    provider = ProposalProvider(FakePredictor(events))
+    if resume:
+        discovery = provider.discover(request, original, BlindDiscovery(events))
+        discovery = json.loads(json.dumps(discovery)) | {field: value}
+        with pytest.raises(ValueError, match="coverage flags must be booleans"):
+            provider.propose(request, original, discovery, registry, evidence)
+    else:
+        with pytest.raises(ValueError, match="coverage flags must be booleans"):
+            provider.discover(request, original, BlindDiscovery(events, **{field: value}))
+    assert events == ["discovery"]
+
+
+@pytest.mark.parametrize("field,value", [("allow_upscale", 1), ("optimize", 0)])
+@pytest.mark.parametrize("persisted", [False, True])
+def test_discovery_binding_preserves_nested_json_types(field, value, persisted):
+    original, request, registry, evidence = inputs()
+    events = []
+    provider = ProposalProvider(FakePredictor(events))
+    discovery = provider.discover(request, original, BlindDiscovery(events))
+    if persisted:
+        discovery = json.loads(json.dumps(discovery))
+    binding = discovery["binding"]["recipe"]
+    if field == "optimize":
+        binding = binding["encoder_options"]
+    assert type(binding[field]) is bool
+    binding[field] = value
+    with pytest.raises(ValueError, match="different pinned"):
+        provider.propose(request, original, discovery, registry, evidence)
+    assert events == ["discovery"]
+
+
+@pytest.mark.parametrize("field", ["reference_approved", "registry_nms"])
+def test_workflow_binding_preserves_nested_json_types_before_io(field):
+    from types import SimpleNamespace
+
+    from labelloop_worker_ml.proposal_workflow import ProposalWorkflow
+
+    _, request, registry, evidence = inputs()
+    events = []
+    workflow = ProposalWorkflow(
+        request,
+        registry,
+        evidence,
+        "blind-fixture-v1",
+        ProposalProvider(FakePredictor(events)),
+        BlindDiscovery(events),
+        lambda source: pytest.fail("must reject before source IO"),
+    )
+    job_input = workflow.job_input()
+    if field == "reference_approved":
+        job_input["references"][0]["approved"] = 1
+    else:
+        job_input["registry"]["champion"]["policy"]["agnostic_nms"] = 0
+    context = SimpleNamespace(
+        lease=SimpleNamespace(input=job_input),
+        artifacts={},
+        heartbeat=lambda: pytest.fail("must reject before heartbeat"),
+    )
+    for execute in (workflow.discover, workflow.propose):
+        with pytest.raises(ValueError, match="configuration differs"):
+            execute(context)
+    assert events == []
+
+
 def test_no_champion_is_unsupported_and_discovery_still_runs():
     original, request, registry, evidence = inputs()
     events = []

@@ -23,7 +23,9 @@ class ReplayConflict(ValueError):
 
 
 def canonical(value: dict) -> bytes:
-    result = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    # Normalize tuple values and object keys before sorting; JSON scalar types stay distinct.
+    normalized = json.loads(json.dumps(value, allow_nan=False))
+    result = json.dumps(normalized, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(result) > 2_000_000:
         raise ValueError("stage record exceeds bounded inline artifact size")
     return result
@@ -81,7 +83,11 @@ class JobStore:
             )
             row = cur.fetchone()
             assert row is not None
-            if (row["kind"], row["input"], row["max_attempts"]) != (kind, payload, max_attempts):
+            if (
+                row["kind"] != kind
+                or canonical(row["input"]) != canonical(payload)
+                or row["max_attempts"] != max_attempts
+            ):
                 raise ReplayConflict("operation key already pins different inputs")
             return row["job_id"]
 
@@ -170,9 +176,10 @@ class JobStore:
             )
             return dict(cur.fetchall())
 
-    def save_stage(self, lease: Lease, stage: str, payload: dict) -> None:
+    def save_stage(self, lease: Lease, stage: str, payload: dict) -> dict:
         if not stage:
             raise ValueError("stage identity is required")
+        payload = json.loads(canonical(payload))
         sha256 = digest(payload)
         with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             self._lock(cur, lease)
@@ -188,6 +195,7 @@ class JobStore:
             if cur.fetchone()[0] != sha256:
                 raise ReplayConflict("completed stage artifact cannot be replaced")
             self._lock(cur, lease)
+        return payload
 
     def complete(
         self, lease: Lease, required_stages: tuple[str, ...], sink: TransactionalSink
@@ -348,8 +356,7 @@ class JobRunner:
                         payload = stage.execute(
                             StageContext(self.store, lease, dict(artifacts), self.lease_seconds)
                         )
-                    self.store.save_stage(lease, stage.name, payload)
-                    artifacts[stage.name] = payload
+                    artifacts[stage.name] = self.store.save_stage(lease, stage.name, payload)
                 self.store.heartbeat(lease, lease_seconds=self.lease_seconds)
             self.store.complete(lease, tuple(stage.name for stage in self.stages), self.sink)
         except LeaseLost:

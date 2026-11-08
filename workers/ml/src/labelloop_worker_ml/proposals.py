@@ -18,8 +18,9 @@ from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy, requir
 
 
 def record_digest(value: dict) -> str:
+    normalized = json.loads(json.dumps(value, allow_nan=False))
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(normalized, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
 
 
@@ -63,6 +64,8 @@ class DiscoveryResult:
     def record(self, request: ProposalRequest) -> dict:
         if not self.provider_version:
             raise ValueError("discovery provider version is required")
+        if any(type(flag) is not bool for flag in (self.full_image, self.partial, self.truncated)):
+            raise ValueError("discovery coverage flags must be booleans")
         for box in self.boxes:
             box.within(request.source.width, request.source.height)
         return {"binding": request.binding(), **asdict(self)}
@@ -182,10 +185,8 @@ class ProposalProvider:
     ) -> dict:
         self._source(request, original)
         # Saved discovery must pin this exact operation, not another source/revision/cache key.
-        if discovery.get("binding") != json.loads(json.dumps(request.binding())):
-            # asdict preserves tuples in-process; JSON storage normalizes them to lists.
-            if discovery.get("binding") != request.binding():
-                raise ValueError("discovery artifact belongs to different pinned inputs")
+        if record_digest(discovery.get("binding", {})) != record_digest(request.binding()):
+            raise ValueError("discovery artifact belongs to different pinned inputs")
         discovery_result = DiscoveryResult(
             discovery["provider_version"],
             tuple(Box(**box) for box in discovery["boxes"]),
@@ -362,6 +363,7 @@ class ControlledPredictor:
         import ultralytics
         from PIL import Image
 
+        from labelloop_compiler.ingest import imaging_toolchain
         from labelloop_worker_ml.training import file_digest, predict_samples
 
         weights = self.checkpoint_path(champion.weights_sha256)
@@ -426,6 +428,7 @@ class ControlledPredictor:
                 shapes,
                 confidence=request.candidate_conf,
             )
+        toolchain = imaging_toolchain()
         return PredictionBatch(
             predictions,
             tuple(shapes),
@@ -433,6 +436,8 @@ class ControlledPredictor:
                 ("ultralytics", ultralytics.__version__),
                 ("torch", str(torch.__version__)),
                 ("opencv", cv2.__version__),
-                ("pillow", Image.__version__),
+                ("pillow", str(toolchain["pillow"])),
+                ("libjpeg_turbo", str(toolchain["libjpeg_turbo"])),
+                ("jpeg_compatibility", str(toolchain["jpeg_compatibility"])),
             ),
         )

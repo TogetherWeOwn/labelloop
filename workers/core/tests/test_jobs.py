@@ -74,6 +74,71 @@ def test_idempotent_enqueue_compares_json_normalized_inputs(store, payload):
     store.cancel(project, job_id)
 
 
+@pytest.mark.parametrize("first,second", [(True, 1), (1, True), (False, 0), (0, False)])
+def test_enqueue_preserves_nested_json_scalar_types(store, first, second):
+    project = str(uuid4())
+    payload = {"nested": [{"enabled": first}]}
+    job_id = store.enqueue(project, "operation", "proposals", payload)
+    assert store.enqueue(project, "operation", "proposals", payload) == job_id
+    with pytest.raises(ReplayConflict):
+        store.enqueue(project, "operation", "proposals", {"nested": [{"enabled": second}]})
+    store.cancel(project, job_id)
+
+
+def test_stage_hash_matches_normalized_readback_and_rejects_changes(store):
+    from labelloop_worker_core.jobs import digest
+
+    project, job_id = enqueue(store)
+    lease = store.claim("proposals", "worker", job_id=job_id)
+    payload = {"values": {2: "two", 10: "ten"}, "nested": [(True, False)]}
+    store.save_stage(lease, "stage", payload)
+    saved = store.artifacts(lease)["stage"]
+    assert saved == {"values": {"2": "two", "10": "ten"}, "nested": [[True, False]]}
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT sha256 FROM worker_stage_artifact WHERE job_id=%s AND stage='stage'",
+            (job_id,),
+        ).fetchone()[0] == digest(saved)
+    store.save_stage(lease, "stage", saved)
+    store.save_stage(lease, "stage", payload)
+    for changed in (
+        saved | {"values": {"2": "changed", "10": "ten"}},
+        saved | {"nested": [[1, 0]]},
+    ):
+        with pytest.raises(ReplayConflict):
+            store.save_stage(lease, "stage", changed)
+    store.cancel(project, job_id)
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_runner_passes_persisted_stage_shape_to_subsequent_stages(store, resume):
+    project, job_id = enqueue(store)
+    payload = {"values": {2: "two", 10: "ten"}, "nested": [(True, False)]}
+    normalized = {"values": {"2": "two", "10": "ten"}, "nested": [[True, False]]}
+    if resume:
+        lease = store.claim("proposals", "old-worker", job_id=job_id)
+        store.save_stage(lease, "first", payload)
+        expire(store, lease)
+
+    def first(context):
+        assert not resume, "completed stage must not run again"
+        return payload
+
+    def second(context):
+        assert context.artifacts == {"first": normalized}
+        return {"checked": True}
+
+    def sink(conn, lease, artifacts):
+        assert artifacts == {"first": normalized, "second": {"checked": True}}
+
+    runner = JobRunner(
+        store, "proposals", (Stage("first", first), Stage("second", second)), sink, job_id=job_id
+    )
+    assert runner.run_once("worker")
+    assert status(store, job_id)[0] == "succeeded"
+    assert not store.cancel(project, job_id)
+
+
 @pytest.mark.parametrize("resume", [False, True])
 def test_runner_preserves_custom_duration_for_all_heartbeats(store, monkeypatch, resume):
     project, job_id = enqueue(store)

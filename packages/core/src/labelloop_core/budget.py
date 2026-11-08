@@ -154,8 +154,12 @@ class LedgerEntry:
     state: OperationState = "reserved"
     actual: int | None = None
     reserved_autonomously: bool = False
+    exposure_floor: int = 0
 
     def __post_init__(self) -> None:
+        nonnegative(self.exposure_floor)
+        if self.state == "cancelled" and self.exposure_floor:
+            raise ValueError("cancelled entries cannot retain child exposure")
         if type(self.reserved_autonomously) is not bool:
             raise ValueError("reservation authorization requires a boolean")
         if not self.reserved_autonomously and self.approval is None:
@@ -171,6 +175,8 @@ class LedgerEntry:
             raise ValueError("unknown operation state")
         if self.actual is not None:
             nonnegative(self.actual)
+            if self.actual < self.exposure_floor:
+                raise ValueError("confirmed total cannot be below known child exposure")
         if (self.state == "settled") != (self.actual is not None):
             raise ValueError("only settled entries have confirmed actuals")
         if self.approval is not None and self.approval.request_digest != self.request.digest:
@@ -180,7 +186,11 @@ class LedgerEntry:
     def exposure(self) -> int:
         if self.state == "cancelled":
             return 0
-        return self.actual if self.actual is not None else self.request.estimate
+        return (
+            self.actual
+            if self.actual is not None
+            else max(self.request.estimate, self.exposure_floor)
+        )
 
 
 @dataclass(frozen=True)
@@ -207,7 +217,8 @@ class BudgetGate:
             raise ValueError("a 402 must pause paid stages")
         if (
             any(
-                entry.actual is not None and entry.actual > entry.request.estimate
+                (entry.actual is not None and entry.actual > entry.request.estimate)
+                or entry.exposure_floor > entry.request.estimate
                 for entry in self.entries
             )
             and not self.pause_reason

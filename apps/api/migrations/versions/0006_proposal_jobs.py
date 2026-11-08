@@ -1,9 +1,9 @@
-"""Fenced jobs and immutable stage artifacts (independent queue branch)."""
+"""Fenced jobs and immutable stage artifacts after the delivered budget ledger."""
 
 from alembic import op
 
 revision = "0006_proposal_jobs"
-down_revision = "0002_local_models"
+down_revision = "budget_0002"
 branch_labels = ("proposal_jobs",)
 depends_on = None
 

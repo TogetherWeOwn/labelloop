@@ -19,6 +19,7 @@ def test_controlled_proposals_keep_tensor_checkpoint_and_source_lineage(tmp_path
     from PIL import Image, ImageDraw
     from ultralytics import YOLO
 
+    from labelloop_compiler.ingest import imaging_toolchain
     from labelloop_core.domain import Recipe, SourceAsset
     from labelloop_core.registry import ModelRelease, RegistryState
     from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy
@@ -88,7 +89,13 @@ def test_controlled_proposals_keep_tensor_checkpoint_and_source_lineage(tmp_path
     assert record["binding"]["source"]["sha256"] == sha256
     assert record["scope_completeness"] == "unreviewed"
     assert all(candidate["class_id"] is None for candidate in record["teacher_candidates"])
-    (tmp_path / "proposal-evidence.json").write_text(json.dumps(record, sort_keys=True, indent=2))
+    evidence_path = tmp_path / "proposal-evidence.json"
+    evidence_path.write_text(json.dumps(record, sort_keys=True, indent=2))
+    persisted = json.loads(evidence_path.read_text())
+    toolchain = imaging_toolchain()
+    for name in ("pillow", "libjpeg_turbo", "jpeg_compatibility"):
+        assert persisted["runtime"][name] == toolchain[name]
+        assert persisted["runtime"][name] != "unknown"
     bad_champion = replace(champion, weights_sha256="e" * 64)
     bad_provider = ProposalProvider(ControlledPredictor(lambda sha256: weights))
     with pytest.raises(ValueError, match="checkpoint digest"):

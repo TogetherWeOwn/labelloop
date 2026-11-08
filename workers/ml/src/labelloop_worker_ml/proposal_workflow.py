@@ -12,6 +12,7 @@ from labelloop_worker_ml.proposals import (
     InitialDetectorRelease,
     ProposalProvider,
     ProposalRequest,
+    record_digest,
 )
 
 
@@ -61,7 +62,7 @@ class ProposalWorkflow:
         )
 
     def _validate(self, context: ProposalStageContext) -> bytes:
-        if context.lease.input != self.job_input():
+        if record_digest(context.lease.input) != record_digest(self.job_input()):
             raise ValueError("worker configuration differs from immutable job inputs")
         context.heartbeat()
         return self.read_source(self.request.source)
