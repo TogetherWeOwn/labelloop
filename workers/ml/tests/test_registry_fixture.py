@@ -2,7 +2,7 @@
 
 import pytest
 from load_canonical import FixtureDomain
-from registry_smoke import compiled_fixture_members
+from registry_smoke import compiled_fixture_members, seed_compiled_sources
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +36,35 @@ def test_compiled_fixture_uses_real_canonical_members_and_allows_derivatives(
     assert set(members) == {sample.asset.asset_id for sample in canonical_release.samples}
     assert {sample.split for sample in members.values()} >= {"train", "val"}
     assert not any("synthetic-ordinary" in key for key in members)
+
+
+def test_seed_compiled_sources_preserves_group_keyed_assignment_reasons(
+    manifest, canonical_release
+):
+    class Connection:
+        def __init__(self):
+            self.assignments = []
+
+        def execute(self, statement):
+            if statement.is_insert and statement.table.name == "source_split_assignment":
+                self.assignments.append(statement.compile().params)
+            return self
+
+        def scalar_one(self):
+            return "fixture-asset-id"
+
+    connection = Connection()
+    membership = seed_compiled_sources(connection, "fixture-project-id", manifest)
+    assert membership == {
+        sample.asset.asset_id: sample.revision.revision for sample in canonical_release.samples
+    }
+    assert len(connection.assignments) == len(canonical_release.samples)
+    for sample, assignment in zip(canonical_release.samples, connection.assignments, strict=True):
+        assert sample.asset.asset_id not in canonical_release.assignment.reasons
+        assert assignment["group_id"] == sample.group_id
+        assert assignment["reason"] == canonical_release.assignment.reasons[sample.group_id]
+        assert assignment["split"] == sample.split
+        assert assignment["locked"] is True
 
 
 @pytest.mark.parametrize(

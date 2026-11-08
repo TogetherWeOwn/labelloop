@@ -262,7 +262,7 @@ def seed_compiled_sources(connection, project_id, manifest):
                 seed=release.assignment.seed,
                 algorithm=release.assignment.algorithm,
                 thresholds={},
-                reason=release.assignment.reasons[key],
+                reason=release.assignment.reasons[sample.group_id],
                 locked=True,
             )
             .on_conflict_do_nothing()
