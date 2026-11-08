@@ -58,6 +58,7 @@ def plan(side=320, nms="external"):
         "fixture-prices-v1",
         690_000,
         900,
+        "d" * 64,
     )
 
 
@@ -92,6 +93,8 @@ class Ledger:
         self.authorized = True
         self.dispatches = 0
         self.fail_pause_once = False
+        self.settlements = {}
+        self.observed_estimates = {}
 
     def reserve_and_authorize(self, request):
         if not self.authorized or self.gate.pause_reason:
@@ -105,13 +108,30 @@ class Ledger:
         self.dispatches += 1
         return self.gate.entry(request.operation_id)
 
+    def read(self, request):
+        entry = self.gate.entry(request.operation_id)
+        assert entry.request == request
+        return entry
+
+    def release(self, request):
+        self.gate = self.gate.cancel(request.operation_id)
+        return self.read(request)
+
+    def pause_estimate_overrun(self, request, estimate_microusd):
+        self.observed_estimates[request.operation_id] = estimate_microusd
+        self.gate = replace(self.gate, pause_reason=self.gate.pause_reason or "estimate_overrun")
+
+    def settled_charge(self, request):
+        return self.settlements.get(request.operation_id)
+
     def reconcile(self, request, charge):
-        self.gate = (
-            self.gate.settle(request.operation_id, charge.actual_microusd)
-            if charge
-            else self.gate.unconfirmed(request.operation_id)
-        )
-        return self.gate.entry(request.operation_id)
+        if charge:
+            self.gate = self.gate.settle(request.operation_id, charge.actual_microusd)
+            # These two writes emulate one atomic production ledger transaction.
+            self.settlements[request.operation_id] = charge
+        elif self.read(request).state != "settled":
+            self.gate = self.gate.unconfirmed(request.operation_id)
+        return self.read(request)
 
     def pause_insufficient_credits(self, request):
         if self.fail_pause_once:
@@ -239,6 +259,140 @@ def rig(p=None):
 
 def advance(r):
     return r.backend.train(r.plan.request)
+
+
+@pytest.mark.parametrize("field", ["price_per_hour_microusd", "estimated_cost_microusd"])
+def test_higher_provider_estimate_pauses_further_paid_work_without_inventing_actual(field):
+    r = rig()
+    original_start = r.transport.start
+
+    def higher_receipt(grant, body):
+        return replace(original_start(grant, body), **{field: 1_000_000})
+
+    r.transport.start = higher_receipt
+    result = advance(r)
+    assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual is None
+    assert result.receipt is not None
+    with pytest.raises(BudgetRefused):
+        r.ledger.reserve_and_authorize(replace(r.plan.spend_request(), operation_id="other"))
+    assert advance(r).model_id == result.model_id
+    assert r.transport.calls.count("start") == 1
+
+
+def test_first_captured_dataset_must_match_synced_content_not_just_id():
+    r = rig()
+    advance(r)
+    r.transport.model = replace(r.transport.model, dataset_content_hash="e" * 64)
+    result = advance(r)
+    assert result.state == "args_mismatch"
+    assert "dataset_identity" in result.mismatched_keys
+
+
+def test_settlement_survives_run_save_failure_and_unavailable_provider_charge():
+    r = rig()
+    advance(r)
+    r.transport.progress("completed")
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    original_save = r.runs.save
+
+    def fail_after_settlement(run):
+        if r.ledger.gate.entry(run.spend.operation_id).state == "settled":
+            raise RuntimeError("fixture run save crash")
+        original_save(run)
+
+    r.runs.save = fail_after_settlement
+    with pytest.raises(RuntimeError, match="fixture run save crash"):
+        advance(r)
+    r.runs.save = original_save
+    r.transport.charge_value = None
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    result = advance(r)
+    assert result.charge.actual_microusd == 120_000
+    assert result.checkpoint is not None
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual == 120_000
+    assert r.transport.calls.count("start") == 1
+
+
+def test_refused_dispatch_is_recoverable_without_uncertain_provider_mutation():
+    r = rig()
+    original_dispatch = r.ledger.dispatch
+
+    def refuse_dispatch(request):
+        raise BudgetRefused("approval_required")
+
+    r.ledger.dispatch = refuse_dispatch
+    with pytest.raises(BudgetRefused):
+        advance(r)
+    assert "create" not in r.transport.calls
+    r.ledger.dispatch = original_dispatch
+    assert advance(r).state == "accepted"
+    assert r.transport.calls.count("start") == r.transport.calls.count("create") == 1
+
+
+def test_crash_after_dispatch_commit_recovers_first_create_without_double_dispatch():
+    r = rig()
+    original_dispatch = r.ledger.dispatch
+
+    def commit_then_crash(request):
+        original_dispatch(request)
+        raise RuntimeError("fixture dispatch crash")
+
+    r.ledger.dispatch = commit_then_crash
+    with pytest.raises(RuntimeError, match="fixture dispatch crash"):
+        advance(r)
+    assert r.runs.value.phase == "dispatch_intent" and "create" not in r.transport.calls
+    r.ledger.dispatch = original_dispatch
+    assert advance(r).state == "accepted"
+    assert r.ledger.dispatches == 1
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+def test_higher_estimate_pause_recovers_from_ledger_failure_without_another_start():
+    r = rig()
+    original_start = r.transport.start
+    original_pause = r.ledger.pause_estimate_overrun
+
+    def higher_receipt(grant, body):
+        return replace(original_start(grant, body), estimated_cost_microusd=1_000_000)
+
+    def failed_pause(request, amount):
+        raise RuntimeError("fixture pause crash")
+
+    r.transport.start = higher_receipt
+    r.ledger.pause_estimate_overrun = failed_pause
+    with pytest.raises(RuntimeError, match="fixture pause crash"):
+        advance(r)
+    assert r.runs.value.receipt.estimated_cost_microusd == 1_000_000
+    r.ledger.pause_estimate_overrun = original_pause
+    advance(r)
+    assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_definitive_preflight_refusal_releases_undispatched_reservation(existing):
+    r = rig()
+    if existing:
+        r.transport.model = ModelSnapshot(**FIXTURE["model"], model_slug=r.plan.model_slug)
+    else:
+        r.transport.available = False
+    result = advance(r)
+    assert result.state in {"gpu_unavailable", "identity_mismatch"}
+    assert r.ledger.gate.entry(r.plan.request.run_id).state == "cancelled"
+    assert r.ledger.gate.monthly_exposure("2026-11") == 0
+    assert "start" not in r.transport.calls and "create" not in r.transport.calls
+    assert advance(r) == result
+
+
+def test_503_uncertain_create_recovers_identity_read_only_without_start():
+    r = rig()
+    r.transport.create_error = TransportError(503)
+    assert advance(r).state == "unavailable"
+    result = advance(r)
+    assert result.model_id == "fixture-model"
+    assert result.state == "unavailable"
+    assert r.transport.calls.count("create") == 1 and "start" not in r.transport.calls
 
 
 @pytest.mark.parametrize("side", [320, 640])

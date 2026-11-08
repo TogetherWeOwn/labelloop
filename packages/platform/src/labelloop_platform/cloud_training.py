@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
-from labelloop_core.budget import LedgerEntry, SpendRequest, nonnegative
+from labelloop_core.budget import LedgerEntry, SpendRequest, identity, nonnegative
 from labelloop_core.training import TrainingRequest, argument_diff
 from labelloop_platform.training_ports import (
     ArtifactPort,
@@ -44,7 +44,15 @@ CloudState = Literal[
     "unavailable",
     "gpu_unavailable",
 ]
-Phase = Literal["prepared", "create_intent", "model_created", "start_intent", "started", "terminal"]
+Phase = Literal[
+    "prepared",
+    "dispatch_intent",
+    "create_intent",
+    "model_created",
+    "start_intent",
+    "started",
+    "terminal",
+]
 _TERMINAL_PROVIDER = {"completed", "failed", "cancelled"}
 _PROVIDER_STATES = {"untrained", "pending", "starting", "running", *_TERMINAL_PROVIDER}
 _LOCAL_ONLY = {"device", "amp", "workers", "save", "save_period", "plots"}
@@ -70,6 +78,7 @@ class CloudPlan:
     price_version: str
     hourly_rate_microusd: int
     estimated_seconds: int
+    expected_dataset_content_hash: str
     parent_run_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -82,6 +91,9 @@ class CloudPlan:
             r"ul://[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+", self.base_model_uri
         ):
             raise ValueError("approved base model requires a supported unversioned URI")
+        # Platform contentHash comes from verified synchronization, not the compiler
+        # manifest hash. The captured version can be new; its content must still match.
+        identity(self.expected_dataset_content_hash)
         nonnegative(self.hourly_rate_microusd)
         if self.hourly_rate_microusd == 0 or type(self.estimated_seconds) is not int:
             raise ValueError("training needs a positive pinned price and duration")
@@ -232,13 +244,52 @@ class PlatformTrainingBackend:
                 self._validate_entry(entry, spend, "reserved")
                 run = CloudRun(request, self.plan.configuration_sha256, spend, self.plan)
                 session.save(run)
+            self._observe_estimate(run)
             if run.phase == "terminal":
+                self._release_undispatched(run)
                 if run.state == "insufficient_credits":
                     self.budget.pause_insufficient_credits(run.spend)
-                if run.state == "unavailable" and run.model_id is not None:
-                    return self._reconcile(session, run, grant)
+                if run.state == "unavailable":
+                    return self._recover_unavailable(session, run, grant)
                 return run  # Terminal-for-now never authorizes another mutation.
             return self._advance(session, run, grant)
+
+    def _release_undispatched(self, run: CloudRun) -> None:
+        assert self.budget is not None
+        entry = self.budget.read(run.spend)
+        if entry.request != run.spend:
+            raise CloudTrainingRefused("budget_authorization_mismatch")
+        if entry.state == "reserved":
+            self._validate_entry(self.budget.release(run.spend), run.spend, "cancelled")
+
+    def _observe_estimate(self, run: CloudRun) -> None:
+        assert self.budget is not None
+        if run.receipt is not None:
+            rate_estimate = (
+                run.receipt.price_per_hour_microusd * self.plan.estimated_seconds + 3599
+            ) // 3600
+            estimate = max(rate_estimate, run.receipt.estimated_cost_microusd)
+            if estimate > run.spend.estimate:
+                # Receipt is already durable. A failed pause is retried before any
+                # subsequent operation advancement, never by restarting the job.
+                self.budget.pause_estimate_overrun(run.spend, estimate)
+
+    def _recover_unavailable(
+        self, session: RunSession, run: CloudRun, grant: ConnectionGrant
+    ) -> CloudRun:
+        assert self.transport is not None
+        if run.model_id is None:
+            try:
+                model = self.transport.find_model(grant, self.plan)
+            except Exception:
+                return self._save(session, run, error_code="reconcile_unavailable")
+            if model is None:
+                return run
+            if not self._identity(model, run):
+                return self._save(session, run, state="identity_mismatch")
+            run = self._save(session, run, model_id=model.model_id)
+        # No call to _advance: a 503 never authorizes create or a first/repeated start.
+        return self._reconcile(session, run, grant)
 
     @staticmethod
     def _validate_entry(entry: LedgerEntry, spend: SpendRequest, state: str) -> None:
@@ -270,14 +321,30 @@ class PlatformTrainingBackend:
                 existing = self.transport.find_model(grant, self.plan)
             except Exception:
                 return self._save(session, run, error_code="preflight_unavailable")
-            if available is not True:
-                return self._save(session, run, phase="terminal", state="gpu_unavailable")
-            if existing is not None:
-                # Never start an unrelated/pre-existing model under a fresh operation.
-                return self._save(session, run, phase="terminal", state="identity_mismatch")
-            run = self._save(session, run, phase="create_intent", state="uncertain_create")
-            entry = self.budget.dispatch(run.spend)
+            if available is not True or existing is not None:
+                # Definitive refusal before any dispatch can safely release the hold.
+                run = self._save(
+                    session,
+                    run,
+                    phase="terminal",
+                    state="gpu_unavailable" if available is not True else "identity_mismatch",
+                )
+                self._release_undispatched(run)
+                return run
+            run = self._save(session, run, phase="dispatch_intent")
+        if run.phase == "dispatch_intent":
+            # No provider call is possible in this phase. A refusal or a crash after
+            # ledger commit can be recovered from authoritative ledger state.
+            entry = self.budget.read(run.spend)
+            if entry.request != run.spend:
+                raise CloudTrainingRefused("budget_authorization_mismatch")
+            if entry.state == "reserved":
+                entry = self.budget.dispatch(run.spend)
+            else:
+                # Recheck current limits/authority if dispatch committed before crash.
+                entry = self.budget.reserve_and_authorize(run.spend)
             self._validate_entry(entry, run.spend, "dispatched")
+            run = self._save(session, run, phase="create_intent", state="uncertain_create")
             try:
                 model = self.transport.create_model(grant, self.plan)
             except Exception as error:
@@ -332,6 +399,7 @@ class PlatformTrainingBackend:
                 if type(amount) is not int or amount < 0:
                     return self._save(session, run, error_code="invalid_receipt")
             run = self._save(session, run, phase="started", state="accepted", receipt=receipt)
+            self._observe_estimate(run)
             # Accepted is distinct from active; readback occurs on the next advance.
             return run
         return self._reconcile(session, run, grant)
@@ -388,7 +456,7 @@ class PlatformTrainingBackend:
             and type(model.dataset_version) is int
             and model.dataset_version >= 1
             and isinstance(model.dataset_content_hash, str)
-            and bool(re.fullmatch(r"[0-9a-f]{64}", model.dataset_content_hash))
+            and model.dataset_content_hash == self.plan.expected_dataset_content_hash
             and (run.dataset_version is None or run.dataset_version == model.dataset_version)
             and (
                 run.dataset_content_hash is None
@@ -421,16 +489,20 @@ class PlatformTrainingBackend:
 
     def _settle(self, session: RunSession, run: CloudRun, grant: ConnectionGrant) -> CloudRun:
         assert self.transport is not None and self.budget is not None and run.model_id is not None
-        if run.charge is not None:
-            return run
-        try:
-            charge = (
-                self.transport.charge(grant, run.model_id, run.provider_run_id)
-                if run.provider_run_id
-                else None
-            )
-        except Exception:
-            charge = None
+        # Settlement and attribution are one ledger transaction. Recover the durable
+        # result if a crash lost our run-store save and the provider is now unavailable.
+        charge = self.budget.settled_charge(run.spend)
+        if charge is None:
+            charge = run.charge
+        if charge is None:
+            try:
+                charge = (
+                    self.transport.charge(grant, run.model_id, run.provider_run_id)
+                    if run.provider_run_id
+                    else None
+                )
+            except Exception:
+                charge = None
         if charge is not None and (
             charge.model_id != run.model_id
             or charge.provider_run_id != run.provider_run_id

@@ -69,8 +69,28 @@ class BudgetPort(Protocol):
         """Atomic single-use dispatch, checking current pause/limits/authority."""
         ...
 
+    def read(self, request: SpendRequest) -> LedgerEntry:
+        """Read durable state and reject a changed request binding."""
+        ...
+
+    def release(self, request: SpendRequest) -> LedgerEntry:
+        """Idempotently cancel only a definitively undispatched reservation."""
+        ...
+
+    def pause_estimate_overrun(self, request: SpendRequest, estimate_microusd: int) -> None:
+        """Durably retain the higher estimate and pause paid work; it is NOT an actual.
+
+        Idempotent and independent of current dispatch authority. Preserve any
+        stronger existing pause (including insufficient credits).
+        """
+        ...
+
+    def settled_charge(self, request: SpendRequest) -> Charge | None:
+        """Read attribution saved atomically with ledger settlement, including after crash."""
+        ...
+
     def reconcile(self, request: SpendRequest, charge: Charge | None) -> LedgerEntry:
-        """Idempotently settle only attributable charges; None retains the estimate."""
+        """Settle charge and its attribution atomically; None never overwrites settlement."""
         ...
 
     def pause_insufficient_credits(self, request: SpendRequest) -> None:

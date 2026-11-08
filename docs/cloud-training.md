@@ -28,6 +28,10 @@ non-training vendor methods. The controlled downstream worker still must measure
 tensors and the exported signature before qualification.
 
 After start the model readback supplies dataset ID, version and content hash.
+The plan requires the expected Platform content hash from verified synchronization
+(separate from the compiler manifest hash). The captured version may be newly
+allocated, but its content must equal that synchronized identity on the very first
+readback as well as later reads. No hash algorithm is invented for vendor content IDs.
 Missing/changed pinned arguments or captured dataset identity permanently mark
 `args_mismatch`; they never silently fall back to vendor defaults. Store only
 matching allowlisted resolved values plus mismatched key names, not arbitrary
@@ -36,9 +40,13 @@ reconciliation for a failed/cancelled/completed remote job.
 
 The start receipt retains `estimatedCost` (price/memory) and `billing` (estimated
 total/balance), normalized to typed integer amounts by the HTTP adapter. These are
-never actuals. A transaction bound to both model and provider run ID supplies the
-actual. Until attribution, the ledger retains the reservation estimate even when
-training failed or was cancelled. Downloaded `best.pt` is bounded and hashed by
+never actuals. A receipt exceeding the authorized estimate (including its hourly
+rate applied to the reserved duration) is retained durably and pauses further paid
+stages through the budget port. It is not settled as a charge. A transaction bound
+to both model and provider run ID supplies the actual, with charge attribution and
+settlement stored atomically. Recovery reads that durable attribution before asking
+the provider again. Until attribution, the ledger retains the reservation estimate
+even when training failed or was cancelled. Downloaded `best.pt` is bounded and hashed by
 the application, then placed in the injected content-addressed artifact store.
 No vendor hash is assumed. Provider initialization digest, package versions,
 Albumentations behavior, dataloader retention and fixed-shape checkpoint selection
@@ -74,7 +82,13 @@ service is instantiated here; imports stay within the licence boundary.
 
 ## Recovery behavior
 
-Intent is durable **before** create/start. A timeout, 409, 429, malformed receipt,
+A separate `dispatch_intent` phase precedes atomic ledger dispatch. A refused
+dispatch, or a crash just after its ledger commit, recovers from authoritative
+ledger state; no provider call is possible in this phase. Definitive preflight
+refusals durably release only reservations known never to have dispatched. Release
+is idempotent, including after a crash between terminal-state and ledger writes.
+
+Mutation intent is durable **before** create/start. A timeout, 409, 429, malformed receipt,
 or other uncertain response only allows read-only reconciliation. Missing
 readback is not proof of non-execution and never authorizes another mutation.
 An uncertain create can recover its model by the exact stable slug, then perform
@@ -83,8 +97,10 @@ provider job ID or resource under that operation becomes `identity_mismatch`.
 
 402 and 503 are terminal-for-now, never mutation retries. A 402 saves terminal
 intent first; if pausing the ledger crashes, the next advance retries only the
-idempotent ledger pause. A 503 after a known model permits read-only reconciliation
-in case the response was uncertain. No transient failure releases estimated cost.
+idempotent ledger pause. A 503 during create permits exact-slug read-only lookup
+and recovery of the model ID, but not even a first start. A 503 after a known model
+permits read-only reconciliation in case the response was uncertain. No transient
+failure releases estimated cost.
 Failed/cancelled/completed provider jobs remain readable for late charge attribution
 and checkpoint retrieval, with their original IDs and costs.
 
