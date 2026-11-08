@@ -62,6 +62,62 @@ def test_idempotent_enqueue_rejects_different_inputs(store):
     store.cancel(project, job_id)
 
 
+@pytest.mark.parametrize("payload", [{"nested": [(1, 2), {"values": (3, 4)}]}, {1: "value"}])
+def test_idempotent_enqueue_compares_json_normalized_inputs(store, payload):
+    project = str(uuid4())
+    job_id = store.enqueue(project, "operation", "proposals", payload)
+    assert store.enqueue(project, "operation", "proposals", payload) == job_id
+    lease = store.claim("proposals", "worker", job_id=job_id)
+    assert store.enqueue(project, "operation", "proposals", lease.input) == job_id
+    with pytest.raises(ReplayConflict):
+        store.enqueue(project, "operation", "proposals", {"changed": True})
+    store.cancel(project, job_id)
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_runner_preserves_custom_duration_for_all_heartbeats(store, monkeypatch, resume):
+    project, job_id = enqueue(store)
+    if resume:
+        lease = store.claim("proposals", "old-worker", job_id=job_id, lease_seconds=600)
+        store.save_stage(lease, "stage", {"saved": True})
+        expire(store, lease)
+    durations = []
+    heartbeat = store.heartbeat
+
+    def record_heartbeat(lease, *, lease_seconds=60):
+        durations.append(lease_seconds)
+        heartbeat(lease, lease_seconds=lease_seconds)
+
+    monkeypatch.setattr(store, "heartbeat", record_heartbeat)
+
+    def handler(context):
+        assert not resume, "completed stage must not run again"
+        context.heartbeat()
+        return {"saved": True}
+
+    def sink(conn, lease, artifacts):
+        remaining = conn.execute(
+            "SELECT EXTRACT(EPOCH FROM lease_until-clock_timestamp()) "
+            "FROM worker_job WHERE job_id=%s",
+            (job_id,),
+        ).fetchone()[0]
+        assert remaining > 590, "handler or post-stage heartbeat shortened the lease"
+
+    runner = JobRunner(
+        store,
+        "proposals",
+        (Stage("stage", handler),),
+        sink,
+        job_id=job_id,
+        lease_seconds=600,
+    )
+    assert runner.run_once("worker")
+    assert status(store, job_id)[0] == "succeeded"
+    assert len(durations) >= (1 if resume else 3)
+    assert set(durations) == {600}
+    assert not store.cancel(project, job_id)
+
+
 def test_expired_worker_resumes_artifacts_and_cannot_write_or_commit(store):
     project, job_id = enqueue(store)
     first = store.claim("proposals", "old")

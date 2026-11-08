@@ -68,7 +68,7 @@ class JobStore:
     ) -> str:
         if not all((project_key, operation_key, kind)) or not 1 <= max_attempts <= 10:
             raise ValueError("jobs need scoped identity and 1..10 attempts")
-        canonical(payload)
+        payload = json.loads(canonical(payload))
         with self.connect() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "INSERT INTO worker_job(job_id,project_key,operation_key,kind,input,max_attempts) "
@@ -243,9 +243,10 @@ class StageContext:
     store: JobStore
     lease: Lease
     artifacts: dict
+    lease_seconds: int = 60
 
     def heartbeat(self) -> None:
-        self.store.heartbeat(self.lease)
+        self.store.heartbeat(self.lease, lease_seconds=self.lease_seconds)
 
 
 @dataclass(frozen=True)
@@ -344,10 +345,12 @@ class JobRunner:
                         lease_seconds=self.lease_seconds,
                         max_stage_seconds=self.max_stage_seconds,
                     ):
-                        payload = stage.execute(StageContext(self.store, lease, dict(artifacts)))
+                        payload = stage.execute(
+                            StageContext(self.store, lease, dict(artifacts), self.lease_seconds)
+                        )
                     self.store.save_stage(lease, stage.name, payload)
                     artifacts[stage.name] = payload
-                self.store.heartbeat(lease)
+                self.store.heartbeat(lease, lease_seconds=self.lease_seconds)
             self.store.complete(lease, tuple(stage.name for stage in self.stages), self.sink)
         except LeaseLost:
             pass
