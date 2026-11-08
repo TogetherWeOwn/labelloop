@@ -10,7 +10,11 @@ from labelloop_api import model_schema
 from labelloop_api.acceptance_store import pause_acceptance, require_automatic_acceptance
 from labelloop_api.annotation_audit_store import record_annotation_audit
 from labelloop_api.annotation_evidence_store import record_annotation_evidence
-from labelloop_api.audit_sample_store import freeze_audit_sample
+from labelloop_api.audit_sample_store import (
+    freeze_audit_sample,
+    freeze_automatic_audit_sample,
+    load_audit_sample,
+)
 from labelloop_api.automatic_review_store import load_automatic_acceptance
 from labelloop_api.final_test_store import register_final_test
 from labelloop_api.model_store import change_registry, load_registry
@@ -324,6 +328,65 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 load_automatic_acceptance(
                     connection, project_key=release.project_id, asset_key=asset_key, revision=3
                 )
+            source_release = (
+                connection.execute(
+                    sa.select(canonical_dataset_release).where(
+                        canonical_dataset_release.c.release_key == canary.release_key,
+                        canonical_dataset_release.c.project_id
+                        == lock_project(connection, release.project_id),
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            strict_release = asset_key + "-original-acceptance"
+            strict_release_id = connection.execute(
+                sa.insert(canonical_dataset_release)
+                .values(
+                    **{
+                        key: value
+                        for key, value in source_release.items()
+                        if key not in {"id", "created_at", "release_key", "sample_revisions"}
+                    },
+                    release_key=strict_release,
+                    sample_revisions={asset_key: 2},
+                )
+                .returning(canonical_dataset_release.c.id)
+            ).scalar_one()
+            sample_arguments = dict(
+                project_key=release.project_id,
+                release_key=strict_release,
+                sample_key=strict_release,
+                actor_id=actor,
+                pipeline=original.policy.pipeline,
+                size=1,
+                seed=17,
+            )
+            frozen = freeze_automatic_audit_sample(connection, **sample_arguments)
+            assert frozen.sample.candidates[0].revision.revision == 2
+            assert frozen.sample.candidates[0].pipeline_id == original.policy.pipeline.pipeline_id
+            assert (
+                load_audit_sample(
+                    connection,
+                    project_id=source_release["project_id"],
+                    release_id=strict_release_id,
+                    sample_key=strict_release,
+                    require_current_groups=True,
+                )
+                == frozen
+            )
+            # Legacy fixture decisions cannot acquire invented original policy.
+            with pytest.raises(ValueError):
+                freeze_automatic_audit_sample(
+                    connection,
+                    **(
+                        sample_arguments
+                        | {
+                            "release_key": canary.release_key,
+                            "sample_key": strict_release + "-historical",
+                        }
+                    ),
+                )
             # Original provenance does not silently become today's policy on reload.
             with connection.begin_nested() as policy_transaction:
                 current = load_qualification_policy(
@@ -345,6 +408,27 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                         connection, project_key=release.project_id, asset_key=asset_key, revision=2
                     )
                     == original
+                )
+                changed_pipeline = replace(
+                    original.policy.pipeline, reviewer_model_version="changed"
+                )
+                with pytest.raises(ValueError, match="original acceptance pipeline"):
+                    freeze_automatic_audit_sample(
+                        connection,
+                        **(
+                            sample_arguments
+                            | {
+                                "pipeline": changed_pipeline,
+                                "sample_key": strict_release + "-changed",
+                            }
+                        ),
+                    )
+                assert (
+                    freeze_automatic_audit_sample(
+                        connection,
+                        **(sample_arguments | {"sample_key": strict_release + "-original"}),
+                    ).sample.candidates
+                    == frozen.sample.candidates
                 )
                 with pytest.raises(ValueError):
                     append_review(connection, expected_revision=2, **arguments)
