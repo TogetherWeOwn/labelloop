@@ -436,18 +436,18 @@ compiler authority, SELECT-only profiles and real shared-session/CSRF dispatch.
 Profile configuration cases validate immutable bounds and baseline arguments.
 These are commissioned cases, not a pass until exact-head Actions completes.
 No new table/migration, dependency, production grant, default mount, paid call or
-model loading is introduced by the producer. Fenced model completion, training
-detail reads, evaluation/export and full CPU project-to-export acceptance remain
-incomplete. The separate execution-stage adapter below does not enable them.
+model loading is introduced by the producer. Training publication is supplied by
+the separate adapter below. Model/export publication, training detail reads,
+standalone evaluation and full CPU project-to-export acceptance remain incomplete.
 
 ### Local-training execution stage (partial, unmounted)
 
 `CanonicalLocalTrainingWorker` supplies a `train` stage for trusted composition
 with the existing queue, not a new controller. Its backend factory is injected by
 server code; an ML process can pass the delivered `LocalUltralyticsBackend`
-without importing vendor libraries into the API. No worker registration or
-canonical completion sink is supplied in this slice. Do **not** register a runner
-with a no-op sink: saving a stage is not successful canonical training publication.
+without importing vendor libraries into the API. Its `publish` method is the
+canonical completion sink for `JobStore.complete`, not a no-op. No worker is
+registered by default; saving a stage alone is not successful canonical publication.
 
 Before object access, one read-only repeatable snapshot verifies the actual job,
 workspace/project identity, exact human-attributed training receipt, historical
@@ -480,13 +480,39 @@ training. Unit cases use synthetic output to check artifact/lineage/shape/retent
 refusals and safe paths. The existing real CPU smoke additionally feeds its actual
 320/640 backend output through the collector without another training run. These
 are commissioned cases, **not verified until exact-head Actions completes**.
-Canonical training/report publication must still reuse the delivered model store
-inside the queue's fenced completion transaction. Its legacy project-key contract
-must be reconciled explicitly with management's canonical UUID run inputs, without
-rewriting historical intent or duplicating persistence. Export, standalone model
-evaluation, final role provisioning, mounted app and actual new-project-to-export
-acceptance remain open. No qualification, production grant or default mount is
-introduced here.
+
+### Canonical training/report publication (partial, unmounted)
+
+`publish` rechecks durable human intent, owned project/variant identity, historical
+profile/request, succeeded compiler application/receipt and frozen source snapshot
+inside the queue's existing application transaction. It reconstructs the core
+result/checkpoints/reports, rechecks epoch coverage, selected checkpoint, arguments,
+shape/retention evidence and content-addressed checkpoint keys. It performs no
+backend, filesystem, object-store operation or second database connection.
+
+The delivered model store now exposes `save_training_transaction` for the queue's
+active psycopg transaction. It compiles the same bound variant SELECT and applies
+the same lineage validator as the existing SQLAlchemy `save_training`; native JSON
+inserts use a savepoint inside the caller transaction, never an independent commit.
+Only after verified ownership, the sink translates `request.project_id` from the
+management UUID to that project's canonical key for the model-store record. The
+authorized job and original stage remain byte-for-byte unchanged. A system audit
+receipt binds both identities, requester, job/generation and the complete stage
+digest. Training, development reports, audit, application fence and queue success
+commit together; grant failure, caller error or late lease expiry rolls all back.
+Broad canonical-audit rewrite authority is refused.
+
+Disposable Actions cases use the real canonical/compiler/queue path and explicitly
+synthetic training artifacts at both sizes. They cover precommit invisibility,
+identity translation, three missing-grant rollbacks/recovery, caller/deadline
+rollback, expired/cancelled/superseded leases, artifact refusals, broad-role refusal
+and saved-stage resume without retraining or storage access. These cases do not
+prove actual queued CPU training and remain unverified until exact-head Actions.
+The fixture grants SELECT/INSERT on existing `training_run`/`evaluation_run` tables
+only in its disposable DB; no production grants or model/registry writes are added.
+Export/model publication, standalone evaluation, final role provisioning, mounted
+app and actual new-project-to-export acceptance remain open. No qualification or
+default mount is introduced here.
 
 ## Canonical summary reads (partial, unmounted)
 

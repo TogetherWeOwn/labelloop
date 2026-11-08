@@ -106,6 +106,330 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_training_publication(
+    database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
+):
+    """Real compiler/queue; explicitly synthetic training artifact, never ML acceptance."""
+    import hashlib
+    from dataclasses import asdict
+    from pathlib import PurePosixPath
+
+    from labelloop_api.management_train_worker import CanonicalLocalTrainingWorker
+    from labelloop_core.evaluation import ClassMetrics, EvaluationReport, Metrics
+    from labelloop_core.training import Checkpoint, InferencePolicy, TrainingRequest, TrainingResult
+
+    training, created, compiled = prepared_training(
+        database,
+        compilation,
+        compiler_worker,
+        recipe,
+        training_sample=True,
+    )
+    accepted = training_request(training, compiled.resource.id)
+    lease = compiler_worker.store.claim("train_local", "fixture-ml", job_id=accepted.job_id)
+    inputs = lease.input["request"]
+    request = TrainingRequest(**(inputs | {"policy": InferencePolicy(**inputs["policy"])}))
+    checkpoint = Checkpoint(
+        0, hashlib.sha256(b"synthetic weights").hexdigest(), 0.0, "eval-" + uuid4().hex
+    )
+    result = TrainingResult(
+        request, (checkpoint,), checkpoint, request.arguments(), "8.4.204", "fixture-only", False
+    )
+    metrics = Metrics(
+        1,
+        0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        {
+            "package": ClassMetrics(False, 0, 0, 0, 0, None, None, None, None),
+        },
+    )
+    report = EvaluationReport(
+        checkpoint.evaluation_run_id,
+        request.dataset_release_id,
+        request.recipe_id,
+        checkpoint.sha256,
+        request.class_map_sha256,
+        "development",
+        request.policy,
+        metrics,
+        {},
+        (),
+    )
+    manifest = publication_state(database[1], compiled)[0]
+    record = {
+        "result": asdict(result),
+        "reports": [asdict(report)],
+        "tensor_shapes": {
+            key: [[1, 3, request.policy.imgsz, request.policy.imgsz]]
+            for key in ("training", "validation", "inference")
+        },
+        "target_retention": [
+            {
+                "sample": PurePosixPath(item["image_path"]).name,
+                "before": 0,
+                "after": 0,
+                "before_at_or_below_6px": 0,
+                "after_at_or_below_6px": 0,
+            }
+            for item in manifest["samples"]
+            if item["split"] == "train"
+        ],
+        "checkpoint_keys": {
+            checkpoint.sha256: "sha256/" + checkpoint.sha256[:2] + "/" + checkpoint.sha256
+        },
+    }
+    with database[1].begin() as connection:
+        connection.execute(
+            text(f'GRANT SELECT, INSERT ON training_run, evaluation_run TO "{database[2]}"')
+        )
+
+    def unexpected(**kwargs):
+        pytest.fail("completion must not construct a backend")
+
+    worker = CanonicalLocalTrainingWorker(
+        training.mutations.engine,
+        compiler_worker.objects,
+        training.mutations.workspace_id,
+        unexpected,
+    )
+    return worker, training, created, compiled, accepted, lease, record
+
+
+def training_publication_state(owner, accepted):
+    with owner.connect() as connection:
+        run = (
+            connection.execute(
+                text("SELECT * FROM training_run WHERE run_key=:id"), {"id": accepted.resource.id}
+            )
+            .mappings()
+            .one_or_none()
+        )
+        reports = (
+            connection.execute(
+                text(
+                    "SELECT e.record FROM evaluation_run e JOIN training_run t "
+                    "ON t.id=e.training_run_id WHERE t.run_key=:id"
+                ),
+                {"id": accepted.resource.id},
+            )
+            .scalars()
+            .all()
+        )
+        events = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.training_completed",
+                canonical_event.c.aggregate_id == accepted.resource.id,
+            )
+        ).all()
+        applications = connection.execute(
+            text("SELECT count(*) FROM worker_application WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        ).scalar_one()
+        job = connection.execute(
+            text("SELECT status,generation FROM worker_job WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        ).one()
+    return run, reports, events, applications, job
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_training_publication_is_atomic_and_translates_only_verified_project_identity(
+    database, compilation, compiler_worker, recipe
+):
+    import hashlib
+
+    from labelloop_core.json_records import canonical_json
+
+    worker, training, created, compiled, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    record = compiler_worker.store.save_stage(lease, "training", record)
+
+    def sink(connection, current, artifacts):
+        worker.publish(connection, current, artifacts)
+        assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+        assert connection.execute("SELECT current_user").fetchone()[0] == database[2]
+
+    compiler_worker.store.complete(lease, ("training",), sink)
+    run, reports, events, applications, job = training_publication_state(database[1], accepted)
+    assert job.status == "succeeded" and applications == 1 and len(events) == len(reports) == 1
+    expected = record["result"] | {
+        "request": record["result"]["request"] | {"project_id": lease.project_key}
+    }
+    assert run["record"] == expected
+    assert record["result"]["request"]["project_id"] == created.id
+    assert run["input_manifest"] == publication_state(database[1], compiled)[0]
+    assert reports == record["reports"]
+    assert events[0].actor_kind == "system" and events[0].actor_id == lease.worker_id
+    evidence = events[0].payload
+    assert evidence["project_id"] == created.id and evidence["project_key"] == lease.project_key
+    assert evidence["requested_by"] == Actor().id and evidence["generation"] == job.generation
+    assert evidence["stage_sha256"] == hashlib.sha256(canonical_json(record)).hexdigest()
+    assert training_request(training, compiled.resource.id) == accepted
+
+
+@pytest.mark.parametrize(
+    "grant", ["INSERT ON training_run", "INSERT ON evaluation_run", "INSERT ON canonical_event"]
+)
+def test_training_publication_missing_grant_rolls_back_and_resumes_saved_stage(
+    database, compilation, compiler_worker, grant
+):
+    import psycopg
+
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    with database[1].begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{database[2]}"'))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        compiler_worker.store.complete(lease, ("training",), worker.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    with database[1].begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{database[2]}"'))
+    compiler_worker.store.complete(lease, ("training",), worker.publish)
+    assert training_publication_state(database[1], accepted)[4].status == "succeeded"
+
+
+@pytest.mark.parametrize("failure", ["caller", "deadline"])
+def test_training_late_sink_failure_rolls_back_all_effects(
+    database, compilation, compiler_worker, failure
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+
+    def sink(connection, current, artifacts):
+        worker.publish(connection, current, artifacts)
+        if failure == "caller":
+            raise RuntimeError("synthetic caller failure")
+        connection.execute(
+            "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+            "WHERE job_id=%s",
+            (lease.job_id,),
+        )
+
+    with pytest.raises(RuntimeError if failure == "caller" else LeaseLost):
+        compiler_worker.store.complete(lease, ("training",), sink)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+
+
+@pytest.mark.parametrize("terminal", ["expired", "cancelled", "superseded"])
+def test_training_lost_lease_cannot_publish(database, compilation, compiler_worker, terminal):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    if terminal == "cancelled":
+        compiler_worker.store.cancel(lease.project_key, lease.job_id)
+    else:
+        with database[1].begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                    "WHERE job_id=:id"
+                ),
+                {"id": lease.job_id},
+            )
+        if terminal == "superseded":
+            assert compiler_worker.store.claim("train_local", "replacement", job_id=lease.job_id)
+    with pytest.raises(LeaseLost):
+        compiler_worker.store.complete(lease, ("training",), worker.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+
+
+@pytest.mark.parametrize(
+    "change", ["request", "arguments", "selected", "report", "shape", "retention", "keys", "epochs"]
+)
+def test_training_completion_revalidates_saved_artifact(
+    database, compilation, compiler_worker, change
+):
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    if change == "request":
+        record["result"]["request"]["run_id"] = "different"
+    elif change == "arguments":
+        record["result"]["resolved_arguments"]["tile"] = True
+    elif change == "selected":
+        record["result"]["selected"]["sha256"] = "0" * 64
+    elif change == "report":
+        record["reports"][0]["weights_sha256"] = "0" * 64
+    elif change == "shape":
+        record["tensor_shapes"]["validation"] = [[1, 3, 352, 352]]
+    elif change == "retention":
+        record["target_retention"][0]["after"] = 1
+    elif change == "keys":
+        record["checkpoint_keys"] = {}
+    else:
+        record["result"]["checkpoints"] = []
+    compiler_worker.store.save_stage(lease, "training", record)
+    with pytest.raises(ValueError):
+        compiler_worker.store.complete(lease, ("training",), worker.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+
+
+def test_training_saved_artifact_resumes_without_backend_or_object_access(
+    database, compilation, compiler_worker
+):
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("saved training must not retrain or read/upload objects")
+
+    worker = replace(
+        worker, objects=SimpleNamespace(read=unexpected, put=unexpected), backend=unexpected
+    )
+    runner = JobRunner(
+        compiler_worker.store,
+        "train_local",
+        (Stage("training", unexpected),),
+        worker.publish,
+        job_id=lease.job_id,
+    )
+    assert runner.run_once("replacement")
+    run, _, events, applications, job = training_publication_state(database[1], accepted)
+    assert run is not None and applications == len(events) == 1
+    assert job.status == "succeeded" and job.generation == 2
+    assert events[0].payload["generation"] == 2
+    assert not runner.run_once("replacement")
+
+
+def test_training_publication_denies_broad_audit_runtime(database, compilation, compiler_worker):
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    with database[1].begin() as connection:
+        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{database[2]}"'))
+    with pytest.raises(ValueError, match="must not rewrite"):
+        compiler_worker.store.complete(lease, ("training",), worker.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+
+
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_training_stage_rehydrates_authorized_inputs_before_backend_execution(
     database, compilation, compiler_worker, recipe
@@ -248,7 +572,9 @@ def test_training_stage_refuses_corrupt_objects_before_backend_access(
         worker.train(StageContext(compiler_worker.store, lease, {}))
 
 
-def prepared_training(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
+def prepared_training(
+    database, compilation, compiler_worker, recipe="full-letterbox-320-v1", *, training_sample=False
+):
     from uuid import UUID
 
     from labelloop_api.management_training import (
@@ -259,6 +585,8 @@ def prepared_training(database, compilation, compiler_worker, recipe="full-lette
 
     service, owner, _ = database
     created, _, _, payload = release_inputs(service, owner)
+    if training_sample:
+        payload = add_training_sample(service, owner, created.id, payload)
     release = freeze(service, created.id, payload)
     accepted = compile_request(compilation, release.id, recipe=recipe)
     assert JobRunner(
@@ -270,6 +598,74 @@ def prepared_training(database, compilation, compiler_worker, recipe="full-lette
     ).run_once("fixture-compiler")
     profiles = (ApprovedTrainingProfile(UUID(created.id), "baseline", 1, recipe, "1" * 64),)
     return CanonicalManagementTraining(service, compilation.enqueue, profiles), created, accepted
+
+
+def add_training_sample(service, owner, project_id, payload):
+    output = io.BytesIO()
+    Image.new("RGB", (24, 12), "red").save(output, format="PNG")
+    asset = ingest(
+        service,
+        project_id,
+        AssetIngest(
+            expected_revision=2,
+            original_base64=base64.b64encode(output.getvalue()).decode(),
+            source_uri="fixture:training",
+            source_group="capture-b",
+        ),
+        key="train-image",
+    )
+    with owner.begin() as connection:
+        source = connection.execute(
+            select(source_asset).where(source_asset.c.asset_key == asset.id)
+        ).one()
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == project_id)
+        ).one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=source.id,
+                group_id="group-2",
+                split="train",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture independent training group",
+                locked=True,
+            )
+        )
+        connection.execute(
+            insert(completeness_assessment).values(
+                asset_id=source.id,
+                revision=1,
+                ontology_hash=completeness_context_hash(
+                    ontology.class_map, ontology.classes, "Visible packages"
+                ),
+                scope_completeness="exhaustive_for_scope",
+                actor_kind="human",
+                actor_id=Actor().id,
+                output_truncated=False,
+                unresolved_regions=[],
+            )
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=1,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            training_eligible=True,
+        )
+    return payload.model_copy(
+        update={
+            "expected_revision": 3,
+            "annotation_revisions": payload.annotation_revisions | {asset.id: 2},
+        }
+    )
 
 
 @pytest.fixture

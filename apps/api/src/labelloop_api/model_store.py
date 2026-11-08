@@ -9,8 +9,11 @@ import hashlib
 import json
 from dataclasses import asdict
 
+import psycopg
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from sqlalchemy.dialects.postgresql import dialect, insert
 
 from labelloop_api import model_schema as db
 from labelloop_api.schema import (
@@ -76,45 +79,41 @@ def decode_report(value: dict) -> EvaluationReport:
     )
 
 
-def variant_context(connection: sa.Connection, variant_id: object) -> sa.RowMapping:
+def variant_context_query(variant_id: object):
     return (
-        connection.execute(
-            sa.select(
-                yolo_dataset_variant.c.id,
-                yolo_dataset_variant.c.class_map,
-                yolo_dataset_variant.c.file_manifest,
-                yolo_dataset_variant.c.validated,
-                yolo_dataset_variant.c.non_empty_val,
-                canonical_dataset_release.c.frozen,
-                canonical_dataset_release.c.release_key,
-                canonical_dataset_release.c.assignment_version,
-                project.c.id.label("project_id"),
-                project.c.project_key,
-                preprocessing_recipe.c.id.label("recipe_id"),
-                preprocessing_recipe.c.recipe_key,
-                preprocessing_recipe.c.policy,
-                preprocessing_recipe.c.immutable.label("recipe_immutable"),
-            )
-            .select_from(
-                yolo_dataset_variant.join(canonical_dataset_release)
-                .join(project)
-                .join(preprocessing_recipe)
-            )
-            .where(yolo_dataset_variant.c.id == variant_id)
+        sa.select(
+            yolo_dataset_variant.c.id,
+            yolo_dataset_variant.c.class_map,
+            yolo_dataset_variant.c.file_manifest,
+            yolo_dataset_variant.c.validated,
+            yolo_dataset_variant.c.non_empty_val,
+            canonical_dataset_release.c.frozen,
+            canonical_dataset_release.c.release_key,
+            canonical_dataset_release.c.assignment_version,
+            project.c.id.label("project_id"),
+            project.c.project_key,
+            preprocessing_recipe.c.id.label("recipe_id"),
+            preprocessing_recipe.c.recipe_key,
+            preprocessing_recipe.c.policy,
+            preprocessing_recipe.c.immutable.label("recipe_immutable"),
         )
-        .mappings()
-        .one()
+        .select_from(
+            yolo_dataset_variant.join(canonical_dataset_release)
+            .join(project)
+            .join(preprocessing_recipe)
+        )
+        .where(yolo_dataset_variant.c.id == variant_id)
     )
 
 
-def save_training(
-    connection: sa.Connection,
-    *,
-    variant_id: object,
-    result: TrainingResult,
-    reports: tuple[EvaluationReport, ...],
+def variant_context(connection: sa.Connection, variant_id: object) -> sa.RowMapping:
+    return connection.execute(variant_context_query(variant_id)).mappings().one()
+
+
+def validate_training(
+    context, result: TrainingResult, reports: tuple[EvaluationReport, ...]
 ) -> None:
-    context = variant_context(connection, variant_id)
+    """Shared lineage gate for SQLAlchemy callers and the native queue transaction."""
     request = result.request
     if not all(
         context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
@@ -159,6 +158,59 @@ def save_training(
             or report.overall.map50_95 != checkpoint.validation_map
         ):
             raise ValueError("checkpoint evaluation lineage mismatch")
+
+
+def save_training_transaction(
+    connection: psycopg.Connection,
+    *,
+    variant_id: object,
+    result: TrainingResult,
+    reports: tuple[EvaluationReport, ...],
+) -> None:
+    """Append through the queue's caller-owned transaction, never another connection.
+
+    Compile only the shared SELECT (one UUID bind, no expanding/literal binds).
+    Native writes explicitly adapt JSON; no SQLAlchemy pool owns this connection.
+    """
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("training publication requires an active caller transaction")
+    query = variant_context_query(variant_id).compile(dialect=dialect())
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+    if context is None:
+        raise ValueError("missing training variant")
+    validate_training(context, result, reports)
+    # Inside the queue transaction this is a savepoint, not a commit boundary.
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO training_run(run_key,variant_id,input_manifest,record) "
+            "VALUES (%s,%s,%s,%s) RETURNING id",
+            (
+                result.request.run_id,
+                variant_id,
+                Jsonb(context["file_manifest"]),
+                Jsonb(json_record(result)),
+            ),
+        )
+        run_id = cursor.fetchone()[0]
+        cursor.executemany(
+            "INSERT INTO evaluation_run(run_key,training_run_id,variant_id,record) "
+            "VALUES (%s,%s,%s,%s)",
+            [(report.run_id, run_id, variant_id, Jsonb(json_record(report))) for report in reports],
+        )
+
+
+def save_training(
+    connection: sa.Connection,
+    *,
+    variant_id: object,
+    result: TrainingResult,
+    reports: tuple[EvaluationReport, ...],
+) -> None:
+    context = variant_context(connection, variant_id)
+    validate_training(context, result, reports)
+    request, manifest = result.request, context["file_manifest"]
     with connection.begin_nested():
         run_id = connection.execute(
             sa.insert(db.training_run).values(
