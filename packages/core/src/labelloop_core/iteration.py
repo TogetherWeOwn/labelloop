@@ -156,15 +156,15 @@ class IterationManifest:
 
     @property
     def round_evidence(self) -> str:
-        # Only new evidence, changed recipes or explicit policy renewal justify a round.
+        # Novelty is content, not storage aliases; digest still pins full lineage.
         return _digest(
             {
-                "sources": [asdict(p) for p in self.sources],
-                "evidence": asdict(self.evidence),
-                "recipes": [
-                    (p.recipe_id, asdict(p.definition), asdict(p.training_profile))
-                    for p in self.recipes
-                ],
+                "sources": sorted({(p.pixels.sha256, p.annotation.sha256) for p in self.sources}),
+                "evidence": self.evidence.sha256,
+                "recipes": sorted(
+                    {(p.definition.sha256, p.training_profile.sha256) for p in self.recipes}
+                ),
+                # A renewal is a trusted policy issuance, not a data-content alias.
                 "renewal": asdict(self.policy_renewal),
             }
         )

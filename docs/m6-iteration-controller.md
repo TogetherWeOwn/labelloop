@@ -117,10 +117,22 @@ Both recipes together consume one training round when the first training intent
 is committed, including failed or cancelled attempts. Per-source-batch lifetime
 round counts survive new iterations and invalidation. A new round needs new
 source/evidence, changed recipe/training profile or explicit policy renewal.
+Novelty uses sorted, deduplicated content-hash pairs for source pixels/annotations
+and recipe definitions/training profiles, plus the evidence content hash. Renaming,
+reordering or adding byte-identical source/recipe aliases is not informative data;
+changing only an artifact ID cannot admit another round. Full manifest, cache,
+operation and lineage digests remain identity-sensitive: even an alias change
+invalidates descendants without granting another round. This content identity is
+used both at iteration admission and training eligibility, including retained
+consumed round stamps across serialization and batch switches.
+
 Changing only a teacher or unrelated policy/configuration is insufficient. The
 configured ceiling still applies; extending it requires a fresh explicit renewal
-artifact not previously used for that batch. Per-batch ceiling/renewal history
-survives switches away from and back to a batch; it is not inferred from only the
+artifact not previously used for that batch. Renewal retains full issuance identity:
+the trusted policy service must authenticate and audit a new explicit approval,
+never manufacture a renewal by aliasing an existing approval. Model/request data
+cannot issue it, and it never replaces ledger authorization. Per-batch ceiling/renewal
+history survives switches away from and back to a batch; it is not inferred from only the
 immediately preceding manifest. A renamed batch or iteration is not new evidence. The service
 must preserve canonical source-batch IDs and the retained round ledger. New
 iteration admission rejects evidence already consumed by that batch anywhere in

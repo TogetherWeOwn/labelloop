@@ -717,6 +717,120 @@ def test_round_ceiling_survives_resume_and_two_recipes_count_once() -> None:
     assert bounded.record(StageKey("train", "full320")) is None
 
 
+def aliased_manifest(m: IterationManifest, alias: str) -> IterationManifest:
+    source = m.sources[0]
+    recipe = m.recipes[0]
+    if alias == "evidence":
+        return replace(m, evidence=replace(m.evidence, artifact_id="evidence-alias"))
+    if alias == "pixels":
+        source = replace(source, pixels=replace(source.pixels, artifact_id="pixels-alias"))
+    elif alias == "annotation":
+        source = replace(
+            source, annotation=replace(source.annotation, artifact_id="annotation-alias")
+        )
+    elif alias in {"asset", "duplicate_source"}:
+        source = replace(source, asset_id="image-alias")
+    elif alias == "definition":
+        recipe = replace(recipe, definition=replace(recipe.definition, artifact_id="recipe-alias"))
+    elif alias == "training_profile":
+        recipe = replace(
+            recipe,
+            training_profile=replace(recipe.training_profile, artifact_id="training-alias"),
+        )
+    elif alias in {"recipe", "duplicate_recipe"}:
+        recipe = replace(recipe, recipe_id="full-alias")
+    else:
+        raise AssertionError("unknown fixture alias")
+    return replace(
+        m,
+        sources=tuple(
+            sorted(
+                (*m.sources, source) if alias == "duplicate_source" else (source, *m.sources[1:]),
+                key=lambda p: p.asset_id,
+            )
+        ),
+        recipes=tuple(
+            sorted(
+                (*m.recipes, recipe) if alias == "duplicate_recipe" else (recipe, *m.recipes[1:]),
+                key=lambda p: p.recipe_id,
+            )
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "evidence",
+        "pixels",
+        "annotation",
+        "asset",
+        "definition",
+        "training_profile",
+        "recipe",
+        "duplicate_source",
+        "duplicate_recipe",
+    ],
+)
+@pytest.mark.parametrize("history", ["stopped", "consumed", "switched_batch"])
+def test_same_content_aliases_cannot_admit_a_new_iteration(alias: str, history: str) -> None:
+    original = manifest()
+    if history == "stopped":
+        state = stop(IterationState("iteration-1", original), "no_informative_data", ref("stop"))
+    else:
+        state = stop(trained(), "plateau", ref("stop"))
+        changed = replace(original, evidence=ref("new-evidence"))
+        if history == "switched_batch":
+            changed = replace(changed, source_batch_id="batch-b")
+        state = stop(next_iteration(state, "iteration-2", changed), "plateau", ref("stop"))
+    state = pickle.loads(pickle.dumps(state))
+    aliased = aliased_manifest(original, alias)
+    assert aliased.digest != original.digest  # Cache and lineage stay identity-sensitive.
+    key = StageKey("freeze")
+    initial = IterationState("lineage", original)
+    assert initial.input_digest(key) != replace(initial, manifest=aliased).input_digest(key)
+    assert aliased.round_evidence == original.round_evidence
+    with pytest.raises(ValueError, match="new evidence"):
+        next_iteration(state, "fresh-iteration", aliased)
+    invalidated = invalidate(state, aliased)
+    assert invalidated.records == () and invalidated.rounds == state.rounds
+    assert invalidated.correction_loops == state.correction_loops
+    assert invalidated.started_round_evidence == state.started_round_evidence
+    with pytest.raises(ValueError, match="new evidence"):
+        next_iteration(invalidated, "fresh-iteration", aliased)
+
+
+@pytest.mark.parametrize(
+    "changed", ["pixels", "annotation", "evidence", "definition", "training_profile", "renewal"]
+)
+def test_changed_content_or_trusted_renewal_admits_a_round(changed: str) -> None:
+    state = stop(trained(), "plateau", ref("stop"))
+    m = state.manifest
+    source = m.sources[0]
+    recipe = m.recipes[0]
+    if changed == "pixels":
+        source = replace(source, pixels=replace(source.pixels, sha256=ref("new").sha256))
+    elif changed == "annotation":
+        source = replace(source, annotation=replace(source.annotation, sha256=ref("new").sha256))
+    elif changed == "definition":
+        recipe = replace(recipe, definition=replace(recipe.definition, sha256=ref("new").sha256))
+    elif changed == "training_profile":
+        recipe = replace(
+            recipe, training_profile=replace(recipe.training_profile, sha256=ref("new").sha256)
+        )
+    elif changed == "evidence":
+        m = replace(m, evidence=replace(m.evidence, sha256=ref("new").sha256))
+    else:
+        m = replace(m, policy_renewal=ref("trusted-fresh-renewal"))
+    m = replace(m, sources=(source,), recipes=(recipe, *m.recipes[1:]))
+    assert m.round_evidence != state.manifest.round_evidence
+    advanced = next_iteration(pickle.loads(pickle.dumps(state)), "iteration-2", m)
+    assert advanced.ready() == (StageKey("freeze"),)
+    assert advanced.rounds == state.rounds
+    assert advanced.correction_loops == state.correction_loops
+    assert len(trained(advanced).rounds) == 2
+
+
 def test_new_round_requires_evidence_recipe_or_explicit_renewal() -> None:
     state = stop(trained(), "plateau", ref("plateau"))
     with pytest.raises(ValueError, match="new evidence"):
