@@ -99,6 +99,22 @@ MUTATIONS = [
         },
         200,
     ),
+    (
+        "/projects/p/setup/guide",
+        "save_guide_draft",
+        {
+            "expected_revision": 1,
+            "annotation_guide": "Visible birds only",
+            "extent": "visible",
+            "truncation": "Clip to image",
+            "occlusion": "Visible extent only",
+            "reflections": "Out of scope",
+            "min_target_px": 4.0,
+            "exhaustive_for_scope": True,
+            "background": "Out-of-scope objects only",
+        },
+        200,
+    ),
 ]
 READS = [
     "/projects",
@@ -215,7 +231,7 @@ def test_admin_dispatches_typed_payload_with_attributed_context(path, operation,
 )
 def test_scope_draft_rejects_invalid_or_authority_fields(patch):
     client, service = client_for(Actor())
-    path, _, payload, _ = MUTATIONS[-1]
+    path, _, payload, _ = next(item for item in MUTATIONS if item[1] == "save_scope_draft")
     response = client.post(path, json={**payload, **patch}, headers={"Idempotency-Key": "scope"})
     assert response.status_code == 422
     assert response.json() == {"detail": "invalid_request"}
@@ -431,19 +447,51 @@ def test_codegen_does_not_silently_widen_unsupported_schema():
         typescript_type({"type": "unsupported"})
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("extent", "estimated"),
+        ("min_target_px", 0),
+        ("min_target_px", -1),
+        ("min_target_px", "4"),
+        ("min_target_px", True),
+        ("annotation_guide", ""),
+        ("background", ""),
+        ("exhaustive_for_scope", "true"),
+        ("approval", "admin_approved"),
+        ("published_release_id", "forged"),
+    ],
+)
+def test_guide_draft_refuses_unimplemented_or_untrusted_policy(field, value):
+    client, service = client_for(Actor())
+    guide = next(item[2] for item in MUTATIONS if item[1] == "save_guide_draft")
+    payload = {**guide, field: value}
+    response = client.post(
+        "/projects/p/setup/guide", json=payload, headers={"Idempotency-Key": "guide"}
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert not service.calls
+
+
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     generate(tmp_path)
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 19
-    assert sum(len(methods) for methods in spec["paths"].values()) == 20
+    assert len(spec["paths"]) == 20
+    assert sum(len(methods) for methods in spec["paths"].values()) == 21
+    assert (
+        spec["paths"]["/projects/{project_id}/setup/guide"]["post"]["operationId"]
+        == "saveGuideDraft"
+    )
     assert (
         spec["paths"]["/projects/{project_id}/setup/scope"]["post"]["operationId"]
         == "saveScopeDraft"
     )
     for model in (
         "ScopeDraft",
+        "GuideDraft",
         "ProjectDetail",
         "ReleaseDetail",
         "FreezePlanRead",

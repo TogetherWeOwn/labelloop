@@ -18,6 +18,7 @@ from .management_contracts import (
     Contract,
     EvaluationStart,
     ExportRead,
+    GuideDraft,
     JobAccepted,
     ManagementError,
     ProjectCreate,
@@ -89,6 +90,10 @@ class ManagementOperations(Protocol):
 
     def save_scope_draft(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ScopeDraft
+    ) -> Resource: ...
+
+    def save_guide_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: GuideDraft
     ) -> Resource: ...
 
     def ingest_asset(

@@ -915,6 +915,73 @@
         "title": "FreezePlanRead",
         "type": "object"
       },
+      "GuideDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_guide": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Annotation Guide",
+            "type": "string"
+          },
+          "background": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Background",
+            "type": "string"
+          },
+          "exhaustive_for_scope": {
+            "title": "Exhaustive For Scope",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "extent": {
+            "const": "visible",
+            "title": "Extent",
+            "type": "string"
+          },
+          "min_target_px": {
+            "exclusiveMinimum": 0.0,
+            "title": "Min Target Px",
+            "type": "number"
+          },
+          "occlusion": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Occlusion",
+            "type": "string"
+          },
+          "reflections": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Reflections",
+            "type": "string"
+          },
+          "truncation": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Truncation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "annotation_guide",
+          "extent",
+          "truncation",
+          "occlusion",
+          "reflections",
+          "min_target_px",
+          "exhaustive_for_scope",
+          "background"
+        ],
+        "title": "GuideDraft",
+        "type": "object"
+      },
       "GuideRead": {
         "additionalProperties": false,
         "properties": {
@@ -4836,6 +4903,123 @@
           }
         },
         "summary": "List Resources",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/setup/guide": {
+      "post": {
+        "operationId": "saveGuideDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuideDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Save Guide Draft",
         "tags": [
           "management"
         ]

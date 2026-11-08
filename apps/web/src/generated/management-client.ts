@@ -18,6 +18,7 @@ export type EvaluationStart = { "dataset_release_id": string; "expected_revision
 export type ExclusionRead = { "asset_ids": Array<string>; "reason": string };
 export type ExportRead = { "artifact_id": string; "artifact_sha256": string; "format": "onnx"; "input_hw": [number, number]; "model_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "weights_sha256": string };
 export type FreezePlanRead = { "checks": Array<CheckRead>; "exclusions": Array<ExclusionRead>; "payload": ReleaseFreeze | null; "project_id": string };
+export type GuideDraft = { "annotation_guide": string; "background": string; "exhaustive_for_scope": boolean; "expected_revision": number; "extent": "visible"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type GuideRead = { "background": string; "exhaustive_for_scope": boolean; "extent": "visible" | "estimated"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type InferencePolicy = { "agnostic_nms"?: boolean; "conf"?: number; "imgsz": number; "iou"?: number; "max_det"?: number; "nms"?: "external" | "end2end" };
 export type JobAccepted = { "job_id": string; "resource": Resource };
@@ -165,6 +166,11 @@ export class ManagementClient {
     if (input["limit"] != null) query.set("limit", String(input["limit"]));
     if (query.size) path += `?${query}`;
     return this.request<ResourcePage>(path, "GET");
+  }
+
+  saveGuideDraft(input: { "project_id": string; "idempotency-key": string; body: GuideDraft }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/guide`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
   saveScopeDraft(input: { "project_id": string; "idempotency-key": string; body: ScopeDraft }): Promise<Resource> {

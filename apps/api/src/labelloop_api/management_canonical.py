@@ -18,6 +18,7 @@ from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 from .management_contracts import (
     AssetIngest,
     Contract,
+    GuideDraft,
     ManagementError,
     ProjectCreate,
     ReleaseFreeze,
@@ -264,6 +265,53 @@ class CanonicalManagementMutations:
                 result,
                 {
                     "scope_draft": draft,
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
+
+    def save_guide_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: GuideDraft
+    ) -> Resource:
+        self.authorize(actor, context, "save_guide_draft", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            draft = payload.model_dump(mode="json", exclude={"expected_revision"})
+            policy = dict(owned.access_policy)
+            policy["management_guide_draft"] = draft
+            policy["annotation_guide"] = payload.annotation_guide
+            # A draft policy is not completeness evidence or a compiler recipe.
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "guide_draft": draft,
                     "invalidated_steps": [
                         "scope",
                         "classes",

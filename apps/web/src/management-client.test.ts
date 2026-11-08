@@ -96,6 +96,36 @@ describe('generated management client', () => {
     });
   });
 
+  it('saves typed guide intent without completeness, recipe or approval authority', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 3,
+      annotation_guide: 'Visible birds only',
+      extent: 'visible' as const,
+      truncation: 'Clip at image edges',
+      occlusion: 'Visible extent',
+      reflections: 'Out of scope',
+      min_target_px: 4,
+      exhaustive_for_scope: true,
+      background: 'Explicit out-of-scope objects',
+    };
+    await client.saveGuideDraft({ project_id: 'p', 'idempotency-key': 'guide-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/setup/guide', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'guide-1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('uses the server training profile and reads a fresh CSRF token per mutation', async () => {
     const { request } = mockRequest();
     const csrf = vi.fn().mockReturnValueOnce('first').mockReturnValueOnce('second');

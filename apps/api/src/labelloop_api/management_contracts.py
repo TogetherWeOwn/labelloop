@@ -57,6 +57,18 @@ class ScopeDraft(Mutation):
     source_permitted_use: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
+class GuideDraft(Mutation):
+    annotation_guide: Annotated[str, Field(min_length=1, max_length=16384)]
+    # Estimated hidden extent is not an implemented labeling policy in v1.
+    extent: Literal["visible"]
+    truncation: Annotated[str, Field(min_length=1, max_length=16384)]
+    occlusion: Annotated[str, Field(min_length=1, max_length=16384)]
+    reflections: Annotated[str, Field(min_length=1, max_length=16384)]
+    min_target_px: Annotated[float, Field(gt=0)]
+    exhaustive_for_scope: bool
+    background: Annotated[str, Field(min_length=1, max_length=16384)]
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

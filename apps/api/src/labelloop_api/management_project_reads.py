@@ -5,8 +5,14 @@ from sqlalchemy import Connection, func, select
 from labelloop_core.domain import ClassDefinition, OntologyRelease
 
 from .management_canonical import refuse
-from .management_contracts import Resource, ScopeDraft
-from .management_details import ClassRead, ProjectDetail, SourceGroupsRead, SourcePairRead
+from .management_contracts import GuideDraft, Resource, ScopeDraft
+from .management_details import (
+    ClassRead,
+    GuideRead,
+    ProjectDetail,
+    SourceGroupsRead,
+    SourcePairRead,
+)
 from .schema import (
     borderline_review,
     canonical_event,
@@ -132,6 +138,34 @@ def scope_draft(connection: Connection, project_row, workspace_id) -> ScopeDraft
     return draft
 
 
+def guide_draft(connection: Connection, project_row, workspace_id) -> GuideDraft | None:
+    receipt = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type == "management.save_guide_draft",
+            canonical_event.c.actor_kind == "human",
+            canonical_event.c.payload["workspace_id"].as_string() == str(workspace_id),
+        )
+        .order_by(canonical_event.c.expected_revision.desc())
+        .limit(1)
+    ).one_or_none()
+    stored = project_row.access_policy.get("management_guide_draft")
+    if receipt is None:
+        if stored is not None:
+            refuse("missing_evidence")
+        return None
+    evidence = receipt.payload["evidence"]["guide_draft"]
+    draft = GuideDraft.model_validate({**evidence, "expected_revision": receipt.expected_revision})
+    if (
+        stored != evidence
+        or project_row.access_policy["annotation_guide"] != draft.annotation_guide
+        or project_row.access_policy.get("management_setup_approvals") != {}
+    ):
+        refuse("missing_evidence")
+    return draft
+
+
 def project_detail(
     connection: Connection, project_row, revision: int, workspace_id
 ) -> ProjectDetail:
@@ -167,6 +201,7 @@ def project_detail(
         refuse("missing_evidence")
     policy = project_row.access_policy
     draft = scope_draft(connection, project_row, workspace_id)
+    guide = guide_draft(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:
@@ -203,9 +238,13 @@ def project_detail(
         ],
         references=None,
         annotation_guide=policy["annotation_guide"],
-        guide=None,
+        guide=GuideRead.model_validate(
+            guide.model_dump(exclude={"expected_revision", "annotation_guide"})
+        )
+        if guide
+        else None,
         sources=sources,
-        approved_steps=[] if draft else None,
+        approved_steps=[] if draft or guide else None,
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -17,7 +17,13 @@ from sqlalchemy import create_engine, event, func, insert, select, text
 from sqlalchemy.exc import DBAPIError
 
 from labelloop_api.management_canonical import CanonicalManagementMutations
-from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze, ScopeDraft
+from labelloop_api.management_contracts import (
+    AssetIngest,
+    GuideDraft,
+    ProjectCreate,
+    ReleaseFreeze,
+    ScopeDraft,
+)
 from labelloop_api.management_ports import ManagementFailure, MutationContext
 from labelloop_api.management_reads import CanonicalManagementReads
 from labelloop_api.revision_store import append_review, completeness_context_hash
@@ -542,6 +548,202 @@ def test_scope_projection_requires_matching_canonical_draft_receipt(database, ta
             .values(
                 access_policy=policy, scope="Unattributed scope" if tamper == "scope" else row.scope
             )
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+
+
+def guide_payload(revision=1):
+    return GuideDraft(
+        expected_revision=revision,
+        annotation_guide="Visible package extents, no hidden-extent inference",
+        extent="visible",
+        truncation="Clip at image edges",
+        occlusion="Label visible extent only",
+        reflections="Out of scope",
+        min_target_px=4.0,
+        exhaustive_for_scope=True,
+        background="Explicitly out-of-scope objects only",
+    )
+
+
+def save_guide(service, project_id, payload=None, actor=None, key="guide"):
+    actor = actor or Actor()
+    payload = payload or guide_payload()
+    context = MutationContext.bind(actor, key, "save_guide_draft", project_id, payload)
+    return service.save_guide_draft(actor, context, payload)
+
+
+def test_guide_save_replays_and_projects_attributed_policy_without_approval(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = guide_payload()
+    result = save_guide(service, created.id, payload)
+    assert result.revision == 2 and result.state == "draft"
+    assert save_guide(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        save_guide(service, created.id, payload.model_copy(update={"min_target_px": 8.0}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_guide(service, created.id, key="stale")
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.resource == result
+    assert detail.annotation_guide == payload.annotation_guide
+    assert detail.guide.model_dump() == payload.model_dump(
+        exclude={"expected_revision", "annotation_guide"}
+    )
+    assert detail.approved_steps == [] and detail.published_release_id is None
+    assert detail.name is None and detail.references is None
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.save_guide_draft",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.payload["evidence"]["guide_draft"] == payload.model_dump(
+            exclude={"expected_revision"}
+        )
+        assert "publish" in receipt.payload["evidence"]["invalidated_steps"]
+    assert counts(owner, created.id) == (0, 0, 2)
+    next_payload = guide_payload(2).model_copy(update={"min_target_px": 8.0})
+    assert save_guide(service, created.id, next_payload, key="next").revision == 3
+    assert save_guide(service, created.id, payload) == result
+    assert reads.read_project(Reader(), created.id).guide.min_target_px == 8.0
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_parallel_guide_saves_use_shared_aggregate_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created = create(service)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return save_guide(service, created.id, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(2) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+def test_guide_and_scope_saves_preserve_both_drafts_in_shared_revision_order(database):
+    service, owner, _ = database
+    created = create(service)
+    save_scope(service, created.id)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_guide(service, created.id)
+    save_guide(service, created.id, guide_payload(2))
+    save_scope(service, created.id, scope_payload(3), key="scope-next")
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.resource.revision == 4
+    assert detail.name == scope_payload().name
+    assert detail.guide.min_target_px == guide_payload().min_target_px
+    assert detail.approved_steps == []
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+def test_guide_save_audit_failure_rolls_back_and_same_key_retry_succeeds(database):
+    service, owner, role = database
+    created = create(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        save_guide(service, created.id)
+    assert reads.read_project(Reader(), created.id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    assert save_guide(service, created.id).revision == 2
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_guide_save_denies_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created = create(service)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        save_guide(service, created.id, actor=actor)
+    assert counts(owner, created.id) == (0, 0, 1)
+
+
+def test_guide_save_checks_workspace_and_context_on_replay(database):
+    service, owner, _ = database
+    created = create(service)
+    save_guide(service, created.id)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_guide(replace(service, workspace_id=uuid4()), created.id)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_guide(service, "not-a-uuid")
+    payload = guide_payload()
+    context = MutationContext.bind(Actor(), "guide", "save_guide_draft", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.save_guide_draft(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+@pytest.mark.parametrize("same_text", [True, False])
+def test_guide_save_invalidates_auto_accept_and_freeze_but_not_historical_release(
+    database, same_text
+):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    frozen = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = {**row.access_policy, "auto_accept_qualification": {"qualified": True}}
+        policy["management_setup_approvals"] = {"guide": "old-approval"}
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    draft = guide_payload(3)
+    if same_text:
+        draft = draft.model_copy(update={"annotation_guide": row.access_policy["annotation_guide"]})
+    save_guide(service, created.id, draft)
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert "auto_accept_qualification" not in policy
+        assert policy["management_setup_approvals"] == {}
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read(Reader(), "dataset-release", frozen.id) == frozen
+    assert reads.read_project(Reader(), created.id).approved_steps == []
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(service, created.id, payload.model_copy(update={"expected_revision": 4}), key="new")
+
+
+@pytest.mark.parametrize("tamper", ["no_receipt", "policy", "text", "removed", "approval"])
+def test_guide_projection_requires_matching_attributed_draft(database, tamper):
+    service, owner, _ = database
+    created = create(service)
+    if tamper != "no_receipt":
+        save_guide(service, created.id)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = dict(row.access_policy)
+        draft = guide_payload().model_dump(exclude={"expected_revision"})
+        policy["management_guide_draft"] = draft
+        if tamper == "policy":
+            draft["min_target_px"] = 8.0
+        if tamper == "text":
+            policy["annotation_guide"] = "Unattributed guide"
+        if tamper == "removed":
+            del policy["management_guide_draft"]
+        if tamper == "approval":
+            policy["management_setup_approvals"] = {"guide": "forged"}
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
         )
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
