@@ -776,6 +776,7 @@ def test_review_unknown_then_original_price_actual_and_batch_finalization(store)
         actor=ADMIN,
         expected_revision=2,
         policy=BudgetPolicy(100, 100, 100),
+        pixel_providers=("fixture",),
         review_prices=replace(REVIEW_PRICES, input_per_million=9_000_000),
     )
     review_actual(store)
