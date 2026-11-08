@@ -57,6 +57,7 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
           finishSave = () => {
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
+            if (command.kind === 'save_setup' && command.step === 'Sources and groups' && typeof command.values.metadata_keys === 'string') snapshot.draft.sources.metadata_keys = command.values.metadata_keys;
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
             if (command.kind === 'add_reference') snapshot.draft.references = [...snapshot.draft.references, { id: 'ref-linked', ...command.values, provenance: 'Proposed' }];
             resolve({ message: 'Captured save only' });

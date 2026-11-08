@@ -235,6 +235,65 @@ try {
   assert.deepEqual(commands.map((command) => command.kind), ['save_setup', 'approve_step']);
   assert.equal(commands[1].expected_revision, commands[0].expected_revision + 1);
   results.push({ key: 'refresh-and-port-lifecycles', pass: true, realCommands: false });
+  const sourcesStep = () => page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Sources and groups/ }).click();
+  const metadataKeys = page.getByLabel('Declared metadata keys (session, sequence, subject)', { exact: true });
+  const discardFields = page.getByRole('button', { name: 'Discard local changes and load current revision', exact: true });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open('new-project'); await sourcesStep();
+    const originalKeys = await metadataKeys.inputValue();
+    await metadataKeys.fill('session, subject');
+    assert.equal(await last(), null, 'editing metadata keys must not dispatch or assign groups');
+    assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Approve sources and groups and continue', exact: true }).isDisabled(), true);
+    await discardFields.focus(); await page.keyboard.press('Enter');
+    assert.equal(await metadataKeys.inputValue(), originalKeys);
+    assert.equal(await last(), null, 'explicit discard must not trigger autosave');
+    await metadataKeys.fill('session, sequence, subject');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+    const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => item.id));
+    assert.deepEqual(violations, [], `source-metadata-${width}: axe`);
+    await page.screenshot({ path: `${evidence}/source-metadata-${width}.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Save changes', exact: true }).focus(); await page.keyboard.press('Enter');
+    assert.deepEqual(await last(), { kind: 'save_setup', draft_id: 'draft-shelf', expected_revision: 7, step: 'Sources and groups', values: { metadata_keys: 'session, sequence, subject' } });
+    await page.getByText('Your last change did not save.', { exact: false }).waitFor();
+    assert.equal(await metadataKeys.inputValue(), 'session, sequence, subject', 'failed save retains metadata keys');
+    await discardFields.click();
+    assert.equal(await metadataKeys.inputValue(), originalKeys);
+    results.push({ key: `source-metadata-${width}`, pass: true, axe: 0, keyboard: 'save-and-discard-enter', realCommands: false });
+  }
+  await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`); await sourcesStep();
+  const originalSourceFacts = await sourceFacts.innerText();
+  await metadataKeys.fill('session, subject');
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).evaluate((button) => button.click());
+  await page.getByText('The draft changed while you were editing.', { exact: false }).waitFor();
+  assert.equal(await metadataKeys.inputValue(), 'session, subject');
+  assert.equal(await page.getByRole('button', { name: 'Save changes', exact: true }).isDisabled(), true);
+  assert.equal(await last(), null, 'conflicting source metadata cannot overwrite the refreshed draft');
+  await discardFields.click();
+  await metadataKeys.fill('session, sequence, subject');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  assert.equal((await last()).expected_revision, 8);
+  assert.equal(await discardFields.isDisabled(), true, 'pending save cannot be discarded');
+  assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('input[name="metadata_keys"]')?.readOnly);
+  assert.equal(await discardFields.count(), 0);
+  assert.equal(await metadataKeys.inputValue(), 'session, sequence, subject');
+  assert.equal(await sourceFacts.innerText(), originalSourceFacts, 'metadata declaration cannot change source facts or split membership');
+  const sourceCommands = await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'));
+  assert.deepEqual(sourceCommands.map((command) => command.kind), ['save_setup'], 'saving does not approve setup or resolve pairs');
+  await page.getByRole('button', { name: 'Compare source-0041 and source-0042', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Same group', exact: true }).isDisabled(), true);
+  for (const state of ['ready', 'dispatch-fixture', 'dispatch-stale', 'dispatch-published']) {
+    await page.goto(`${entry}?screen=new-project&state=${state}`); await sourcesStep();
+    assert.equal(await metadataKeys.getAttribute('readonly'), '', `${state}: metadata edits fail closed`);
+  }
+  await page.goto(`${entry}?screen=new-project&state=dispatch-ready&role=reviewer`); await sourcesStep();
+  assert.equal(await metadataKeys.getAttribute('readonly'), '');
+  assert.equal(await page.getByRole('button', { name: 'Save changes', exact: true }).count(), 0);
+  results.push({ key: 'source-metadata-revision-role-and-authority-guards', pass: true, realCommands: false });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await open('new-project');
