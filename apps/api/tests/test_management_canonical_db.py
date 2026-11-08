@@ -1670,10 +1670,12 @@ def test_reference_withdrawal_enforces_scope_and_context_before_replay(database)
     with pytest.raises(ManagementFailure, match="not_found"):
         withdraw(replace(service, workspace_id=uuid4()), created.id, payload)
     other = create(service, key="other")
+    other_payload = payload.model_copy(update={"expected_revision": 1})
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        withdraw(service, other.id, other_payload, key="other")
     with pytest.raises(ManagementFailure, match="not_found"):
-        withdraw(
-            service, other.id, payload.model_copy(update={"expected_revision": 1}), key="other"
-        )
+        withdraw(service, other.id, other_payload, key="other-reference")
+    assert counts(owner, other.id)[2] == 1
     context = MutationContext.bind(Actor(), "withdraw", "withdraw_reference", created.id, payload)
     with pytest.raises(ManagementFailure, match="invalid_request"):
         service.withdraw_reference(Actor(), replace(context, actor_id="forged"), payload)
