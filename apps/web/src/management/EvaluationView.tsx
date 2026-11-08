@@ -27,11 +27,11 @@ export function EvaluationView({ data, actions, initialRecipe }: ScreenProps & {
       </section><section className="card"><h2>Hard conditions</h2><Table caption={`Recall and negative-scene counts · ${setLabel}`} columns={['Slice', 'Support', 'Current', 'Candidate']}>
         {record.slices.map((slice) => <tr key={slice.name}><th scope="row">{slice.name}</th><td>{slice.n} {slice.unit}</td><td>{slice.current}</td><td>{slice.candidate}</td></tr>)}
       </Table><p>Coverage lost to cropping or exclusion: {record.lost_frames} of {record.frames} frames.</p></section></div>
-      <aside className="card"><h2>Gates for {record.recipe_id}</h2><ul className="checks">{record.gates.map((gate) => <li key={gate.name}><span className={`tag ${gate.passed ? 'ok' : 'danger'}`}>{gate.passed ? '✓ Pass' : '× Fail'}</span> {gate.name}</li>)}</ul><Notice tone={record.qualified ? 'ok' : 'warn'}>{record.verdict}</Notice><p>Each recipe qualifies independently. A 640 pass says nothing about 320.</p>
+      <section className="card"><h2>Gates for {record.recipe_id}</h2><ul className="checks">{record.gates.map((gate) => <li key={gate.name}><span className={`tag ${gate.passed ? 'ok' : 'danger'}`}>{gate.passed ? '✓ Pass' : '× Fail'}</span> {gate.name}</li>)}</ul><Notice tone={record.qualified ? 'ok' : 'warn'}>{record.verdict}</Notice><p>Each recipe qualifies independently. A 640 pass says nothing about 320.</p>
         <p className="label">{record.set_role === 'locked_final' ? `Locked test set ${record.set_id} was opened ${record.opened} time(s) for this candidate.` : 'Development evaluation; not untouched final evidence.'}</p>
         {record.set_role === 'locked_final' && actions.role === 'admin' && <Button onClick={() => setReopen(true)}>Open {record.set_id} again</Button>}
         {reopen && <section className="confirm"><h3>Opening {record.set_id} again turns it into development data for later runs.</h3><p>The server records this for the entire lineage. No examples can be removed to make it untouched again.</p><CommandButton actions={actions} onClick={() => { void actions.send({ kind: 'open_locked_test', evaluation_id: record.id, acknowledge_development_reuse: true }).then((ok) => { if (ok) setReopen(false); }); }}>Confirm open as development data</CommandButton><Button onClick={() => setReopen(false)}>Cancel</Button></section>}
-      </aside></div>
+      </section></div>
       <details className="card"><summary>Show provider diagnostics</summary><p>Diagnostic only · {setLabel}. {record.diagnostics}</p></details>
     </>}
   </>;

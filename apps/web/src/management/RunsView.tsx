@@ -32,7 +32,7 @@ export function RunsView({ data, actions, platform }: ScreenProps & { platform?:
       {actions.role === 'admin' && <div className="acts"><Button onClick={() => { setRecipe(run.recipe_id); setEpochs(run.epochs); setStarting(true); }}>Copy settings to a new run</Button>{(run.state === 'Running' || run.state === 'Queued') && <Button onClick={() => setCancelling(true)}>Cancel run</Button>}</div>}
       {cancelling && <section className="confirm"><h3>Cancel {run.id}?</h3><p>Completed checkpoints remain in history. This never retries automatically.</p><CommandButton actions={actions} onClick={() => { void actions.send({ kind: 'cancel_local_run', run_id: run.id }).then((ok) => { if (ok) setCancelling(false); }); }}>Confirm cancel run</CommandButton><Button onClick={() => setCancelling(false)}>Keep running</Button></section>}
       {run.state === 'Completed' && <div className="acts"><Download name={`${run.id}-record.json`} value={run}>Download run record</Download><a href={`?screen=evaluation&recipe=${run.recipe_id}`}>Evaluate</a></div>}
-    </section><aside className="card"><h2>Running now</h2>{data.runs.filter((item) => item.state === 'Running').map((item) => <p key={item.id}>{item.id} · {item.epoch} of {item.epochs} epochs</p>)}<p className="label">Visible data refreshes every 30 s; no animation</p></aside></div>}
+    </section><section className="card"><h2>Running now</h2>{data.runs.filter((item) => item.state === 'Running').map((item) => <p key={item.id}>{item.id} · {item.epoch} of {item.epochs} epochs</p>)}<p className="label">Visible data refreshes every 30 s; no animation</p></section></div>}
     {platform}
   </>;
 }

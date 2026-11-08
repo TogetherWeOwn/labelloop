@@ -35,6 +35,11 @@ describe('management fixture read port', () => {
 });
 
 describe('screen contracts and role rendering', () => {
+  it.each(views)('keeps screen panels nestable inside the shell main landmark: %s', (View) => {
+    const html = renderToStaticMarkup(<main><View data={fixtureSnapshot} actions={actions} /></main>);
+    expect(html).not.toMatch(/<aside\b|role="complementary"/);
+    expect(html).toContain('<h2>');
+  });
   it.each(views)('renders the reviewer read-only without mutation controls: %s', (View) => {
     const html = render(View, fixtureSnapshot, 'reviewer');
     expect(html).toContain('Read-only. Only an admin');

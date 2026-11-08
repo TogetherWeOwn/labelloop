@@ -90,6 +90,29 @@ qualified result from the authoritative server can expose promotion. Any future
 subset-release policy must be separately specified and reviewed, not inferred by
 this UI. This is a fidelity/integration question for the design and API owners.
 
+## Published detail-source alignment
+
+The facade source at `f048e398dbfebb568b97b7a4848e32a3c5302fc1` now defines
+`readProject`, `readFreezePlan`, `readDatasetRelease`, `readRecipePreview`,
+`listTrainingProfiles`, `readTrainingRun`, `readEvaluation` and `readRegistry`.
+Its `docs/management-contract.md` is the integration map. This is source delivery,
+not proof of generated-client publication, mounted routes, working authentication,
+queue binding or persistence. Do not hand-copy a second generated client here.
+
+The existing fixture command captures are deliberately **not wire payloads**:
+
+- Start selects an immutable, server-approved training profile ID and the
+  variant revision; the fixture's epoch/base-hash fields are not dispatch authority.
+- Compile dispatches one request and idempotency key per recipe with the dataset
+  release revision; it must refresh revisions between commands as needed.
+- Freeze consumes authoritative ontology, assignment and annotation membership
+  from `readFreezePlan`; the server rechecks them under the transaction lock.
+- Missing reports, thresholds and check results remain unavailable/unqualified.
+  Geometry, checkpoints, evaluation and atomic registry data reuse core types.
+
+Setup writes and final-test/promotion/rollback retain their documented producers.
+The fixture port is not a replacement persistence adapter, auth session or queue.
+
 ## Remaining acceptance and final wiring obligations
 
 These remain open; merging fixture components does not discharge them:
