@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from final_test_smoke import exercise_final_test
 from qualification_fixture import qualification_context, synthetic_final
 from sqlalchemy.dialects.postgresql import insert
 
@@ -415,6 +416,14 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             seed_checkpoint_descendants(
                 connection, result, exported, manifest, initial_model, reports[0]
             )
+        final_test_journal = exercise_final_test(
+            engine,
+            result,
+            manifest,
+            initial_model,
+            next(item for item in reports if item.run_id == result.selected.evaluation_run_id),
+            seed_variant,
+        )
         audit_veto = None
         # The recipes share a canonical training release. Finish both smoke cases
         # before inserting its durable adverse evidence; 640 runs second in Actions.
@@ -429,6 +438,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     "other_recipe_unchanged": True,
                     "common_evaluation": common_evaluation,
                     "durable_annotation_veto": audit_veto,
+                    "final_test_journal": final_test_journal,
                 },
                 sort_keys=True,
                 indent=2,

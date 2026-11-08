@@ -284,6 +284,11 @@ def save_evaluation(
         .mappings()
         .one()
     )
+    # Selection/exposure snapshots include all linked evaluations. Serialize new
+    # links with their project lock so a final assessment cannot race a payload change.
+    connection.execute(
+        sa.select(project.c.id).where(project.c.id == row["project_id"]).with_for_update()
+    ).scalar_one()
     release = decode_release(row["record"])
     context = variant_context(connection, variant_id)
     if (

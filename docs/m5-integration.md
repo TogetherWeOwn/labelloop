@@ -92,6 +92,45 @@ The explicit `PromotionPolicy(1, 0.9)` is fixture-only. Project targets stay nul
 until decided; null targets retain the incumbent. No paid request or real provider
 secret is needed. No dependency version, HTTP endpoint or runtime is added.
 
+## Durable final-test lifecycle port
+
+`final_test_store` consumes the existing pure `FinalTestState` and selection
+transitions. Migration `qualification_0002` follows `qualification_0001`, adding
+append-only `qualification_candidate_selection` and `qualification_final_test_event`
+tables. Initialization must reference a frozen canonical release in the same project;
+its trusted source-group/role loader is still a service integration obligation.
+No HTTP body can be treated as that loader. Selection reads the persisted atomic
+model and linked development/calibration reports. Exposure reads that selection
+and the persisted final report, then appends a complete versioned state. Adaptation
+and quarantine preserve historical results; no reset/unquarantine operation exists.
+
+All transitions lock the project, compare expected revisions and append inside a
+savepoint. New evaluation links take the same lock because selection pins the entire
+release including evaluation IDs. The service must commit selection before final
+access and exposure before returning even an aggregate or pass/fail result; a later
+promotion failure cannot undo a real exposure. The store does not own the caller's
+outer commit. `current_qualification_context` reloads current final state rather
+than accepting a historical success snapshot. It is **not yet automatically wired
+into `change_registry`**: authoritative policy/pipeline/audit/canary/group loaders
+and authenticated service routing remain necessary before production promotion.
+The existing production port remains fail-closed without trusted qualification.
+
+`workers/ml/tests/final_test_smoke.py` extends the existing Actions CPU/PostgreSQL
+smoke for both recipes with explicitly synthetic, separately named final releases.
+It prepares committed selection/exposure, reconnect recovery, duplicate reset and
+repeat exposure rejection, expected-revision races, immutable update/delete guards,
+injected event-insert failure and a historical context rejected after current-state
+reload. Seven lightweight actor/role/action/DDL cases are added in
+`apps/api/tests/test_final_test_store.py`. These are **new unrun assertions** until
+exact-head Actions finishes, not final-test accuracy or HTTP/registry acceptance.
+The checkpoint-ancestry head `9107e75` still had no Actions runs recorded at the
+2026-11-08 monitor inspection, so its additions also remain unverified.
+
+The expanded restore inventory must include both journal tables as well as
+`qualification_annotation_audit` and all other delivered modules' tables. No live
+migration, database access, dependency installation or production action is part
+of this change. Frozen migration DDL deliberately does not import live metadata.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable
