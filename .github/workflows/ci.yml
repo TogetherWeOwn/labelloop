@@ -145,6 +145,13 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
+      - name: Check upgrades from each delivered merge parent
+        run: |
+          for parent in auth_budget_0001 0006_proposal_jobs; do
+            uv run alembic -c apps/api/alembic.ini downgrade base
+            uv run alembic -c apps/api/alembic.ini upgrade "$parent"
+            uv run alembic -c apps/api/alembic.ini upgrade head
+          done
       - run: uv run pytest workers/core/tests/test_jobs.py -v --junitxml=queue-evidence.xml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
