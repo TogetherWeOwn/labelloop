@@ -54,7 +54,7 @@ def check(image: str) -> None:
     idempotency = "compile-evaluation-640"
     compilation = f'compile_request(compilation, release_id, key="{idempotency}")\n'
     # Public, synthetic high-entropy text tests the generic detector, not a real key.
-    generic_canary = "publicScannerCanary93Qz7w5L2n6Yx0"
+    generic_canary = base64.b64encode(bytes(range(32, 64))).decode()
     generic_payload = f'api_key = "{generic_canary}"\n'
     cases.extend(
         (*case, "generic-api-key")
