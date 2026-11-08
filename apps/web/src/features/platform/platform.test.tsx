@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ConnectionsView } from './ConnectionsView.tsx';
 import { PlatformRunsView } from './PlatformRunsView.tsx';
 import { PlatformModule } from './PlatformModule.tsx';
-import { exceededLimits, fingerprintText, statusCopy } from './contracts.ts';
+import { checkedTime, exceededLimits, fingerprintText, shortHash, statusCopy } from './contracts.ts';
 import { fixturePort, platformFixture } from './fixtures.ts';
 
 // Static rendering checks do not claim browser/a11y coverage; Actions runs that separately.
@@ -51,21 +51,54 @@ describe('Platform fixture modules', () => {
   it('names every exceeded limit including invalid cost data', () => {
     const draft = platformFixture.dryRun!;
     expect(exceededLimits(draft)).toEqual([]);
-    expect(exceededLimits({ ...draft, operationLimitUsd: 1, monthlyLimitUsd: 1, iterationLimitUsd: 1 }))
+    expect(exceededLimits({ ...draft, operationLimitMicrousd: 1_000_000, monthlyLimitMicrousd: 1_000_000, iterationLimitMicrousd: 1_000_000 }))
       .toEqual(['Per-operation limit', 'Monthly limit', 'Per-iteration limit']);
-    expect(exceededLimits({ ...draft, estimateUsd: NaN })).toEqual(['Budget information unavailable']);
-    expect(exceededLimits({ ...draft, estimateUsd: -1 })).toEqual(['Budget information unavailable']);
-    expect(exceededLimits({ ...draft, estimateUsd: 5, operationLimitUsd: 5, monthlyUsedAndReservedUsd: 0, iterationUsedAndReservedUsd: 0, iterationLimitUsd: 5 })).toEqual([]);
+    for (const estimateMicrousd of [NaN, -1, 0.5, Number.MAX_VALUE]) {
+      expect(exceededLimits({ ...draft, estimateMicrousd })).toEqual(['Budget information unavailable']);
+    }
+    expect(exceededLimits({ ...draft, estimateMicrousd: 5_000_000, operationLimitMicrousd: 5_000_000, monthlyUsedAndReservedMicrousd: 0, iterationUsedAndReservedMicrousd: 0, iterationLimitMicrousd: 5_000_000 })).toEqual([]);
   });
 
-  it('accepts exact-cent limits without binary floating point overflow', () => {
-    const draft = platformFixture.dryRun!;
-    expect(exceededLimits({ ...draft, estimateUsd: 0.2, monthlyUsedAndReservedUsd: 0.1,
-      monthlyLimitUsd: 0.3, iterationUsedAndReservedUsd: 0.1, iterationLimitUsd: 0.3 })).toEqual([]);
-    expect(exceededLimits({ ...draft, estimateUsd: 0.21, monthlyUsedAndReservedUsd: 0.1,
-      monthlyLimitUsd: 0.3, iterationUsedAndReservedUsd: 0.1, iterationLimitUsd: 0.3 }))
-      .toEqual(['Monthly limit', 'Per-iteration limit']);
-    expect(exceededLimits({ ...draft, estimateUsd: Number.MAX_VALUE })).toEqual(['Budget information unavailable']);
+  it('compares exact microdollars including sub-cent limit overruns', () => {
+    const draft = { ...platformFixture.dryRun!, estimateMicrousd: 200_000,
+      monthlyUsedAndReservedMicrousd: 100_000, monthlyLimitMicrousd: 300_000,
+      iterationUsedAndReservedMicrousd: 100_000, iterationLimitMicrousd: 300_000 };
+    expect(exceededLimits(draft)).toEqual([]);
+    for (const estimateMicrousd of [200_001, 204_000, 210_000]) {
+      expect(exceededLimits({ ...draft, estimateMicrousd })).toEqual(['Monthly limit', 'Per-iteration limit']);
+    }
+    expect(exceededLimits({ ...draft, estimateMicrousd: 1_004_000, operationLimitMicrousd: 1_000_000 }))
+      .toEqual(['Per-operation limit', 'Monthly limit', 'Per-iteration limit']);
+    expect(exceededLimits({ ...draft, estimateMicrousd: Number.MAX_SAFE_INTEGER,
+      operationLimitMicrousd: Number.MAX_SAFE_INTEGER, monthlyUsedAndReservedMicrousd: 1,
+      monthlyLimitMicrousd: Number.MAX_SAFE_INTEGER, iterationUsedAndReservedMicrousd: 1,
+      iterationLimitMicrousd: Number.MAX_SAFE_INTEGER })).toEqual(['Monthly limit', 'Per-iteration limit']);
+  });
+
+  it('renders state-specific progress from the run record', () => {
+    const html = renderToStaticMarkup(<PlatformRunsView role="reviewer" snapshot={platformFixture} />);
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="41"');
+    expect(html).toContain('waiting for GPU');
+    expect(html).toContain('100 epochs · 1 h 52 m');
+    expect(html).toContain('args mismatch');
+    expect(html).toContain('out of credits');
+    expect(html).not.toContain('0 of 100');
+    const completed = platformFixture.runs.find((run) => run.status === 'completed')!;
+    expect(renderToStaticMarkup(<PlatformRunsView role="reviewer" snapshot={{ ...platformFixture,
+      runs: [{ ...completed, durationSeconds: null }] }} />)).toContain('duration unconfirmed');
+  });
+
+  it('formats last check in UTC with age and rejects invalid timestamps', () => {
+    const now = Date.parse('2026-11-07T02:17:00Z');
+    const html = renderToStaticMarkup(<ConnectionsView role="admin" snapshot={platformFixture} now={now} />);
+    expect(html).toContain('01:52 UTC · 25 min ago');
+    expect(html.match(/class="ok-i"/g)).toHaveLength(3);
+    expect(html.match(/class="todo-i"/g)).toHaveLength(2);
+    expect(checkedTime('invalid', now)).toBe('Check time unavailable');
+    expect(checkedTime('2026-11-07T01:52:00Z', Date.parse('2026-11-07T01:51:00Z'))).toBe('Check time unavailable');
+    expect(shortHash('9c1e'.repeat(16))).toBe('9c1e…');
+    expect(shortHash('invalid')).toBe('Hash unavailable');
   });
 
   it('qualifies both entry builds with sentinels and treats imported tokens as web input', () => {

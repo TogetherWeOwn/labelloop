@@ -62,11 +62,13 @@ function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; p
   return <div className="stack">
     {!snapshot && <div className="phead"><h1>{page === 'connections' ? 'Connections.' : 'Training runs.'}</h1></div>}
     <p className="notice warn">Fixture preview · Not connected to a live service. Keys, workspace changes and paid operations are disabled until authenticated adapter and ledger integration.</p>
-    <p role="status" aria-live="polite">{failed ? 'Could not refresh. Check the connection and try again.' : snapshot ? `Fixture record updated ${snapshot.observedAt} (UTC).` : 'Loading Platform records…'}</p>
+    <div role="status" aria-live="polite">
+      {failed ? <p>Could not refresh. Check the connection and try again.</p> : !snapshot && <p>Loading Platform records…</p>}
+      {snapshot && <p className={stale ? 'freshness warn' : 'freshness'}>{stale ? 'Stale data · ' : ''}Record observed {snapshot.observedAt} (UTC). Refreshes every 30 seconds while visible.</p>}
+    </div>
     {snapshot && <>
       {snapshot.paidStepsPaused && <p className="notice danger">Paid steps paused · Out of credits (402). labelloop won't retry on its own.</p>}
-      <p className={stale ? 'freshness warn' : 'freshness'}>{stale ? 'Stale data · ' : ''}Record observed {snapshot.observedAt} (UTC). Refreshes every 30 seconds while visible.</p>
-      {page === 'connections' ? <ConnectionsView role={role} snapshot={snapshot} /> : <PlatformRunsView role={role} snapshot={snapshot} />}
+      {page === 'connections' ? <ConnectionsView role={role} snapshot={snapshot} now={now} /> : <PlatformRunsView role={role} snapshot={snapshot} />}
     </>}
   </div>;
 }

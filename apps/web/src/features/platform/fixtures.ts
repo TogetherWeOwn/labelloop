@@ -16,6 +16,8 @@ export const platformFixture: PlatformSnapshot = {
   runs: (['running', 'queued', 'completed', 'args_mismatch', 'uncertain', 'paused_402', 'busy_503', 'cancelled', 'failed'] satisfies RunStatus[]).map((status, i) => ({
     id: `run-${31 - i}`, recipe: i % 2 ? 'full-letterbox-320-v1' : 'full-letterbox-640-v1', release: 'r0008',
     status, epoch: status === 'completed' ? 100 : status === 'running' ? 41 : 0, epochs: 100,
+    durationSeconds: status === 'completed' ? 6720 : null,
+    failureReason: status === 'failed' ? 'Training worker stopped' : null,
     estimateUsd: 1.38, actualUsd: status === 'completed' ? 1.29 : status === 'cancelled' ? 0.17 : null,
     updatedAt: at, operationId: `operation-fixture-${31 - i}`,
     mismatches: status === 'args_mismatch' ? [
@@ -27,9 +29,9 @@ export const platformFixture: PlatformSnapshot = {
   })),
   dryRun: {
     release: 'r0008', recipe: 'full-letterbox-320-v1', baseModel: 'yolo26n', baseSha256: '9c1e'.repeat(16),
-    gpu: 'RTX 4090', gpuAvailable: true, epochs: 100, images: 1114, estimateUsd: 1.38, hourlyUsd: 0.69,
-    monthlyUsedAndReservedUsd: 4.48, iterationUsedAndReservedUsd: 0.41,
-    monthlyLimitUsd: 40, iterationLimitUsd: 3, operationLimitUsd: 5,
+    gpu: 'RTX 4090', gpuAvailable: true, epochs: 100, images: 1114, estimateMicrousd: 1_380_000, hourlyUsd: 0.69,
+    monthlyUsedAndReservedMicrousd: 4_480_000, iterationUsedAndReservedMicrousd: 410_000,
+    monthlyLimitMicrousd: 40_000_000, iterationLimitMicrousd: 3_000_000, operationLimitMicrousd: 5_000_000,
   },
 };
 

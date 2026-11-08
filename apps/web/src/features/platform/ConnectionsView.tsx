@@ -1,7 +1,7 @@
-import { fingerprintText } from './contracts.ts';
+import { checkedTime, fingerprintText } from './contracts.ts';
 import type { PlatformSnapshot, ViewerRole } from './contracts.ts';
 
-export function ConnectionsView({ role, snapshot }: { role: ViewerRole; snapshot: PlatformSnapshot }) {
+export function ConnectionsView({ role, snapshot, now = Date.now() }: { role: ViewerRole; snapshot: PlatformSnapshot; now?: number }) {
   if (role !== 'admin') return <p>Only an admin can manage connections.</p>;
   const { connection, providers } = snapshot;
   return <>
@@ -13,7 +13,7 @@ export function ConnectionsView({ role, snapshot }: { role: ViewerRole; snapshot
           {connection.state === 'connected' ? 'Connected' : connection.state === 'check_failed' ? 'Check failed' : 'Not connected'}</span></header>
         {connection.workspace && <dl className="facts"><dt>Workspace ID</dt><dd className="mono">{connection.workspace.id}</dd>
           <dt>Workspace slug</dt><dd className="mono">{connection.workspace.slug}</dd><dt>Owner</dt><dd>{connection.workspace.owner}</dd>
-          <dt>Checked (UTC)</dt><dd><time dateTime={connection.checkedAt}>{connection.checkedAt}</time></dd></dl>}
+          <dt>Checked</dt><dd><time dateTime={connection.checkedAt}>{checkedTime(connection.checkedAt, now)}</time></dd></dl>}
         {connection.fingerprint && <div className="secret" aria-label="Key fingerprint">{fingerprintText(connection.fingerprint)}</div>}
         {connection.state === 'check_failed' && <p className="notice warn">The workspace check failed. Ask an admin to check the connection when authenticated integration is available.</p>}
         <p className="notice warn">This key has full owner rights on the workspace and never expires. labelloop only uses it for the operations below, and every paid one goes through Costs.</p>
@@ -35,9 +35,16 @@ export function ConnectionsView({ role, snapshot }: { role: ViewerRole; snapshot
         <p className="small t2">A provider that fails its fixture check isn't used until it passes again.</p>
       </section>
     </div><aside className="stack" aria-label="Connection policy">
-      <section className="card"><h2>What labelloop may do here</h2><ul className="checks">
-        <li>Upload and check releases · disabled in preview</li><li>Start training runs · with your approval, disabled in preview</li>
-        <li>Download weights · disabled in preview</li><li>Batch auto-annotation · off by policy</li><li>Delete datasets · never</li>
+      <section className="card"><h2>What labelloop may do here</h2><ul className="checks" role="list">
+        {([
+          ['Upload and check releases · disabled in preview', true],
+          ['Start training runs · with your approval, disabled in preview', true],
+          ['Download weights · disabled in preview', true],
+          ['Batch auto-annotation · off by policy', false],
+          ['Delete datasets · never', false],
+        ] as const).map(([label, allowed]) => <li key={label}><span className={allowed ? 'ok-i' : 'todo-i'}>
+          <svg className="ico" viewBox="0 0 24 24" aria-hidden="true"><path d={allowed ? 'm5 12.5 4.5 4.5L19 7.5' : 'm7 7 10 10M17 7 7 17'} /></svg>
+        </span><span>{label}</span></li>)}
       </ul><p className="small t2">Workspace connectivity and validation are not permission to train.</p></section>
       <section className="card"><h2>Who may see this project's images</h2><p className="small t2">{snapshot.permittedUse}</p>
         {providers.map((provider) => <div className="toggle" key={provider.id}><span>{provider.name}</span>

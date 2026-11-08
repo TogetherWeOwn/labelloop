@@ -12,6 +12,30 @@ const browser = await chromium.launch();
 
 async function evidence(page, name) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `${name} overflow`);
+  const disabledStyles = await page.locator('button:disabled').evaluateAll((buttons) => buttons.map((button) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--two-color-text-tertiary)';
+    probe.style.backgroundColor = 'var(--two-color-bg-raised)';
+    button.parentElement.append(probe);
+    const expected = getComputedStyle(probe);
+    const actual = getComputedStyle(button);
+    const matches = actual.backgroundColor === expected.backgroundColor &&
+      (button.classList.contains('switch') || (actual.color === expected.color && actual.boxShadow === 'none'));
+    probe.remove();
+    return matches;
+  }));
+  assert.ok(disabledStyles.every(Boolean), `${name} muted disabled controls`);
+  for (const table of await page.locator('.tablewrap').all()) {
+    assert.ok(await table.locator('th,td').evaluateAll((cells) => cells.every((cell) => getComputedStyle(cell).whiteSpace === 'nowrap')), `${name} nowrap cells`);
+    // Scrolling must make the final column reachable without widening the page.
+    assert.ok(await table.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+      const last = element.querySelector('tr:last-child > :last-child');
+      const visible = !last || last.getBoundingClientRect().right <= element.getBoundingClientRect().right + 1;
+      element.scrollLeft = 0;
+      return visible;
+    }), `${name} last column reachable`);
+  }
   await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
   const result = await page.evaluate(async () => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
@@ -20,14 +44,30 @@ async function evidence(page, name) {
 
 async function loaded(page, screen, state) {
   // H1 exists during loading. Require the settled record and its state-specific body.
-  await page.getByRole('status').filter({ hasText: 'Fixture record updated' }).waitFor();
+  await page.getByRole('status').filter({ hasText: 'Record observed' }).waitFor();
+  assert.equal(await page.getByText('Fixture record updated', { exact: false }).count(), 0);
+  assert.equal(await page.locator('.freshness').count(), 1);
   if (screen === 'connections') {
     await page.getByRole('heading', { name: 'Ultralytics Platform', exact: true }).waitFor();
     if (state === 'empty') await page.getByLabel('Paste a Platform API key', { exact: true }).waitFor();
-    else await page.getByText('workspace-fixture-01', { exact: true }).waitFor();
+    else {
+      await page.getByText('workspace-fixture-01', { exact: true }).waitFor();
+      await page.getByText(/01:52 UTC · .+ ago/).waitFor();
+      assert.equal(await page.locator('.checks .ok-i svg').count(), 3);
+      assert.equal(await page.locator('.checks .todo-i svg').count(), 2);
+    }
     if (state === 'check_failed') await page.getByText('Check failed', { exact: true }).waitFor();
   } else if (state === 'empty') await page.getByText(/No Platform runs yet/).waitFor();
-  else await page.getByRole('region', { name: 'Training runs, scrolls sideways' }).getByRole('button', { name: 'run-31', exact: true }).waitFor();
+  else {
+    const runs = page.getByRole('region', { name: 'Training runs, scrolls sideways' });
+    await runs.getByRole('button', { name: 'run-31', exact: true }).waitFor();
+    assert.equal(await runs.getByRole('progressbar', { name: 'run-31 epochs' }).getAttribute('aria-valuenow'), '41');
+    await runs.getByText('waiting for GPU', { exact: true }).waitFor();
+    await runs.getByText('100 epochs · 1 h 52 m', { exact: true }).waitFor();
+    await runs.getByText('args mismatch', { exact: true }).waitFor();
+    await runs.getByText('out of credits', { exact: true }).waitFor();
+    assert.equal(await runs.getByText('0 of 100', { exact: false }).count(), 0);
+  }
 }
 
 try {
@@ -47,6 +87,8 @@ try {
           if (screen === 'runs') {
             await page.getByRole('button', { name: 'Start a run', exact: true }).click();
             await page.getByRole('heading', { name: 'Start run on Ultralytics Platform' }).waitFor();
+            await page.getByText('9c1e…', { exact: true }).waitFor();
+            assert.equal(await page.getByText('9c1e'.repeat(16), { exact: true }).count(), 0);
             if (state === 'over_limit' || state === 'paused') {
               assert.equal(await page.getByRole('button', { name: /^Start · estimate/ }).count(), 0);
             } else {

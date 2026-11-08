@@ -24,6 +24,11 @@ Future live integration must use authenticated server records and authorization,
 validate responses, expose fingerprint metadata only, retain exact returned
 workspace IDs/slugs, use persisted operation status, bind approval to the dry-run
 and ledger estimate, and enforce monthly/iteration/operation limits on the server.
+`DryRun` carries estimate, exposure and limit fields as safe nonnegative integer
+microdollars (`*Microusd`), matching the core ledger. Only display formatting rounds
+to cents; presentation comparisons preserve sub-cent overruns and reject invalid
+amounts. `PlatformRun` supplies nullable `durationSeconds` and `failureReason` so
+completed and failed progress is not fabricated from zero epochs.
 Do not convert connection validation into training permission. That work belongs
 to the auth/adapter/ledger integrator; it is not delivered here. Secret replacement
 and its audit event, cancellation confirmation, links/artifact download and the
@@ -51,6 +56,9 @@ of the normal build or an application auth route. The browser script covers:
   open dry-run panel (normal, over-limit and paused) before it is closed;
 - no mutation requests; synthetic credential sentinels and credential-shaped
   values absent from emitted bundle text;
+- muted disabled pills/switches from accepted tokens, nowrap table cells with the
+  last column reachable by internal scrolling, state-specific progress, short
+  hashes, check/cross policy icons and one freshness line;
 - uploaded screenshots in `platform-ui-evidence` for the exclusive UX reviewer.
 
 No full suite or build qualification is run locally. No paid or live Platform

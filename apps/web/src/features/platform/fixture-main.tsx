@@ -16,7 +16,7 @@ const snapshot: PlatformSnapshot = {
   providers: state === 'empty' ? [] : platformFixture.providers,
   connection: state === 'empty' ? { ...platformFixture.connection, state: 'not_connected', fingerprint: null, workspace: null }
     : state === 'check_failed' ? { ...platformFixture.connection, state: 'check_failed' } : platformFixture.connection,
-  dryRun: state === 'over_limit' && platformFixture.dryRun ? { ...platformFixture.dryRun, operationLimitUsd: 1 } : platformFixture.dryRun,
+  dryRun: state === 'over_limit' && platformFixture.dryRun ? { ...platformFixture.dryRun, operationLimitMicrousd: 1_000_000 } : platformFixture.dryRun,
 };
 let reads = 0;
 const reader = fixturePort(snapshot);
