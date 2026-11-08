@@ -15,26 +15,6 @@ from labelloop_worker_platform.credentials import PlatformCredentials
 PLAINTEXT = b"fixture-platform-value-7239"
 
 
-class RecordedWorkspaceReader:
-    """Recorded adapter-port fixture, deliberately incapable of HTTP or mutation.
-
-    This is not a recorded vendor endpoint; transport contract qualification is owned
-    by the Platform adapter. Do not invent a workspace URL from an owner display name.
-    """
-
-    def __init__(self, returned_id=None, failure=False):
-        self.returned_id = returned_id
-        self.failure = failure
-        self.calls = []
-
-    def get_workspace(self, credential, workspace_id):
-        assert credential.startswith(b"fixture-")
-        self.calls.append(("GET", workspace_id))
-        if self.failure:
-            raise RuntimeError(credential.decode())
-        return self.returned_id if self.returned_id is not None else workspace_id
-
-
 def worker(key_material):
     return PlatformCredentials(
         {"LABELLOOP_PLATFORM_UNWRAP_PRIVATE_PEM": key_material[SecretType.PLATFORM][0].decode()}
@@ -49,14 +29,19 @@ def stage(store, sealer, scope, connection_id, version=1, expected=0):
     )
 
 
+def resolve_storage_intent(store, scope, connection_id, version, valid=True):
+    # Storage state-machine input only, not a vendor response or worker qualification.
+    return store.finish_validation(
+        scope, connection_id, version, valid=valid, actor_id="fixture-storage-principal"
+    )
+
+
 def test_stage_survives_restart_but_is_not_active(store, sealer, scope, db, key_material):
     connection_id = uuid4()
     public = stage(store, sealer, scope, connection_id)
     with pytest.raises(CredentialError):
         store.lookup(scope, connection_id)
-    reader = RecordedWorkspaceReader()
-    assert worker(key_material).validate(store, scope, connection_id, 1, reader) == "activated"
-    assert reader.calls == [("GET", scope.workspace_id)]
+    assert resolve_storage_intent(store, scope, connection_id, 1) == "activated"
     # New store object, same persisted database; no process-local credential cache.
     restarted = type(store)(db)
     value = worker(key_material).lookup(restarted, scope, connection_id)
@@ -64,26 +49,69 @@ def test_stage_survives_restart_but_is_not_active(store, sealer, scope, db, key_
     assert restarted.public(scope, connection_id) == (public,)
     rows = db.execute(sa.select(audit_event).order_by(audit_event.c.action)).mappings().all()
     assert {r["action"] for r in rows} == {"validation_requested", "activated"}
-    assert {r["actor_id"] for r in rows} == {"fixture-admin-principal", "worker-platform"}
+    assert {r["actor_id"] for r in rows} == {"fixture-admin-principal", "fixture-storage-principal"}
     assert {r["version"] for r in rows} == {1}
     assert PLAINTEXT.decode() not in json.dumps(asdict(public), default=str)
     for table in (connection_head, credential_version, audit_event):
         assert PLAINTEXT.decode() not in repr(db.execute(sa.select(table)).all())
 
 
-@pytest.mark.parametrize("failure,returned", [(True, None), (False, "wrong-workspace")])
-def test_failed_replacement_never_displaces_working_key(
-    failure, returned, store, sealer, scope, db, key_material
+@pytest.mark.parametrize("active_version", [0, 1])
+def test_platform_identity_unverifiable_is_terminal_and_audited(
+    active_version, store, sealer, scope, db, key_material, monkeypatch, caplog
 ):
     connection_id = uuid4()
-    stage(store, sealer, scope, connection_id)
     adapter = worker(key_material)
-    adapter.validate(store, scope, connection_id, 1, RecordedWorkspaceReader())
-    stage(store, sealer, scope, connection_id, 2, 1)
+    stage(store, sealer, scope, connection_id)
+    if active_version:
+        # Simulate an already authorized historical key at the persistence boundary.
+        # No fixture claims the current vendor contract can enroll it.
+        resolve_storage_intent(store, scope, connection_id, 1)
+        stage(store, sealer, scope, connection_id, 2, 1)
+    version = active_version + 1
+
+    def unexpected_unwrap(*args):
+        pytest.fail("unverifiable identity must not decrypt the candidate")
+
+    monkeypatch.setattr(adapter._unwrap, "unwrap", unexpected_unwrap)
+    assert adapter.validate(store, scope, connection_id, version) == "identity_unverifiable"
+    assert db.execute(sa.select(connection_head.c.active_version)).scalar_one() == active_version
     assert (
-        adapter.validate(store, scope, connection_id, 2, RecordedWorkspaceReader(returned, failure))
-        == "rejected"
+        db.execute(
+            sa.select(credential_version.c.intent_state).where(
+                credential_version.c.version == version
+            )
+        ).scalar_one()
+        == "identity_unverifiable"
     )
+    event = (
+        db.execute(sa.select(audit_event).where(audit_event.c.action == "identity_unverifiable"))
+        .mappings()
+        .one()
+    )
+    assert event["actor_id"] == "worker-platform"
+    assert event["connection_id"] == connection_id
+    assert event["version"] == version
+    assert PLAINTEXT.decode() not in repr(event)
+    assert PLAINTEXT.decode() not in caplog.text
+    restarted = type(store)(db)
+    with pytest.raises(CredentialError):
+        adapter.validate(restarted, scope, connection_id, version)
+    with pytest.raises(CredentialError):
+        restarted.lookup(scope, connection_id, pending_version=version)
+    if active_version:
+        assert restarted.lookup(scope, connection_id).identity.version == active_version
+    else:
+        with pytest.raises(CredentialError):
+            restarted.lookup(scope, connection_id)
+
+
+def test_failed_replacement_never_displaces_working_key(store, sealer, scope, db):
+    connection_id = uuid4()
+    stage(store, sealer, scope, connection_id)
+    resolve_storage_intent(store, scope, connection_id, 1)
+    stage(store, sealer, scope, connection_id, 2, 1)
+    assert resolve_storage_intent(store, scope, connection_id, 2, valid=False) == "rejected"
     assert store.lookup(scope, connection_id).identity.version == 1
     assert (
         db.execute(
@@ -92,38 +120,49 @@ def test_failed_replacement_never_displaces_working_key(
         == "rejected"
     )
     with pytest.raises(CredentialError):
-        adapter.validate(store, scope, connection_id, 2, RecordedWorkspaceReader())
+        resolve_storage_intent(store, scope, connection_id, 2)
 
 
-def test_racing_rotation_cannot_replay_or_roll_back(store, sealer, scope, key_material):
+def test_racing_rotation_cannot_replay_or_roll_back(store, sealer, scope):
     connection_id = uuid4()
-    adapter = worker(key_material)
     stage(store, sealer, scope, connection_id)
-    adapter.validate(store, scope, connection_id, 1, RecordedWorkspaceReader())
+    resolve_storage_intent(store, scope, connection_id, 1)
     stage(store, sealer, scope, connection_id, 2, 1)
     stage(store, sealer, scope, connection_id, 3, 1)
-    assert (
-        adapter.validate(store, scope, connection_id, 3, RecordedWorkspaceReader()) == "activated"
-    )
-    assert adapter.validate(store, scope, connection_id, 2, RecordedWorkspaceReader()) == "stale"
+    assert resolve_storage_intent(store, scope, connection_id, 3) == "activated"
+    assert resolve_storage_intent(store, scope, connection_id, 2) == "stale"
     assert store.lookup(scope, connection_id).identity.version == 3
     with pytest.raises(CredentialError):
-        adapter.validate(store, scope, connection_id, 3, RecordedWorkspaceReader())
+        resolve_storage_intent(store, scope, connection_id, 3)
     with pytest.raises(CredentialError):
         stage(store, sealer, scope, connection_id, 4, 1)
 
 
+@pytest.mark.parametrize("valid,denial", [(True, "identity_unverifiable"), (False, "unsafe text")])
+def test_denial_code_cannot_activate_or_persist_arbitrary_text(
+    valid, denial, store, sealer, scope, db
+):
+    connection_id = uuid4()
+    stage(store, sealer, scope, connection_id)
+    with pytest.raises(CredentialError):
+        store.finish_validation(
+            scope, connection_id, 1, valid=valid, actor_id="worker-platform", denial=denial
+        )
+    assert db.execute(sa.select(credential_version.c.intent_state)).scalar_one() == "pending"
+    assert db.execute(sa.select(sa.func.count()).select_from(audit_event)).scalar_one() == 1
+
+
 @pytest.mark.parametrize("field", ["project_id", "workspace_id", "secret_type"])
-def test_scope_substitution_fails_before_provider_lookup(field, store, sealer, scope, key_material):
+def test_scope_substitution_fails_before_validation(field, store, sealer, scope, key_material):
     connection_id = uuid4()
     stage(store, sealer, scope, connection_id)
     substituted = replace(scope, **{field: SecretType.LLM if field == "secret_type" else uuid4()})
-    reader = RecordedWorkspaceReader()
     with pytest.raises(CredentialError):
-        worker(key_material).validate(store, substituted, connection_id, 1, reader)
-    assert reader.calls == []
+        worker(key_material).validate(store, substituted, connection_id, 1)
     with pytest.raises(CredentialError):
         store.public(substituted, connection_id)
+    # A rejected scope has not consumed the actual pending intent.
+    assert store.lookup(scope, connection_id, pending_version=1).identity.version == 1
 
 
 def test_failed_stage_is_atomic(store, sealer, scope, db):

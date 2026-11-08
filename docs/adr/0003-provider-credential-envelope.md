@@ -66,12 +66,15 @@ third-party exception text.
 
 Staging appends a version and `validation_requested` event under a savepoint,
 with a compare-and-swap on latest/active versions. The old active key stays active.
-A Platform worker unwraps the pending version and invokes the trusted fixed-origin
-adapter's GET-workspace port. Only an exact returned UUID match activates it.
-Exceptions, wrong IDs and malformed replies reject the intent without persisting
-provider response text. The delivered fixture reader is offline and represents
-the port, not an invented vendor endpoint. The pinned Platform adapter must wire
-its researched GET operation before live use; this module makes no HTTP calls.
+The current Platform worker resolves pending intents as terminal, audited
+`identity_unverifiable`, without decrypting or sending the candidate. The pinned
+SDK/OpenAPI has no supported immutable workspace identity operation. ADR 0004
+clarifies that the local authorization UUID is not a vendor identity and retains
+the future exact vendor-ID equality/owner-permission gates. The unsupported
+GET-workspace port and request-ID echo fixture have been removed; no vendor
+success or usable live Platform enrollment is claimed. Persistence state-machine
+tests supply trusted booleans directly to the internal store, not fake vendor
+responses. This module makes no HTTP calls.
 LLM activation checks envelope possession locally; model/provider qualification
 is a separate fixture-probe gate and never implied by a successful unwrap.
 

@@ -55,6 +55,34 @@ def test_postgres_migration_guards_and_rotation(sealer, scope):
                     with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
                         db.execute(statement)
                 assert store.lookup(scope, connection_id) == envelope
+                replacement = sealer.seal(scope.identity(connection_id, 2), b"fixture-new-8240")
+                store.stage(replacement, expected_active=1, actor_id="fixture-admin")
+                assert (
+                    store.finish_validation(
+                        scope,
+                        connection_id,
+                        2,
+                        valid=False,
+                        actor_id="worker-platform",
+                        denial="identity_unverifiable",
+                    )
+                    == "identity_unverifiable"
+                )
+                assert store.lookup(scope, connection_id) == envelope
+                assert (
+                    db.execute(
+                        sa.select(audit_event.c.version).where(
+                            audit_event.c.action == "identity_unverifiable"
+                        )
+                    ).scalar_one()
+                    == 2
+                )
+                with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
+                    db.execute(
+                        credential_version.update()
+                        .where(credential_version.c.version == 2)
+                        .values(intent_state="activated")
+                    )
                 migration.downgrade()
                 assert not sa.inspect(db).has_table("provider_connection", schema=schema)
                 migration.upgrade()

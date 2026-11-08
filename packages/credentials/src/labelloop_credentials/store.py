@@ -46,7 +46,9 @@ credential_version = sa.Table(
     sa.Column("format_version", sa.Integer, nullable=False),
     sa.Column("intent_state", sa.String, nullable=False),
     sa.CheckConstraint("version > 0 AND expected_active >= 0 AND format_version = 1"),
-    sa.CheckConstraint("intent_state IN ('pending', 'activated', 'rejected', 'stale')"),
+    sa.CheckConstraint(
+        "intent_state IN ('pending', 'activated', 'rejected', 'stale', 'identity_unverifiable')"
+    ),
 )
 audit_event = sa.Table(
     "provider_secret_event",
@@ -62,7 +64,10 @@ audit_event = sa.Table(
         nullable=False,
         server_default=sa.func.current_timestamp(),
     ),
-    sa.CheckConstraint("action IN ('validation_requested', 'activated', 'rejected', 'stale')"),
+    sa.CheckConstraint(
+        "action IN ('validation_requested', 'activated', 'rejected', 'stale', "
+        "'identity_unverifiable')"
+    ),
 )
 
 
@@ -226,9 +231,18 @@ class CredentialStore:
         *,
         valid: bool,
         actor_id: str,
+        denial: str | None = None,
     ) -> str:
-        """Worker-only internal port. A stale validation cannot roll back a newer key."""
+        """Worker-only persistence port, not proof of provider identity/permission.
+
+        A stale validation cannot roll back a newer key. Denials are bounded codes,
+        never provider response text or exception messages.
+        """
         if type(valid) is not bool:
+            raise CredentialError()
+        if denial is not None and (
+            denial != "identity_unverifiable" or valid or scope.secret_type != SecretType.PLATFORM
+        ):
             raise CredentialError()
         with self._db.begin_nested():
             head = self._head(scope, connection_id)
@@ -247,7 +261,7 @@ class CredentialStore:
             )
             if row is None:
                 raise CredentialError()
-            state = "rejected"
+            state = denial if denial is not None else "rejected"
             if valid:
                 state = "stale"
                 if head["active_version"] == row["expected_active"]:

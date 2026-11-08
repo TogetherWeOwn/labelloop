@@ -28,7 +28,7 @@ BEGIN
   END IF;
   IF (to_jsonb(NEW) - 'intent_state') IS DISTINCT FROM
      (to_jsonb(OLD) - 'intent_state') OR OLD.intent_state <> 'pending' OR
-     NEW.intent_state NOT IN ('activated', 'rejected', 'stale') THEN
+     NEW.intent_state NOT IN ('activated', 'rejected', 'stale', 'identity_unverifiable') THEN
     RAISE EXCEPTION 'only pending credential intents can be resolved';
   END IF;
   RETURN NEW;
@@ -82,7 +82,9 @@ def upgrade() -> None:
         sa.Column("format_version", sa.Integer, nullable=False),
         sa.Column("intent_state", sa.String, nullable=False),
         sa.CheckConstraint("version > 0 AND expected_active >= 0 AND format_version = 1"),
-        sa.CheckConstraint("intent_state IN ('pending', 'activated', 'rejected', 'stale')"),
+        sa.CheckConstraint(
+            "intent_state IN ('pending', 'activated', 'rejected', 'stale', 'identity_unverifiable')"
+        ),
     )
     op.create_table(
         "provider_secret_event",
@@ -99,7 +101,10 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.func.current_timestamp(),
         ),
-        sa.CheckConstraint("action IN ('validation_requested', 'activated', 'rejected', 'stale')"),
+        sa.CheckConstraint(
+            "action IN ('validation_requested', 'activated', 'rejected', 'stale', "
+            "'identity_unverifiable')"
+        ),
     )
     op.execute(GUARDS)
 
