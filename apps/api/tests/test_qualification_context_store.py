@@ -26,6 +26,7 @@ def setup(monkeypatch, side=320):
     readers = {
         "lock_project": MagicMock(return_value="project-id"),
         "load_release": MagicMock(return_value=release),
+        "model_training_groups": MagicMock(return_value=evidence.lineage.training_group_ids),
         "stored_report": MagicMock(return_value=report),
         "load_qualification_policy": MagicMock(
             return_value=StoredQualificationPolicy(
@@ -63,6 +64,9 @@ def test_assembly_uses_only_scoped_current_stored_inputs_and_real_quality_gates(
     readers["lock_project"].assert_called_once_with(connection, args["project_key"])
     assert connection.execute.call_args.args[0].compile().params == dict(
         project_id_1="project-id", release_key_1=args["model_key"]
+    )
+    readers["model_training_groups"].assert_called_once_with(
+        connection, project_id="project-id", model_id="model-id"
     )
     readers["stored_report"].assert_called_once_with(
         connection, readers["load_release"].return_value, args["evaluation_key"]
@@ -117,6 +121,7 @@ def test_outcome_refs_reject_empty_identity(field):
     [
         "load_qualification_policy",
         "load_release",
+        "model_training_groups",
         "stored_report",
         "load_final_test",
         "require_development_uses",
@@ -131,6 +136,16 @@ def test_missing_or_conflicting_record_never_yields_a_context(monkeypatch, reade
     assert not any(
         getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
     )
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_asserted_lineage_cannot_omit_compiled_training_groups(monkeypatch, side):
+    connection, args, _, readers = setup(monkeypatch, side)
+    readers["model_training_groups"].return_value = ("unreported-training-group",)
+    with pytest.raises(ValueError, match="omits compiled training groups"):
+        store.load_qualification_context(connection, **args)
+    readers["stored_report"].assert_not_called()
+    readers["load_annotation_evidence"].assert_not_called()
 
 
 @pytest.mark.parametrize("field", ["project_id", "recipe_id", "release_id", "missing"])

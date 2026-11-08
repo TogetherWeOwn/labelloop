@@ -16,6 +16,7 @@ from labelloop_api.final_test_store import load_final_test, require_development_
 from labelloop_api.model_store import load_release, stored_report
 from labelloop_api.qualification_policy_store import load_qualification_policy
 from labelloop_api.qualification_store import lock_project
+from labelloop_api.training_group_store import model_training_groups
 from labelloop_core.qualification import (
     QualificationContext,
     QualificationEvidence,
@@ -75,6 +76,9 @@ def load_qualification_context(
         model_key,
     ):
         raise ValueError("qualification requires the exact project, recipe and model release")
+    training_groups = model_training_groups(connection, project_id=project_id, model_id=model_id)
+    if not set(training_groups) <= set(lineage.training_group_ids):
+        raise ValueError("qualification lineage omits compiled training groups")
     report = stored_report(connection, release, evaluation_key)
     final_test = load_final_test(
         connection, project_key=project_key, dataset_key=report.dataset_release_id

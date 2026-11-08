@@ -6,6 +6,35 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Compiled training groups constrain context assembly
+
+The persisted context assembler now reads the selected model's training input
+manifest through its same-project frozen variant. It validates compiled source
+revisions, assignment version and consistent derivative group/split identity, then
+rechecks every compiled source against current canonical transitive groups. Only
+`train` samples count as weight-fitting groups; validation/test sources are checked
+but not misreported as training. Supplied qualification lineage must include every
+compiled training group or assembly fails before reading audit/canary outcomes.
+The project and canonical group locks remain held through the outer transaction.
+
+This narrows one caller obligation, not all of them. Checkpoint/teacher ancestor
+isolation, reference use, canonical development/calibration/final groups, original
+pipeline/acceptance/score/threshold and independent measurement producers still
+need authoritative integration. This preflight is not an authenticated route or
+an acceptance grant; direct trusted registry consumers still own complete lineage.
+No endpoint, migration or dependency is added. New adapter cases and both-recipe
+PostgreSQL omitted-group/reconnect controls await exact-head Actions.
+
+At previous `4a03da8`, [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397)
+failed. [Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397/job/128704659677)
+reported **2 failed, 1366 passed, 80 skipped**; only the two global migration-head
+assertions failed, and all 18 new multi-proposal cases passed. ML smoke and queue
+stopped on multiple heads before PostgreSQL assertions ran. Dev-stack independently
+failed downloading pinned MinIO with HTTP 503. CodeQL, lint, types, import-contract,
+gitleaks and standards passed; web-build was path-skipped. No overall CI, new-head,
+HTTP/UI/restore or domain-quality PASS is inferred. The auth/jobs repair remains
+independently owned; later qualification composition is still required.
+
 ## Completed proposal evidence joins annotation provenance
 
 When the authorized service supplies a proposal run to `append_review`, teacher
@@ -26,7 +55,8 @@ exact-head Actions; no local tests or passing acceptance are claimed.
 
 The service still must select every contributing proposal from trusted work
 history. Omission of the optional run is not proof of teacher-free annotation;
-multiple-run provenance collection, original acceptance/pipeline/threshold and
+the port accepts and validates a distinct collection of contributing runs, but
+collection support does not prove completeness. Original acceptance/pipeline/threshold,
 independent measurement producers and authenticated HTTP wiring remain required.
 This store integration adds no endpoint, migration or dependency and is not an
 inference-execution, domain-gold or authorization claim.

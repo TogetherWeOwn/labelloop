@@ -487,6 +487,19 @@ def exercise_context_assembly(engine, release, final, context, actor):
         count = connection.execute(
             sa.select(sa.func.count()).select_from(model_schema.promotion_event)
         ).scalar_one()
+    from labelloop_api.training_group_store import model_training_groups
+
+    with engine.begin() as connection:
+        project_id = lock_project(connection, release.project_id)
+        model_id = connection.execute(
+            sa.select(model_schema.model_release.c.id).where(
+                model_schema.model_release.c.project_id == project_id,
+                model_schema.model_release.c.release_key == release.release_id,
+            )
+        ).scalar_one()
+        training_groups = model_training_groups(
+            connection, project_id=project_id, model_id=model_id
+        )
     arguments = dict(
         **scope,
         model_key=release.release_id,
@@ -494,12 +507,33 @@ def exercise_context_assembly(engine, release, final, context, actor):
         qualification_key=release.release_id + "-assembled",
         annotation=annotation,
         canary=canary,
-        lineage=context.evidence.lineage,
+        lineage=replace(
+            context.evidence.lineage,
+            training_group_ids=tuple(
+                sorted(set(context.evidence.lineage.training_group_ids) | set(training_groups))
+            ),
+        ),
     )
     # Reconnect: model/report, configuration, journal and both measured outcomes
     # must come from PostgreSQL, then pass the existing pure gates without a bypass.
     with engine.begin() as connection:
+        with pytest.raises(ValueError, match="omits compiled training groups"):
+            load_qualification_context(
+                connection,
+                **(
+                    arguments
+                    | {"lineage": replace(arguments["lineage"], training_group_ids=("invented",))}
+                ),
+            )
+        assert load_registry(connection, **scope) == before
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+            ).scalar_one()
+            == count
+        )
         loaded = load_qualification_context(connection, **arguments)
+        assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit
         require_automatic_acceptance(
