@@ -1,4 +1,4 @@
-"""Generate the isolated management contract; not the final integrated app schema."""
+"""Generate management and shared-session application contracts with unavailable adapters."""
 
 import argparse
 import json
@@ -6,7 +6,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from .management import management_router
+from .main import create_app
+from .management import management_router, unavailable_operations
 
 
 def contract_app() -> FastAPI:
@@ -145,19 +146,35 @@ def rendered_contract() -> tuple[str, str]:
     return json.dumps(spec, indent=2, sort_keys=True) + "\n", render_client(spec)
 
 
+def application_contract_app() -> FastAPI:
+    """Use the real composition factory, without resolving auth, storage or operations."""
+    return create_app(management_operations=unavailable_operations)
+
+
+def rendered_application_contract() -> str:
+    return json.dumps(application_contract_app().openapi(), indent=2, sort_keys=True) + "\n"
+
+
 def generate(destination: Path) -> None:
     schema, client = rendered_contract()
+    application_schema = rendered_application_contract()
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "management.openapi.json").write_text(schema, encoding="utf-8")
     (destination / "management-client.ts").write_text(client, encoding="utf-8")
+    (destination / "application.openapi.json").write_text(application_schema, encoding="utf-8")
 
 
-def check_published(schema_path: Path, client_path: Path) -> list[Path]:
+def check_published(
+    schema_path: Path, client_path: Path, application_schema_path: Path | None = None
+) -> list[Path]:
     """Detect absent or stale tracked artifacts without rewriting them."""
     schema, client = rendered_contract()
+    artifacts = [(schema_path, schema), (client_path, client)]
+    if application_schema_path is not None:
+        artifacts.append((application_schema_path, rendered_application_contract()))
     return [
         path
-        for path, expected in ((schema_path, schema), (client_path, client))
+        for path, expected in artifacts
         if not path.is_file() or path.read_bytes() != expected.encode("utf-8")
     ]
 
@@ -173,9 +190,14 @@ def main() -> None:
     parser.add_argument(
         "--client-path", type=Path, default=Path("apps/web/src/generated/management-client.ts")
     )
+    parser.add_argument(
+        "--application-schema-path",
+        type=Path,
+        default=Path("apps/api/openapi/application.openapi.json"),
+    )
     args = parser.parse_args()
     if args.check:
-        drift = check_published(args.schema_path, args.client_path)
+        drift = check_published(args.schema_path, args.client_path, args.application_schema_path)
         if drift:
             parser.exit(1, "Management contract drift: " + ", ".join(map(str, drift)) + "\n")
     else:

@@ -615,6 +615,33 @@ def test_management_authority_is_reloaded_after_role_change(management_client, s
     assert operations.calls[0][0].role == "reviewer"
 
 
+@pytest.mark.parametrize("name", ["admin", "reviewer"])
+def test_published_application_contract_keeps_unavailable_adapters_and_private_schema(store, name):
+    from labelloop_api.management_codegen import application_contract_app
+
+    with TestClient(application_contract_app(), base_url=ORIGIN) as client:
+        assert client.get("/projects").status_code == 401
+        csrf = login(client, name).json()["csrf_token"]
+        assert client.get("/auth/me").json()["name"] == name
+        response = client.get("/projects")
+        assert response.status_code == 503
+        assert response.json() == {"detail": "management_unavailable"}
+        assert response.headers["cache-control"] == "no-store"
+        for path in ("/openapi.json", "/docs", "/redoc"):
+            assert client.get(path).status_code == 404
+        response = client.post("/projects", json=management_project())
+        assert response.status_code == 403 and response.json() == {"detail": "csrf_denied"}
+        response = client.post(
+            "/projects", json=management_project(), headers=management_headers(csrf)
+        )
+        assert response.status_code == (503 if name == "admin" else 403)
+        assert response.json() == {
+            "detail": "management_unavailable" if name == "admin" else "permission_denied"
+        }
+        assert client.post("/auth/logout", headers=management_headers(csrf)).status_code == 204
+        assert client.get("/projects").status_code == 401
+
+
 def test_default_application_still_does_not_mount_management(management_client):
     from labelloop_api.main import app
 

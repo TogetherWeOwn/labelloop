@@ -103,23 +103,38 @@ The real adapter must:
 ## Generated contract
 
 GitHub Actions' unit job generates and publishes the `management-contract`
-artifact containing `management.openapi.json` and `management-client.ts`:
+artifact containing `management.openapi.json`, `management-client.ts` and
+`application.openapi.json`:
 
 ```sh
 uv run python -m labelloop_api.management_codegen --output-dir <artifact-directory>
 ```
 
-This is an **unbound management-only schema**, not the eventual combined app
-OpenAPI. Generation is deterministic and uses the pinned FastAPI/Pydantic versions;
+The management-only schema and client remain unbound adapter contracts.
+The companion application schema comes directly from
+`create_app(management_operations=unavailable_operations)`, combining the real
+shared session routes, health routes and management contracts without a separate
+router inventory. Generation resolves no auth store, storage client or operation;
+it neither changes the default app nor exposes a schema/docs endpoint. Valid
+human sessions still receive `management_unavailable` at the adapter boundary;
+anonymous, service, role and CSRF guards remain enforced. This composed schema is
+**not final producer wiring, production availability or acceptance evidence**.
+Middleware-enforced session and CSRF policy is documented above; generated
+OpenAPI alone does not prove or replace it. The existing auth client remains the
+shared identity client; the generated management client contains no second auth
+implementation.
+
+Generation is deterministic and uses the pinned FastAPI/Pydantic versions;
 no new generator dependency is introduced. The TypeScript client uses fixed
 same-origin `/api` routes, encoded IDs, credentials, CSRF and idempotency headers,
 no-store caching and refused redirects. It supplies no authorization of its own.
 Response types are compile-time types, not permission to treat server/model data
 as trusted domain state.
 
-The tracked schema is `apps/api/openapi/management.openapi.json`; the tracked
-client is `apps/web/src/generated/management-client.ts`. Both the unit and
-web-build jobs compare fresh generation with these exact bytes before tests:
+The tracked schemas are `apps/api/openapi/management.openapi.json` and
+`apps/api/openapi/application.openapi.json`; the tracked client is
+`apps/web/src/generated/management-client.ts`. Both the unit and web-build jobs
+compare fresh generation with all three artifacts' exact bytes before tests:
 
 ```sh
 uv run python -m labelloop_api.management_codegen --check
@@ -127,7 +142,7 @@ uv run python -m labelloop_api.management_codegen --check
 
 A missing or stale file fails without rewriting it. To update the publication,
 generate into an empty artifact directory with `--output-dir`, then copy the
-schema and client to those tracked paths together. Do not hand-edit the outputs.
+schemas and client to those tracked paths together. Do not hand-edit the outputs.
 The initial schema publication comes from the detail-contract Actions artifact;
 the client uses that schema with the corrected union renderer. The new head's
 drift, lint, type and request tests must pass before that publication is verified.
@@ -135,8 +150,8 @@ drift, lint, type and request tests must pass before that publication is verifie
 The web job checks the **tracked** client rather than replacing it before lint,
 typecheck and tests. It runs for Python changes as well as web changes, and the
 CI aggregator requires it for both. A successful Python generator alone cannot
-satisfy the client contract. These remain the isolated management contract, not
-a final combined app schema. No local suite is used as a substitute.
+satisfy the client contract. Schema publication still does not qualify real
+adapters or the full project-to-export path. No local suite is used as a substitute.
 
 ## Canonical transaction adapter (partial, unmounted)
 

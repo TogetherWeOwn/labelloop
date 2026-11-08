@@ -46,9 +46,13 @@ Artifacts are application IDs authorized through the common artifact boundary.
 
 The schema/client generator includes these models and operations in its Actions
 artifact and the checked-in `apps/api/openapi/management.openapi.json` and
-`apps/web/src/generated/management-client.ts`. Actions checks both tracked files
-for drift before checking the client. Final combined auth/app OpenAPI remains
-incomplete; do not hand-edit a second client from these tables.
+`apps/web/src/generated/management-client.ts`. The companion
+`apps/api/openapi/application.openapi.json` uses the real opt-in application
+factory to include the shared auth and health routes without binding operations
+or changing the default application. Actions checks all three tracked artifacts
+for drift before checking the client. Composed schema publication is not final
+adapter integration or route availability; do not hand-edit a second client from
+these tables.
 
 ## Mutation alignment
 
