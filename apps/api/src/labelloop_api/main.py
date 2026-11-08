@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from minio import Minio
 
+from labelloop_api.annotation_reads import router as annotation_router
 from labelloop_api.auth import (
     authentication_boundary,
     current_principal,
@@ -115,6 +116,7 @@ def create_app(
     application.middleware("http")(authentication_boundary)
     application.add_exception_handler(RequestValidationError, validation_error)
     application.include_router(router)
+    application.include_router(annotation_router)
     application.add_api_route("/healthz", healthz, methods=["GET"])
     application.add_api_route("/readyz", readyz, methods=["GET"])
     if management_operations is not None:

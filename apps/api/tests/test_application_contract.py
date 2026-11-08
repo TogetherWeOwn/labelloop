@@ -25,7 +25,12 @@ def test_application_schema_is_the_real_opt_in_composition():
         "/auth/logout",
         "/healthz",
         "/readyz",
+        "/projects/{project_id}/assets/{asset_id}/annotations",
+        "/projects/{project_id}/assets/{asset_id}/annotation-history",
     }
+    assert set(main.app.openapi()["paths"]) == set(spec["paths"]) - set(
+        contract_app().openapi()["paths"]
+    )
     assert set(spec["paths"]["/auth/logout"]["post"]["responses"]) == {"204"}
 
 

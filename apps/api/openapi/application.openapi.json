@@ -86,6 +86,73 @@
         "title": "AffineTransform",
         "type": "object"
       },
+      "AnnotationHistory": {
+        "additionalProperties": false,
+        "properties": {
+          "next_before_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Revision"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionRecord"
+            },
+            "title": "Revisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revisions",
+          "next_before_revision"
+        ],
+        "title": "AnnotationHistory",
+        "type": "object"
+      },
+      "AnnotationSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation": {
+            "$ref": "#/components/schemas/RevisionRecord"
+          },
+          "asset_key": {
+            "title": "Asset Key",
+            "type": "string"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "project_key": {
+            "title": "Project Key",
+            "type": "string"
+          },
+          "source_sha256": {
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_key",
+          "asset_key",
+          "source_sha256",
+          "width",
+          "height",
+          "annotation"
+        ],
+        "title": "AnnotationSnapshot",
+        "type": "object"
+      },
       "ArgumentMismatchRead": {
         "additionalProperties": false,
         "properties": {
@@ -3280,6 +3347,87 @@
         "title": "RetentionRead",
         "type": "object"
       },
+      "RevisionRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_kind": {
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "approval_state": {
+            "title": "Approval State",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "label_state": {
+            "title": "Label State",
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "parent_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Revision"
+          },
+          "recorded_gold_eligible": {
+            "title": "Recorded Gold Eligible",
+            "type": "boolean"
+          },
+          "recorded_training_eligible": {
+            "title": "Recorded Training Eligible",
+            "type": "boolean"
+          },
+          "review_tier": {
+            "title": "Review Tier",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "scope_completeness": {
+            "title": "Scope Completeness",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "parent_revision",
+          "actor_kind",
+          "actor_id",
+          "created_at",
+          "objects",
+          "label_state",
+          "approval_state",
+          "review_tier",
+          "scope_completeness",
+          "recorded_training_eligible",
+          "recorded_gold_eligible"
+        ],
+        "title": "RevisionRecord",
+        "type": "object"
+      },
       "ScopeDraft": {
         "additionalProperties": false,
         "properties": {
@@ -5132,6 +5280,141 @@
         "summary": "Ingest Asset",
         "tags": [
           "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/assets/{asset_id}/annotation-history": {
+      "get": {
+        "operationId": "annotation_history_projects__project_id__assets__asset_id__annotation_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Revision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationHistory"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Annotation History",
+        "tags": [
+          "annotations"
+        ]
+      }
+    },
+    "/projects/{project_id}/assets/{asset_id}/annotations": {
+      "get": {
+        "operationId": "annotation_snapshot_projects__project_id__assets__asset_id__annotations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Annotation Snapshot",
+        "tags": [
+          "annotations"
         ]
       }
     },
