@@ -77,10 +77,10 @@ def test_registry_requires_current_scoped_final_journal_before_promotion(scenari
             reload.side_effect = sa.exc.NoResultFound("no final journal")
             with pytest.raises(sa.exc.NoResultFound, match="no final journal"):
                 model_store.change_registry(connection, **kwargs)
-            reload.assert_called_once_with(connection, historical)
+            reload.assert_called_once_with(connection, historical, model_id="candidate-id")
         else:
             assert model_store.change_registry(connection, **kwargs) is changed
-            reload.assert_called_once_with(connection, historical)
+            reload.assert_called_once_with(connection, historical, model_id="candidate-id")
             state.promote.assert_called_once_with(
                 candidate,
                 report,

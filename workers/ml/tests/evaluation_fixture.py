@@ -1,6 +1,7 @@
 """Invented canonical evaluation populations, never compiled images or model gold."""
 
 import hashlib
+from dataclasses import replace
 
 import sqlalchemy as sa
 
@@ -11,6 +12,25 @@ from labelloop_api.schema import (
     source_split_assignment,
     yolo_dataset_variant,
 )
+
+
+def compiled_training_lineage(connection, release, lineage):
+    """Retain synthetic audit lineage plus every actual stored compiled ancestor."""
+    from labelloop_api import model_schema
+    from labelloop_api.annotation_audit_store import lock_project
+    from labelloop_api.training_group_store import model_training_groups
+
+    project_id = lock_project(connection, release.project_id)
+    model_id = connection.execute(
+        sa.select(model_schema.model_release.c.id).where(
+            model_schema.model_release.c.project_id == project_id,
+            model_schema.model_release.c.release_key == release.release_id,
+        )
+    ).scalar_one()
+    groups = model_training_groups(connection, project_id=project_id, model_id=model_id)
+    return replace(
+        lineage, training_group_ids=tuple(sorted(set(lineage.training_group_ids) | set(groups)))
+    )
 
 
 def independent_evaluation_variant(connection, source_variant_id, dataset_key):

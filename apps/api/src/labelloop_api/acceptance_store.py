@@ -134,7 +134,7 @@ def _qualified_champion(connection, project_key, recipe_key, evaluation_key, qua
     project_id = lock_project(connection, project_key)
     require_no_annotation_veto(connection, project_id=project_id, model_id=model_id)
     context = current_policy_context(connection, qualification)
-    context = current_qualification_context(connection, context)
+    context = current_qualification_context(connection, context, model_id=model_id)
     report = stored_report(connection, release, evaluation_key)
     return release, report, context
 

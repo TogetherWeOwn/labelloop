@@ -251,18 +251,23 @@ def invalidate_final_test(
 
 
 def current_qualification_context(
-    connection: sa.Connection, context: QualificationContext
+    connection: sa.Connection, context: QualificationContext, *, model_id: object
 ) -> QualificationContext:
-    """Recheck canonical evaluation groups and replace a historical final snapshot.
+    """Recheck canonical training/evaluation groups and replace a historical snapshot.
 
     The promotion service must also load authoritative policy, pipeline, audit and
     canary records. This helper alone does not authorize or qualify a promotion.
     Keep the outer transaction alive through the consuming state change.
     """
     from labelloop_api.evaluation_group_store import load_evaluation_set
+    from labelloop_api.training_group_store import model_training_groups
 
     dataset = context.evidence.final_test.dataset
     lineage = context.evidence.lineage
+    project_id = lock_project(connection, dataset.project_id)
+    training_groups = model_training_groups(connection, project_id=project_id, model_id=model_id)
+    if not set(training_groups) <= set(lineage.training_group_ids):
+        raise ValueError("qualification lineage omits compiled training groups")
     require_development_uses(
         connection,
         project_key=dataset.project_id,

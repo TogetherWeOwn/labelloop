@@ -191,7 +191,10 @@ def fixture_change_registry(connection, **kwargs):
     exposed = load_final_test(
         connection, project_key=candidate.project_id, dataset_key=final.dataset_release_id
     )
+    from evaluation_fixture import compiled_training_lineage
+
     context = qualification_context(candidate, final, kwargs["policy"])
+    lineage = compiled_training_lineage(connection, candidate, context.evidence.lineage)
     kwargs["qualification"] = replace(
         context,
         current_final_test=exposed,
@@ -199,7 +202,7 @@ def fixture_change_registry(connection, **kwargs):
             context.evidence,
             final_test=exposed,
             selection_id=selection_key,
-            lineage=replace(context.evidence.lineage, development=development_set),
+            lineage=replace(lineage, development=development_set),
         ),
     )
     from qualification_policy_smoke import fixture_policy

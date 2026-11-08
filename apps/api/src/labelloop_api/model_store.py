@@ -474,7 +474,9 @@ def change_registry(
                         "promotion qualification cannot cross project or recipe boundaries"
                     )
                 qualification = current_policy_context(connection, qualification)
-                qualification = current_qualification_context(connection, qualification)
+                qualification = current_qualification_context(
+                    connection, qualification, model_id=candidate_row["id"]
+                )
             incumbent = (
                 stored_report(connection, state.champion, incumbent_evaluation_key)
                 if state.champion and incumbent_evaluation_key

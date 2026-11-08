@@ -226,6 +226,9 @@ def exercise_acceptance(
             scope=context.evidence.scope,
             remediation_for=incidents,
         )
+        from evaluation_fixture import compiled_training_lineage
+
+        lineage = compiled_training_lineage(connection, model, qualified.evidence.lineage)
         qualified = replace(
             qualified,
             current_final_test=exposed,
@@ -233,9 +236,7 @@ def exercise_acceptance(
                 qualified.evidence,
                 final_test=exposed,
                 selection_id=selection.selection_id,
-                lineage=replace(
-                    qualified.evidence.lineage, development=context.evidence.lineage.development
-                ),
+                lineage=replace(lineage, development=context.evidence.lineage.development),
             ),
         )
         qualified.require_qualified(model, report)

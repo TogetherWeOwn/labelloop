@@ -8,7 +8,7 @@ import pytest
 from qualification_fixture import qualification_context, synthetic_final
 from test_m5_integration_contract import make_release, make_report
 
-from labelloop_api import evaluation_group_store
+from labelloop_api import evaluation_group_store, training_group_store
 from labelloop_api import final_test_store as store
 from labelloop_core.evaluation_lifecycle import (
     CandidateSelection,
@@ -161,6 +161,8 @@ def test_current_context_rechecks_development_and_calibration_identities(failure
     release = replace(release, evaluation_run_ids=(*release.evaluation_run_ids, report.run_id))
     context = qualification_context(release, report, PromotionPolicy(1, 0.9))
     with (
+        patch.object(store, "lock_project", return_value="project-id"),
+        patch.object(training_group_store, "model_training_groups", return_value=()),
         patch.object(store, "load_final_test", return_value=context.current_final_test),
         patch.object(
             evaluation_group_store,
@@ -178,9 +180,11 @@ def test_current_context_rechecks_development_and_calibration_identities(failure
     ):
         if failure:
             with pytest.raises(ValueError, match="locked test"):
-                store.current_qualification_context(None, context)
+                store.current_qualification_context(None, context, model_id="model-id")
         else:
-            assert store.current_qualification_context(None, context) == context
+            assert (
+                store.current_qualification_context(None, context, model_id="model-id") == context
+            )
         use.assert_called_once_with(
             None,
             project_key=release.project_id,
@@ -233,13 +237,83 @@ def test_current_context_reloads_every_canonical_evaluation_population(side, tar
         return value
 
     with (
+        patch.object(store, "lock_project", return_value="project-id"),
+        patch.object(training_group_store, "model_training_groups", return_value=()),
         patch.object(store, "require_development_uses"),
         patch.object(store, "load_final_test", return_value=current),
         patch.object(evaluation_group_store, "load_evaluation_set", side_effect=canonical) as load,
     ):
         if failure == "none":
-            assert store.current_qualification_context(None, context) == context
+            assert (
+                store.current_qualification_context(None, context, model_id="model-id") == context
+            )
             assert [call.kwargs["role"] for call in load.call_args_list] == list(expected)
         else:
             with pytest.raises(ValueError, match="canonical membership"):
-                store.current_qualification_context(None, context)
+                store.current_qualification_context(None, context, model_id="model-id")
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize(
+    "scenario", ["current", "extra-conservative", "omitted", "conflict", "missing"]
+)
+def test_current_context_reloads_candidate_and_ancestor_training_groups(side, scenario):
+    release = make_release(side, "challenger")
+    report = synthetic_final(make_report(release), run_id="final", dataset_id="final-set")
+    release = replace(release, evaluation_run_ids=(*release.evaluation_run_ids, report.run_id))
+    context = qualification_context(release, report, PromotionPolicy(1, 0.9))
+    groups = context.evidence.lineage.training_group_ids
+    if scenario == "extra-conservative":
+        context = replace(
+            context,
+            evidence=replace(
+                context.evidence,
+                lineage=replace(
+                    context.evidence.lineage, training_group_ids=(*groups, "conservative-group")
+                ),
+            ),
+        )
+    elif scenario == "omitted":
+        groups = (*groups, "new-ancestor-group")
+    connection = MagicMock()
+    events = []
+
+    def lock(*args):
+        assert args == (connection, release.project_id)
+        events.append("project-lock")
+        return "project-id"
+
+    def training(*args, **kwargs):
+        assert events == ["project-lock"]
+        assert args == (connection,)
+        assert kwargs == {"project_id": "project-id", "model_id": "candidate-id"}
+        if scenario in {"conflict", "missing"}:
+            raise ValueError("invalid current compiled training groups")
+        return groups
+
+    with (
+        patch.object(store, "lock_project", side_effect=lock),
+        patch.object(training_group_store, "model_training_groups", side_effect=training) as load,
+        patch.object(store, "require_development_uses") as uses,
+        patch.object(store, "load_final_test", return_value=context.current_final_test),
+        patch.object(
+            evaluation_group_store,
+            "load_evaluation_set",
+            side_effect=lambda _, **args: {
+                "development": context.evidence.lineage.development,
+                "locked_final_test": context.evidence.final_test.dataset,
+            }[args["role"]],
+        ),
+    ):
+        if scenario in {"current", "extra-conservative"}:
+            assert (
+                store.current_qualification_context(connection, context, model_id="candidate-id")
+                == context
+            )
+            uses.assert_called_once()
+        else:
+            with pytest.raises(ValueError, match="compiled training groups"):
+                store.current_qualification_context(connection, context, model_id="candidate-id")
+            uses.assert_not_called()
+        load.assert_called_once()
+    connection.execute.assert_not_called()

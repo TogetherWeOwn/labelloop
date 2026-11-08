@@ -217,17 +217,20 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
         release = load_release(connection, model_id)
         cells = tuple(ScopeCell(value, "fixture-source", "ordinary") for value in release.class_ids)
         cells += (ScopeCell(release.class_ids[0], "fixture-source", "low-light"),)
+        from evaluation_fixture import compiled_training_lineage
+
         context = qualification_context(release, final, PromotionPolicy(1, 0.0), scope=cells)
+        lineage = compiled_training_lineage(connection, release, context.evidence.lineage)
         context = replace(
             context,
             evidence=replace(
                 context.evidence,
                 final_test=exposed,
-                lineage=replace(context.evidence.lineage, development=development),
+                lineage=replace(lineage, development=development),
             ),
             current_final_test=exposed,
         )
-        assert current_qualification_context(connection, context) == context
+        assert current_qualification_context(connection, context, model_id=model_id) == context
         context.require_qualified(release, final)
         for revision, message in ((0, "stale final-test"), (1, "already exposed")):
             with pytest.raises(ValueError, match=message):
@@ -313,7 +316,9 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
         assert invalidated.effective_role == "development"
         assert invalidated.quarantine_reasons == quarantined.quarantine_reasons
         with pytest.raises(ValueError, match="stale or mismatched"):
-            current_qualification_context(connection, context).require_qualified(release, final)
+            current_qualification_context(connection, context, model_id=model_id).require_qualified(
+                release, final
+            )
         # The original success is unchanged historical evidence, not current authority.
         assert context.current_final_test == exposed
         assert (

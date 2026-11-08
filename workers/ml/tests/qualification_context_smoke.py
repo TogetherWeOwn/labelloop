@@ -636,6 +636,76 @@ def exercise_context_assembly(engine, release, final, context, actor):
             )
         from labelloop_api.schema import similarity_relation
 
+        manifest = connection.execute(
+            sa.select(model_schema.training_run.c.input_manifest)
+            .join(model_schema.model_release)
+            .where(model_schema.model_release.c.id == model_id)
+        ).scalar_one()
+        training_asset = next(
+            sample["asset_id"] for sample in manifest["samples"] if sample["split"] == "train"
+        )
+        for scenario in ("omitted", "relation"):
+            with connection.begin_nested() as transaction:
+                replay = loaded
+                message = "omits compiled training groups"
+                if scenario == "omitted":
+                    replay = replace(
+                        loaded,
+                        evidence=replace(
+                            loaded.evidence,
+                            lineage=replace(
+                                loaded.evidence.lineage, training_group_ids=("invented",)
+                            ),
+                        ),
+                    )
+                else:
+                    keys = (training_asset, annotation.release_key + "-positive")
+                    identities = {
+                        row.asset_key: row.id
+                        for row in connection.execute(
+                            sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                                source_asset.c.asset_key.in_(keys)
+                            )
+                        )
+                    }
+                    connection.execute(
+                        sa.insert(similarity_relation).values(
+                            left_asset_id=identities[keys[0]],
+                            right_asset_id=identities[keys[1]],
+                            reason="declared_metadata",
+                            evidence="synthetic current training-group conflict",
+                            algorithm_version="synthetic-v1",
+                        )
+                    )
+                    message = "merge pinned groups|cross pinned splits"
+                with pytest.raises(ValueError, match=message):
+                    require_automatic_acceptance(
+                        connection,
+                        **scope,
+                        evaluation_key=final.run_id,
+                        qualification=replay,
+                        scope=context.evidence.scope[0],
+                    )
+                with pytest.raises(ValueError, match=message):
+                    change_registry(
+                        connection,
+                        **scope,
+                        actor_id=actor,
+                        expected_revision=before.revision,
+                        candidate_key=release.release_id,
+                        evaluation_key=final.run_id,
+                        policy=PromotionPolicy(1, 0.0),
+                        qualification=replay,
+                    )
+                assert load_registry(connection, **scope) == before
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                    ).scalar_one()
+                    == count
+                )
+                transaction.rollback()
+
         for dataset_key in (
             loaded.evidence.lineage.development.release_id,
             loaded.current_final_test.dataset.release_id,
@@ -765,6 +835,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
     return {
         "scope": "synthetic canonical assembly/acceptance mechanics, never domain quality or HTTP",
         "reconnected_model_report_policy_final_and_both_measured_outcomes": True,
+        "canonical_training_reload_rejects_omitted_groups_and_new_relations_in_consumers": True,
         "canonical_evaluation_groups_recover_and_reject_missing_or_conflicting_sources": True,
         "assembly_rejects_declared_group_substitution_and_new_evaluation_relations": True,
         "complete_fresh_canary_passes_and_partial_outcome_fails": True,

@@ -6,7 +6,39 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Canonical evaluation reload in consuming transactions — pending Actions
+## Canonical training reload in consuming transactions — pending Actions
+
+The shared current-context loader now requires the consuming candidate/champion's
+stored model identity. It reloads every compiled checkpoint/recorded label-teacher
+ancestor through the existing training-group reader under the project lock, and
+rejects omitted weight-fitting groups or newly conflicting canonical relations
+before returning a context. Promotion, automatic acceptance and drift resumption
+pass their actual stored model ID, not an identity selected by evidence. Canonical
+locks remain held through the outer decision transaction. No new endpoint,
+migration, dependency or ancestry/grouping engine was added.
+
+Ten new adapter cases cover both recipes, exact current reads, conservative extra
+lineage, missing/omitted groups and reader failures before evaluation loading.
+Paired PostgreSQL controls replay omitted training lineage and a new relation
+through actual registry and automatic-acceptance consumers, requiring unchanged
+complete heads/event count. Synthetic registry/drift/journal preparation retains
+actual compiled ancestor groups alongside conservative audit lineage. These new
+assertions await exact-head Actions; static checks are not test acceptance.
+
+Preceding exact `922692bb2358c856af468d123c0fc38bb7c0abe6`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42487013314) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42487013037) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42487013314/job/128751007668),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42487013314/job/128751007679),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42487013314/job/128751007602),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract. This verifies the earlier direct canonical evaluation reload,
+not these new training controls or final HTTP/UI/expanded-restore acceptance.
+Reference/ancestor selection-use lineage, original acceptance/pipeline/measurement
+provenance, authenticated consumers and expanded restore/UI evidence remain open.
+Real null targets fail closed; synthetic fixtures are not domain gold.
+
+## Canonical evaluation reload in consuming transactions — historical preparation
 
 The shared current-context loader now rechecks development, optional calibration
 and final canonical populations before registry promotion, automatic acceptance or
