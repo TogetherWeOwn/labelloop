@@ -106,6 +106,155 @@ def database(tmp_path):
         owner.dispose()
 
 
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_registered_compiler_claims_only_requested_job_and_publishes(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_api.management_workers import compilation_runner
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+    other = compile_request(
+        compilation,
+        release.id,
+        recipe="full-letterbox-640-v1" if "320" in recipe else "full-letterbox-320-v1",
+        key="other-compilation",
+    )
+    runner = compilation_runner(
+        compiler_worker.store,
+        compiler_worker.objects,
+        service.workspace_id,
+        job_id=accepted.job_id,
+    )
+    assert runner.run_once("registered-compiler")
+    assert not runner.run_once("registered-compiler")
+    manifest, applications, events, job = publication_state(owner, accepted)
+    assert manifest["recipe"]["recipe_id"] == recipe
+    assert applications == len(events) == 1 and job.status == "succeeded"
+    assert events[0].actor_id == "registered-compiler"
+    assert publication_state(owner, other) == (None, 0, [], ("queued", 0))
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+@pytest.mark.parametrize("saved_export", [False, True])
+def test_registered_training_resumes_native_stages_and_publishes_once(
+    database, compilation, compiler_worker, recipe, saved_export
+):
+    from types import SimpleNamespace
+
+    from labelloop_api.management_workers import local_training_runner
+
+    stage, _, accepted, lease, training, exported, paths = prepared_export_stage(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    if saved_export:
+        compiler_worker.store.save_stage(lease, "export", exported)
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("saved training/export must not repeat ML or object I/O")
+
+    calls = []
+
+    def exporter(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("synthetic transient export failure")
+        return stage.exporter(**kwargs)
+
+    runner = local_training_runner(
+        compiler_worker.store,
+        stage.training.engine,
+        SimpleNamespace(read=unexpected, put=unexpected)
+        if saved_export
+        else stage.training.objects,
+        stage.training.workspace_id,
+        unexpected,
+        unexpected if saved_export else exporter,
+        job_id=accepted.job_id,
+    )
+    assert runner.run_once("registered-ml")
+    if not saved_export:
+        assert model_publication_state(database[1], accepted) == ([], [], [])
+        assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+        with database[1].begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET available_at=clock_timestamp()-interval '1 second' "
+                    "WHERE job_id=:id"
+                ),
+                {"id": lease.job_id},
+            )
+        assert runner.run_once("registered-ml")
+    assert not runner.run_once("registered-ml")
+    models, links, events = model_publication_state(database[1], accepted)
+    assert len(models) == len(links) == len(events) == 1
+    assert events[0].actor_id == "registered-ml"
+    assert events[0].payload["requested_by"] == Actor().id
+    job = training_publication_state(database[1], accepted)[4]
+    assert job.status == "succeeded" and job.generation == (2 if saved_export else 3)
+    assert calls == ([] if saved_export else [1, 1])
+    assert all(not path.exists() for path in paths)
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+@pytest.mark.parametrize("saved_evaluation", [False, True])
+def test_registered_evaluation_executes_or_resumes_and_links_once(
+    database, compilation, compiler_worker, recipe, saved_evaluation
+):
+    from types import SimpleNamespace
+
+    from labelloop_api.management_workers import local_evaluation_runner
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, accepted, lease, paths, reads = prepared_evaluation_stage(
+        database, compilation, compiler_worker, recipe
+    )
+    if saved_evaluation:
+        record = worker.evaluate(StageContext(compiler_worker.store, lease, {}))
+        compiler_worker.store.save_stage(lease, "evaluation", record)
+        paths.clear()
+        reads.clear()
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("saved evaluation must not repeat inference or object I/O")
+
+    runner = local_evaluation_runner(
+        compiler_worker.store,
+        worker.engine,
+        SimpleNamespace(read=unexpected, put=unexpected) if saved_evaluation else worker.objects,
+        worker.workspace_id,
+        unexpected if saved_evaluation else worker.predictor,
+        job_id=accepted.job_id,
+    )
+    assert runner.run_once("registered-evaluator")
+    assert not runner.run_once("registered-evaluator")
+    rows, links, events, applications, job = evaluation_publication_state(database[1], lease)
+    assert len(rows) == len(links) == len(events) == applications == 1
+    assert job.status == "succeeded" and job.generation == 2
+    assert events[0].actor_id == "registered-evaluator"
+    assert bool(paths) == bool(reads) == (not saved_evaluation)
+    assert all(not path.exists() for path in paths)
+
+
 def prepared_evaluation_publication(
     database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
 ):

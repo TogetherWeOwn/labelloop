@@ -16,6 +16,7 @@ dependencies = [
   "uvicorn==0.40.0",
   "labelloop-core",
   "labelloop-compiler",
+  "labelloop-worker-core",
 ]
 
 [project.scripts]
@@ -31,3 +32,4 @@ packages = ["src/labelloop_api"]
 [tool.uv.sources]
 labelloop-core = { workspace = true }
 labelloop-compiler = { workspace = true }
+labelloop-worker-core = { workspace = true }

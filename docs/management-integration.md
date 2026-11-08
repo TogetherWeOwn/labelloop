@@ -669,6 +669,46 @@ not verified until exact-head Actions passes. Default worker registration, runti
 grants, final mounting and DB-backed actual CPU project-to-export acceptance
 remain incomplete; the real asset-admission Security condition is unchanged.
 
+### Explicit request-bound worker registration (partial, opt-in)
+
+`labelloop_api.management_workers` composes the delivered `JobRunner`, rather
+than implementing another polling loop, scheduler or stage store:
+
+| Factory | Fixed job kind | Ordered saved stages | Transactional completion sink |
+| --- | --- | --- | --- |
+| `compilation_runner` | `compile_variant` | `compilation` | `CanonicalCompilationWorker.publish` |
+| `local_training_runner` | `train_local` | `training`, `export` | `CanonicalLocalModelPublisher.publish` |
+| `local_evaluation_runner` | `evaluate_local` | `evaluation` | `CanonicalLocalEvaluationPublisher.publish` |
+
+Deployment-owned code supplies the existing queue connection factory, restricted
+SQLAlchemy engine, content-addressed object adapter and trusted workspace. The
+compiler does not receive an ML backend. ML composition supplies the delivered
+`LocalUltralyticsBackend`, `export_and_compare` and `predict_samples` through the
+existing typed boundaries; no vendor import crosses the licence boundary. The
+API package explicitly depends on the already-locked first-party queue package.
+No external version, artifact, build backend or registry source changes.
+
+Each factory **requires one specific durable job ID**, supplied by trusted
+request-to-worker dispatch. Empty/unscoped claims are refused, so an invocation
+cannot drain another workspace's same-kind queue accidentally. Job IDs are not
+credentials: stages and completion still recheck owned durable intent, human
+receipts and lineage. Constructing a runner opens no database connection, reads
+no object and starts no computation. Call `run_once(worker_id)` only inside the
+correct deployed worker process; no supervisor or default registration is added.
+Native lease/runtime bounds, heartbeats, generic failure codes, cancellation,
+stage recovery and application fencing remain the existing runner's authority.
+
+Actions registration cases cover both recipes, a queued decoy left untouched,
+training-stage recovery through transient export failure, saved export completion
+without object/ML access, and fresh/saved development evaluation with single
+report/link/audit publication. ML artifacts and predictions in those DB cases
+are explicitly synthetic, not CPU training/export or quality evidence. Unit
+contracts check fixed kinds/stages/sinks, shared dependency identity, no I/O and
+unscoped/invalid-bound refusal. Newly commissioned tests require exact-head Actions
+verification. Automatic dispatch, default worker startup, final app mounting,
+production grants and DB-backed actual CPU project-to-export acceptance remain
+open. Real asset admission remains disabled pending the existing Security gate.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
