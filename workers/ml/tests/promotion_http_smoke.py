@@ -286,6 +286,96 @@ def exercise_http_quality_vetoes(engine, release, final, context, actor):
     return len(cases)
 
 
+def exercise_http_final_test_vetoes(engine, release, final, context, actor):
+    import pytest
+    from qualification_context_smoke import _outcome, prepare_sole_final_candidate
+    from registry_http_smoke import exercise_http_final_invalidation
+
+    from labelloop_api.model_store import load_registry, save_evaluation
+    from labelloop_api.promotion_service import promote_candidate
+    from labelloop_api.qualification_context_store import (
+        AnnotationOutcomeRef,
+        load_qualification_context,
+    )
+    from labelloop_core.registry import PromotionPolicy
+
+    scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
+    for action in ("adapt", "quarantine"):
+        with engine.begin() as connection:
+            candidate, report, variant = prepare_sole_final_candidate(
+                connection, release, final, context, actor, suffix="-http-final-" + action
+            )
+            incumbent = load_registry(connection, **scope).champion
+            assert incumbent is not None
+            comparison = replace(
+                report,
+                run_id=report.run_id + "-incumbent",
+                weights_sha256=incumbent.weights_sha256,
+                class_map_sha256=incumbent.class_map_sha256,
+                policy=incumbent.policy,
+            )
+            save_evaluation(
+                connection, model_key=incumbent.release_id, variant_id=variant, report=comparison
+            )
+            annotation = _outcome(connection, candidate, context, actor, canary=False)
+            canary = _outcome(
+                connection, candidate, context, actor, canary=True, alternatives=False
+            )
+        with engine.begin() as connection:
+            qualified = load_qualification_context(
+                connection,
+                **scope,
+                model_key=candidate.release_id,
+                qualification_key="http-final-" + action + "-preflight",
+                annotation=AnnotationOutcomeRef(annotation.release_key),
+                canary=AnnotationOutcomeRef(canary.release_key),
+            )
+            qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
+        original = snapshot(engine, release.project_id)
+        invalidated = exercise_http_final_invalidation(
+            engine,
+            release.project_id,
+            report.dataset_release_id,
+            action,
+            "synthetic HTTP promotion independence control: " + action,
+            qualified.current_final_test.revision,
+        )
+        assert invalidated.dataset == qualified.current_final_test.dataset
+        assert invalidated.assessments == qualified.current_final_test.assessments
+        assert bool(invalidated.adaptation_reasons) == (action == "adapt")
+        assert bool(invalidated.quarantine_reasons) == (action == "quarantine")
+        # The historical success still passes in isolation. Only the committed
+        # current journal can invalidate it; no report, outcome or revision is stale.
+        qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
+        journals = qualification_journals(engine)
+        arguments = dict(
+            **scope,
+            model_key=candidate.release_id,
+            annotation_release_key=annotation.release_key,
+            canary_release_key=canary.release_key,
+            expected_revision=original[0][0 if release.policy.imgsz == 320 else 1].revision,
+        )
+        with engine.begin() as connection:
+            with pytest.raises(ValueError, match="final-test independence was invalidated"):
+                promote_candidate(
+                    connection, **arguments, actor_id=actor, require_fixture_policy=True
+                )
+        with authenticated_client(engine) as (client, identities, _workers):
+            headers = login(client, identities["admin"][1])
+            response = client.post(
+                f"/projects/{release.project_id}/promotions",
+                headers=headers,
+                json={key: value for key, value in arguments.items() if key != "project_key"}
+                | {"action": "promote"},
+            )
+            assert response.status_code == 409
+            assert response.json() == {"detail": "registry_change_rejected"}
+            assert response.headers["cache-control"] == "no-store"
+        assert snapshot(engine, release.project_id) == original
+        assert qualification_journals(engine) == journals
+    return 2
+
+
 def exercise_durable_http_promotion(engine, release, final, context, actor):
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
@@ -299,6 +389,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     from labelloop_core.registry import PromotionPolicy
 
     quality_vetoes = exercise_http_quality_vetoes(engine, release, final, context, actor)
+    final_test_vetoes = exercise_http_final_test_vetoes(engine, release, final, context, actor)
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
         candidate, report, variant = prepare_sole_final_candidate(
@@ -424,6 +515,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     return {
         "scope": "fixture-only copied metrics, not independent measurements or domain quality",
         "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
+        "committed_http_adapted_and_quarantined_final_veto_cases": final_test_vetoes,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,

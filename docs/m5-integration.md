@@ -6,7 +6,38 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP support and critical-slice vetoes — pending Actions
+## Committed HTTP final-test independence vetoes — pending Actions
+
+Both-recipe CPU smoke prepares two separate synthetic sole-final candidates, each
+with committed canonical populations, selection/exposure, unique audit/canary
+outcomes and a same-population incumbent comparison. A fresh-connection preflight
+must qualify each candidate before the real admin HTTP endpoint independently
+adapts or quarantines its final test. The existing invalidation helper checks
+actor/revision recovery, immutable membership and assessments, metadata-only reads,
+denial/replay controls and failed-append rollback.
+
+The historical qualification still passes in isolation, but the internal promotion
+service must reject specifically because current final-test independence was
+invalidated. Actual admin HTTP promotion must then return redacted 409/no-store;
+after client close/reconnect, both complete registry heads, every promotion event
+and all qualification journals must remain unchanged. Adaptation and quarantine
+use separate final populations, so neither control inherits the other's invalidity.
+The existing subsequent successful committed promotion/rollback remains the positive
+control. No production code, lifecycle gate, schema, migration or dependency changes.
+These new assertions await exact-head Actions; no local tests ran. REA: reuse the
+existing sole-final fixture, authenticated invalidation and promotion transactions.
+
+## Committed HTTP support and critical-slice vetoes — verified baseline
+
+Exact `02e82dcabbe7b9921e53cc50687248de35f377e1`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42535731738),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42535731395) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42535731315)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42535731738/job/128899521918),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42535731738/job/128899521831),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies support/slice vetoes below, not the new final-test
+controls or full M5 acceptance. Totals not extracted; required reviews remain gates.
 
 Both-recipe CPU smoke now commits five separate synthetic candidates with one
 adverse dimension each: unsupported class, insufficient class support, missing
@@ -19,8 +50,8 @@ valid authenticated admin promotion must then return redacted 409/no-store and
 preserve both complete registry heads, every promotion event and qualification
 journal after client close/reconnect. The existing successful committed promotion
 and rollback remain the positive control. No guard, policy, schema, migration or
-dependency changed. These new assertions await exact-head Actions; no local tests
-ran. Synthetic copied metrics prove software gates only, never model quality.
+dependency changed. These assertions passed exact-head Actions at `02e82dc`; no local
+tests ran. Synthetic copied metrics prove software gates only, never model quality.
 REA: reuse the real promotion service, canonical fixture and HTTP transactions.
 Automatic annotation remains an internal port until trusted execution and scope
 producers exist; no HTTP acceptance authority is introduced here.
