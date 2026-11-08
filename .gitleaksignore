@@ -1,2 +1,2 @@
 # No commit fingerprints: classification must survive squash and new commit identities.
-# The sole inert OpenAPI example is matched by exact content AND path in .gitleaks.toml.
+# Inert examples use exact content AND path classification in .gitleaks.toml.

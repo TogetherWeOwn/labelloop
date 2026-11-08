@@ -169,7 +169,30 @@ No record stores provider secrets, images or weights. Source/policy IDs and the
 historical final report are audit data; adapters must apply project permissions.
 Durable schemas must migrate deliberately rather than guessing a future version.
 
-## Trusted integration port (not yet an HTTP feature)
+## Authenticated registry recovery
+
+`POST /projects/{project_key}/promotions` currently accepts only
+`{"action":"rollback","recipe_key":"full-letterbox-320-v1","expected_revision":2}`.
+The same contract applies independently to the 640 recipe. The normal session
+boundary requires same-origin CSRF proof and a human admin; reviewers and every
+service principal are denied. The authenticated principal, not a request field,
+supplies the event actor. Extra fields, promotion requests and client-supplied
+candidate/policy/qualification claims are rejected.
+
+Recovery uses only the persisted rollback pointer through `change_registry` in
+one outer transaction, preserving complete release metadata, expected-revision
+checks, the project-first lock and immutable adverse-label vetoes. It neither
+clears drift nor grants automatic acceptance. Errors return bounded public codes
+without driver details. HTTP adapter tests use the real offline authentication
+store and transaction rollback controls; their simulated registry port is not
+end-to-end PostgreSQL acceptance. Persisted store mechanics remain covered by the
+separate both-recipe ML smoke. Full persisted HTTP acceptance is still required.
+
+This mounts only the independently ready recovery operation. Promotion remains
+closed to HTTP until trusted outcome selection and execution/measurement
+provenance are connected; the endpoint cannot accept a serialized success.
+
+## Trusted promotion integration port (not yet an HTTP feature)
 
 The internal `model_store.change_registry` accepts the typed context and writes
 its versioned JSON into the same immutable promotion event as before/after state.
