@@ -17,6 +17,7 @@ from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 
 from .management_contracts import (
     AssetIngest,
+    ClassCatalogDraft,
     Contract,
     GuideDraft,
     ManagementError,
@@ -312,6 +313,62 @@ class CanonicalManagementMutations:
                 result,
                 {
                     "guide_draft": draft,
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
+
+    def save_class_catalog_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ClassCatalogDraft
+    ) -> Resource:
+        self.authorize(actor, context, "save_class_catalog_draft", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            ontology_key = connection.execute(
+                select(ontology_release.c.ontology_key)
+                .where(ontology_release.c.project_id == owned.id)
+                .order_by(ontology_release.c.version.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if ontology_key is None:
+                refuse("missing_evidence")
+            if ontology_key != payload.base_ontology_id:
+                refuse("revision_conflict")
+            draft = payload.model_dump(mode="json", exclude={"expected_revision"})
+            policy = dict(owned.access_policy)
+            policy["management_class_catalog_draft"] = draft
+            # Never edit released identities or export indices in a draft save.
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "class_catalog_draft": draft,
                     "invalidated_steps": [
                         "scope",
                         "classes",

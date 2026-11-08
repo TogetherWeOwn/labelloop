@@ -34,6 +34,22 @@ PROJECT = {
     "source_permitted_use": "CC0 fixture",
     "classes": [{"stable_id": "bird", "name": "Bird", "definition": "Visible bird"}],
 }
+CATALOG = {
+    "expected_revision": 1,
+    "base_ontology_id": "ontology-1",
+    "classes": [
+        {
+            "stable_id": "bird",
+            "name": "Bird",
+            "definition": "A visible bird",
+            "aliases": ["Avian"],
+            "parent_id": None,
+            "positive_examples": ["Perched bird"],
+            "exclusions": ["Printed depictions"],
+            "mirror_safe": False,
+        }
+    ],
+}
 MUTATIONS = [
     ("/projects", "create_project", PROJECT, 201),
     (
@@ -115,6 +131,7 @@ MUTATIONS = [
         },
         200,
     ),
+    ("/projects/p/setup/classes", "save_class_catalog_draft", CATALOG, 200),
 ]
 READS = [
     "/projects",
@@ -474,13 +491,86 @@ def test_guide_draft_refuses_unimplemented_or_untrusted_policy(field, value):
     assert not service.calls
 
 
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"base_ontology_id": ""},
+        {"classes": []},
+        {"expected_revision": "1"},
+        {"approval": "admin_approved"},
+        {"class_map": {"bird": 0}},
+        {"published_release_id": "forged"},
+        {"classes": CATALOG["classes"] * 2},
+    ],
+)
+def test_catalog_refuses_untrusted_catalog_authority(patch):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/setup/classes",
+        json={**CATALOG, **patch},
+        headers={"Idempotency-Key": "classes"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert not service.calls
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"stable_id": ""},
+        {"name": ""},
+        {"parent_id": "unknown"},
+        {"parent_id": "bird"},
+        {"aliases": ["Avian", "Avian"]},
+        {"aliases": [""]},
+        {"mirror_safe": "true"},
+        {"positive_examples": ["x"] * 65},
+        {"exclusions": [""]},
+        {"approval": "admin_approved"},
+        {"reference_ids": ["holdout"]},
+        {"class_index": 0},
+    ],
+)
+def test_catalog_refuses_invalid_or_privileged_class_fields(patch):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/setup/classes",
+        json={**CATALOG, "classes": [{**CATALOG["classes"][0], **patch}]},
+        headers={"Idempotency-Key": "classes"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert not service.calls
+
+
+def test_catalog_validates_multilevel_hierarchy_and_cycles():
+    client, service = client_for(Actor())
+    root = CATALOG["classes"][0]
+    child = {**root, "stable_id": "sparrow", "parent_id": "bird"}
+    leaf = {**root, "stable_id": "juvenile", "parent_id": "sparrow"}
+    payload = {**CATALOG, "classes": [leaf, child, root]}
+    response = client.post(
+        "/projects/p/setup/classes", json=payload, headers={"Idempotency-Key": "classes"}
+    )
+    assert response.status_code == 200 and len(service.calls) == 1
+    service.calls.clear()
+    payload["classes"] = [leaf, child, {**root, "parent_id": "juvenile"}]
+    response = client.post(
+        "/projects/p/setup/classes", json=payload, headers={"Idempotency-Key": "cycle"}
+    )
+    assert response.status_code == 422 and not service.calls
+
+
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     generate(tmp_path)
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 20
-    assert sum(len(methods) for methods in spec["paths"].values()) == 21
+    assert len(spec["paths"]) == 21
+    assert sum(len(methods) for methods in spec["paths"].values()) == 22
+    assert (
+        spec["paths"]["/projects/{project_id}/setup/classes"]["post"]["operationId"]
+        == "saveClassCatalogDraft"
+    )
     assert (
         spec["paths"]["/projects/{project_id}/setup/guide"]["post"]["operationId"]
         == "saveGuideDraft"
@@ -492,6 +582,8 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     for model in (
         "ScopeDraft",
         "GuideDraft",
+        "ClassCatalogDraft",
+        "ClassCatalogRead",
         "ProjectDetail",
         "ReleaseDetail",
         "FreezePlanRead",

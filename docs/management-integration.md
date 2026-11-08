@@ -25,6 +25,9 @@ The router is **not** a replacement for that middleware.
 | Method/path | Port | Result |
 | --- | --- | --- |
 | POST /projects | create_project | 201 resource |
+| POST /projects/{project_id}/setup/scope | save_scope_draft | 200 draft resource |
+| POST /projects/{project_id}/setup/guide | save_guide_draft | 200 draft resource |
+| POST /projects/{project_id}/setup/classes | save_class_catalog_draft | 200 draft resource |
 | POST /projects/{project_id}/assets | ingest_asset | 201 resource |
 | POST /projects/{project_id}/dataset-releases | freeze_release | 201 resource |
 | POST /dataset-releases/{release_id}/variants | compile_variant | 202 shared job |
@@ -115,10 +118,16 @@ a final combined app schema. No local suite is used as a substitute.
 
 ## Canonical transaction adapter (partial, unmounted)
 
-`CanonicalManagementMutations` implements project creation, original-image
-ingestion and eligible canonical dataset freezing using the existing canonical
-tables, `ingest_canonical_asset` and `canonical_event`; it is not a complete
-`ManagementOperations` implementation.
+`CanonicalManagementMutations` implements project creation, scope/guide/class-
+catalog draft saves, original-image ingestion and eligible canonical dataset
+freezing using the existing canonical tables, `ingest_canonical_asset` and
+`canonical_event`; it is not a complete `ManagementOperations` implementation.
+Draft saves clear dependent approvals and automatic acceptance, and block new
+freezes until the separate approval/publication path is implemented. Catalog
+intent is pinned to the current ontology, stored separately in the existing
+project policy and exposed as `class_catalog_draft`, never as released `classes`
+or export mappings. Prose examples are not approved reference evidence. See
+[the draft contracts](management-contract.md) for bounds and hierarchy validation.
 No new table, migration, queue, grant or production binding is introduced.
 The workspace UUID comes only from trusted deployment configuration. The
 adapter rechecks human/admin authority and context attribution, scopes project
@@ -154,8 +163,8 @@ receipt together. Object storage is not transactional: an event failure after
 upload may leave an unreferenced, immutable content-addressed object, never a
 successful asset receipt; retries normalize the original again and safely reuse
 those bytes. No remote URL is fetched. Async compile/train/evaluate and setup
-edits are not implemented by this class, so it cannot dispatch paid work or claim
-queue/qualification semantics.
+approval/publication are not implemented by this class, so it cannot dispatch
+paid work or claim queue/qualification semantics.
 
 Release freeze is synchronous SQL, not a queued job. It takes the same project
 and retry locks, then locks all project sources in stable UUID order (the same

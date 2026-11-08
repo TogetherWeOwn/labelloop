@@ -16,6 +16,7 @@ from labelloop_core.registry import ModelRelease
 from labelloop_core.training import Checkpoint
 
 from .management_contracts import (
+    ClassDraftInput,
     ClassInput,
     Contract,
     Digest,
@@ -80,6 +81,11 @@ class SourceGroupsRead(Contract):
     assignment_version: Identifier | None
 
 
+class ClassCatalogRead(Contract):
+    base_ontology_id: Identifier
+    classes: list[ClassDraftInput]
+
+
 class ProjectDetail(Contract):
     resource: Resource
     name: Text | None
@@ -91,6 +97,8 @@ class ProjectDetail(Contract):
     source_permitted_use: Text
     external_provider_ids: list[Identifier]
     classes: list[ClassRead]
+    # Separate from authoritative ontology classes until publication/migration.
+    class_catalog_draft: ClassCatalogRead | None = None
     references: list[ReferenceRead] | None
     # The bootstrap pack stores a free-text guide, not the structured policy.
     annotation_guide: Text

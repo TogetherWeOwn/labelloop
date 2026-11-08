@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 from labelloop_api.management_canonical import CanonicalManagementMutations
 from labelloop_api.management_contracts import (
     AssetIngest,
+    ClassCatalogDraft,
     GuideDraft,
     ProjectCreate,
     ReleaseFreeze,
@@ -552,6 +553,267 @@ def test_scope_projection_requires_matching_canonical_draft_receipt(database, ta
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         reads.read_project(Reader(), created.id)
+
+
+def catalog_payload(service, project_id, revision=1):
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), project_id
+    )
+    return ClassCatalogDraft(
+        expected_revision=revision,
+        base_ontology_id=detail.versions["ontology_id"],
+        classes=[
+            {
+                "stable_id": "package",
+                "name": "Parcel",
+                "definition": "A visible package",
+                "aliases": ["Package"],
+                "parent_id": None,
+                "positive_examples": ["A sealed cardboard parcel"],
+                "exclusions": ["Printed depictions"],
+                "mirror_safe": False,
+            }
+        ],
+    )
+
+
+def save_catalog(service, project_id, payload, actor=None, key="catalog"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "save_class_catalog_draft", project_id, payload)
+    return service.save_class_catalog_draft(actor, context, payload)
+
+
+def test_catalog_save_is_attributed_replayable_and_separate_from_canonical_classes(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    result = save_catalog(service, created.id, payload)
+    assert result.revision == 2 and result.state == "draft"
+    assert save_catalog(service, created.id, payload) == result
+    changed = payload.model_copy(
+        update={"classes": [payload.classes[0].model_copy(update={"name": "Box"})]}
+    )
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        save_catalog(service, created.id, changed)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_catalog(service, created.id, payload, key="stale")
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.class_catalog_draft.model_dump() == payload.model_dump(
+        exclude={"expected_revision"}
+    )
+    assert detail.classes[0].name == "Package" and detail.classes[0].approval is None
+    assert detail.approved_steps == [] and detail.references is None
+    assert detail.published_release_id is None
+    with owner.connect() as connection:
+        ontologies = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).all()
+        assert len(ontologies) == 1 and ontologies[0].class_map == {"package": 0}
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.save_class_catalog_draft",
+            )
+        ).one()
+        assert receipt.actor_id == Actor().id and receipt.actor_kind == "human"
+        assert (
+            receipt.payload["evidence"]["class_catalog_draft"]
+            == detail.class_catalog_draft.model_dump()
+        )
+        assert "publish" in receipt.payload["evidence"]["invalidated_steps"]
+    assert (
+        save_catalog(
+            service, created.id, changed.model_copy(update={"expected_revision": 2}), key="next"
+        ).revision
+        == 3
+    )
+    assert save_catalog(service, created.id, payload) == result
+    assert reads.read_project(Reader(), created.id).class_catalog_draft.classes[0].name == "Box"
+    assert counts(owner, created.id) == (0, 0, 3)
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_parallel_catalog_saves_share_project_revision_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return save_catalog(
+                service, created.id, payload, key="same" if same_key else key
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(2) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+def test_catalog_scope_and_guide_preserve_each_other_and_share_revision_order(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    save_scope(service, created.id)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_catalog(service, created.id, payload)
+    save_catalog(service, created.id, payload.model_copy(update={"expected_revision": 2}))
+    save_guide(service, created.id, guide_payload(3))
+    save_scope(service, created.id, scope_payload(4), key="next-scope")
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.resource.revision == 5
+    assert detail.class_catalog_draft.classes[0].name == "Parcel"
+    assert detail.name == scope_payload().name and detail.guide.min_target_px == 4.0
+    assert detail.approved_steps == [] and counts(owner, created.id) == (0, 0, 5)
+
+
+def test_catalog_audit_failure_rolls_back_draft_and_retry_succeeds(database):
+    service, owner, role = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        save_catalog(service, created.id, payload)
+    assert reads.read_project(Reader(), created.id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    assert save_catalog(service, created.id, payload).revision == 2
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_catalog_denies_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created = create(service)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        save_catalog(service, created.id, catalog_payload(service, created.id), actor=actor)
+    assert counts(owner, created.id) == (0, 0, 1)
+
+
+def test_catalog_checks_workspace_and_context_before_replay(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    save_catalog(service, created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_catalog(replace(service, workspace_id=uuid4()), created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_catalog(service, "not-a-uuid", payload)
+    context = MutationContext.bind(
+        Actor(), "catalog", "save_class_catalog_draft", created.id, payload
+    )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.save_class_catalog_draft(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+@pytest.mark.parametrize("base", ["unknown", "foreign", "obsolete"])
+def test_catalog_requires_current_owned_ontology_pin(database, base):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    if base == "foreign":
+        other = create(service, key="other")
+        payload = payload.model_copy(
+            update={"base_ontology_id": catalog_payload(service, other.id).base_ontology_id}
+        )
+    elif base == "obsolete":
+        with owner.begin() as connection:
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key=str(uuid4()),
+                    project_id=created.id,
+                    version=2,
+                    classes=[{"stable_id": "package", "name": "Package", "definition": "Package"}],
+                    class_map={"package": 0},
+                )
+            )
+    else:
+        payload = payload.model_copy(update={"base_ontology_id": "unknown"})
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_catalog(service, created.id, payload)
+    assert counts(owner, created.id) == (0, 0, 1)
+
+
+def test_catalog_invalidates_qualification_and_new_freeze_not_historical_release(database):
+    service, owner, _ = database
+    created, _, _, freeze_payload = release_inputs(service, owner)
+    frozen = freeze(service, created.id, freeze_payload)
+    payload = catalog_payload(service, created.id, 3)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = {
+            **row.access_policy,
+            "auto_accept_qualification": {"qualified": True},
+            "management_setup_approvals": {"classes": "old"},
+        }
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    save_catalog(service, created.id, payload)
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert (
+            "auto_accept_qualification" not in policy and policy["management_setup_approvals"] == {}
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_release(Reader(), frozen.id).resource == frozen
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(
+            service,
+            created.id,
+            freeze_payload.model_copy(update={"expected_revision": 4}),
+            key="new",
+        )
+
+
+@pytest.mark.parametrize("tamper", ["no_receipt", "class", "removed", "approval", "ontology"])
+def test_catalog_projection_requires_matching_attributed_current_draft(database, tamper):
+    service, owner, _ = database
+    created = create(service)
+    payload = catalog_payload(service, created.id)
+    if tamper != "no_receipt":
+        save_catalog(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = dict(row.access_policy)
+        policy["management_class_catalog_draft"] = payload.model_dump(exclude={"expected_revision"})
+        if tamper == "class":
+            policy["management_class_catalog_draft"]["classes"][0]["name"] = "Unattributed"
+        if tamper == "removed":
+            del policy["management_class_catalog_draft"]
+        if tamper == "approval":
+            policy["management_setup_approvals"] = {"classes": "forged"}
+        if tamper == "ontology":
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key=str(uuid4()),
+                    project_id=created.id,
+                    version=2,
+                    classes=[{"stable_id": "package", "name": "Package", "definition": "Package"}],
+                    class_map={"package": 0},
+                )
+            )
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
 
 
 def guide_payload(revision=1):

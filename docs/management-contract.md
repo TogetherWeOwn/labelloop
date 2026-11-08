@@ -124,6 +124,31 @@ that separate producer exists; historical frozen datasets remain readable.
 Real asset-admission composition also requires accepted Security evidence for
 the exact consuming head. This preparation does not enable real admission.
 
+## Class catalog draft save (unmounted)
+
+`saveClassCatalogDraft`, `POST /projects/{project_id}/setup/classes`, replaces
+only class-catalog draft intent. Send the expected project revision, current
+`versions.ontology_id` as `base_ontology_id`, and a bounded list of proposed
+stable IDs, names, definitions, aliases, optional parents, prose positive
+examples, exclusions and mirror-safety intent. IDs and aliases must be unique;
+parents must resolve within the proposed catalog without cycles. No approval,
+class-index mapping, references, publication or spend field is accepted.
+
+The owned project lock, retry reconciliation and attributed transaction are
+shared with the other project writes. A missing/foreign/obsolete ontology pin
+cannot be saved. Saves invalidate setup approvals and automatic-acceptance
+qualification. `readProject.class_catalog_draft` is separate from authoritative
+`classes` and ontology version pins: prose examples do not count as approved
+reference evidence. The projection requires matching attributed draft evidence
+and its still-current base ontology. A draft save never changes an ontology,
+released class identity, YOLO export index, reference bank or frozen dataset.
+
+Catalog edits block new freezes until the separate approval/publication and
+ontology migration path validates them. Added/removed/merged/split class intent
+is not an effective identity migration. Scope, guide and class drafts preserve
+each other but consume one shared project revision sequence. Historical frozen
+releases remain readable. This does not enable real asset admission.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.
@@ -134,7 +159,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 
 | Fixture command family | Producer and intended implementation boundary |
 |---|---|
-| Remaining `save_setup`, `add_class` | Management facade: source and class draft writes remain missing; typed scope/guide saves above are implemented separately; stable class IDs and edits invalidating dependent approvals are required |
+| Remaining `save_setup`, `add_class` | Management facade: source draft writes and effective ontology publication/migration remain missing; typed scope/guide/class-catalog draft saves above are implemented separately, not generic capture payloads or class approval |
 | `accept_class`, `accept_reference`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; reference provenance and evaluation-holdout exclusion enforced server-side |
 | `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |

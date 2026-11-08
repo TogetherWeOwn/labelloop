@@ -15,6 +15,7 @@ from typing import Protocol
 
 from .management_contracts import (
     AssetIngest,
+    ClassCatalogDraft,
     Contract,
     EvaluationStart,
     ExportRead,
@@ -94,6 +95,10 @@ class ManagementOperations(Protocol):
 
     def save_guide_draft(
         self, actor: ManagementPrincipal, context: MutationContext, payload: GuideDraft
+    ) -> Resource: ...
+
+    def save_class_catalog_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ClassCatalogDraft
     ) -> Resource: ...
 
     def ingest_asset(

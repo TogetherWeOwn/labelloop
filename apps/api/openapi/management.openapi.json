@@ -284,6 +284,148 @@
         "title": "Checkpoint",
         "type": "object"
       },
+      "ClassCatalogDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "base_ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Base Ontology Id",
+            "type": "string"
+          },
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/ClassDraftInput"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Classes",
+            "type": "array"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "base_ontology_id",
+          "classes"
+        ],
+        "title": "ClassCatalogDraft",
+        "type": "object"
+      },
+      "ClassCatalogRead": {
+        "additionalProperties": false,
+        "properties": {
+          "base_ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Base Ontology Id",
+            "type": "string"
+          },
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/ClassDraftInput"
+            },
+            "title": "Classes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "base_ontology_id",
+          "classes"
+        ],
+        "title": "ClassCatalogRead",
+        "type": "object"
+      },
+      "ClassDraftInput": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Aliases",
+            "type": "array"
+          },
+          "definition": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Definition",
+            "type": "string"
+          },
+          "exclusions": {
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Exclusions",
+            "type": "array"
+          },
+          "mirror_safe": {
+            "title": "Mirror Safe",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_.-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "positive_examples": {
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Positive Examples",
+            "type": "array"
+          },
+          "stable_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Stable Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stable_id",
+          "name",
+          "definition",
+          "aliases",
+          "parent_id",
+          "positive_examples",
+          "exclusions",
+          "mirror_safe"
+        ],
+        "title": "ClassDraftInput",
+        "type": "object"
+      },
       "ClassInput": {
         "additionalProperties": false,
         "properties": {
@@ -1458,6 +1600,16 @@
               }
             ],
             "title": "Approved Steps"
+          },
+          "class_catalog_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClassCatalogRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "classes": {
             "items": {
@@ -4903,6 +5055,123 @@
           }
         },
         "summary": "List Resources",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/setup/classes": {
+      "post": {
+        "operationId": "saveClassCatalogDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassCatalogDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Save Class Catalog Draft",
         "tags": [
           "management"
         ]

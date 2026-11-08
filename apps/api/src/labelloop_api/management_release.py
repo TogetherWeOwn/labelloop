@@ -80,14 +80,22 @@ def freeze_candidate(
         .where(
             canonical_event.c.aggregate_id == str(project_row.id),
             canonical_event.c.event_type.in_(
-                ["management.save_scope_draft", "management.save_guide_draft"]
+                [
+                    "management.save_scope_draft",
+                    "management.save_guide_draft",
+                    "management.save_class_catalog_draft",
+                ]
             ),
         )
         .limit(1)
     ).first()
     if edited is not None or any(
         key in project_row.access_policy
-        for key in ("management_scope_draft", "management_guide_draft")
+        for key in (
+            "management_scope_draft",
+            "management_guide_draft",
+            "management_class_catalog_draft",
+        )
     ):
         reject("missing_evidence")
     ontology = connection.execute(

@@ -126,6 +126,34 @@ describe('generated management client', () => {
     });
   });
 
+  it('saves ontology-pinned class intent without assigning released identities', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 4,
+      base_ontology_id: 'ontology-1',
+      classes: [{
+        stable_id: 'bird', name: 'Bird', definition: 'A visible bird',
+        aliases: ['Avian'], parent_id: null, positive_examples: ['Perched bird'],
+        exclusions: ['Printed depictions'], mirror_safe: false,
+      }],
+    };
+    await client.saveClassCatalogDraft({ project_id: 'p', 'idempotency-key': 'classes-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/setup/classes', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'classes-1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('uses the server training profile and reads a fresh CSRF token per mutation', async () => {
     const { request } = mockRequest();
     const csrf = vi.fn().mockReturnValueOnce('first').mockReturnValueOnce('second');

@@ -69,6 +69,49 @@ class GuideDraft(Mutation):
     background: Annotated[str, Field(min_length=1, max_length=16384)]
 
 
+class ClassDraftInput(ClassInput):
+    aliases: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=256)]], Field(max_length=64)
+    ]
+    parent_id: Identifier | None
+    # Prose examples are draft intent, never approved reference assets.
+    positive_examples: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=4096)]], Field(max_length=64)
+    ]
+    exclusions: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=4096)]], Field(max_length=64)
+    ]
+    mirror_safe: bool
+
+    @model_validator(mode="after")
+    def unique_aliases(self) -> Self:
+        if len(set(self.aliases)) != len(self.aliases):
+            raise ValueError("class aliases must be unique")
+        return self
+
+
+class ClassCatalogDraft(Mutation):
+    base_ontology_id: Identifier
+    classes: Annotated[list[ClassDraftInput], Field(min_length=1, max_length=1000)]
+
+    @model_validator(mode="after")
+    def valid_hierarchy(self) -> Self:
+        parents = {item.stable_id: item.parent_id for item in self.classes}
+        if len(parents) != len(self.classes):
+            raise ValueError("class IDs must be unique")
+        complete: set[str] = set()
+        for identifier in parents:
+            path: set[str] = set()
+            current: str | None = identifier
+            while current is not None and current not in complete:
+                if current not in parents or current in path:
+                    raise ValueError("class parents must form an internal acyclic hierarchy")
+                path.add(current)
+                current = parents[current]
+            complete.update(path)
+        return self
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

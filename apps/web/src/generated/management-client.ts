@@ -7,6 +7,9 @@ export type AssetIngest = { "expected_revision": number; "original_base64": stri
 export type Box = { "x_max": number; "x_min": number; "y_max": number; "y_min": number };
 export type CheckRead = { "code": string; "passed": boolean | null; "reason": string };
 export type Checkpoint = { "epoch": number; "evaluation_run_id": string; "role"?: "development" | "calibration" | "locked_final_test"; "sha256": string; "validation_map": number };
+export type ClassCatalogDraft = { "base_ontology_id": string; "classes": Array<ClassDraftInput>; "expected_revision": number };
+export type ClassCatalogRead = { "base_ontology_id": string; "classes": Array<ClassDraftInput> };
+export type ClassDraftInput = { "aliases": Array<string>; "definition": string; "exclusions": Array<string>; "mirror_safe": boolean; "name": string; "parent_id": string | null; "positive_examples": Array<string>; "stable_id": string };
 export type ClassInput = { "definition": string; "name": string; "stable_id": string };
 export type ClassMetrics = { "false_positives": number; "map50": number | null; "map50_95": number | null; "precision": number | null; "predictions": number; "recall": number | null; "support": number; "supported": boolean; "true_positives": number };
 export type ClassRead = { "aliases": Array<string>; "approval": "proposed" | "admin_approved" | null; "definition": string; "exclusions": Array<string> | null; "mirror_safe": boolean | null; "name": string; "parent_id": string | null; "positive_examples": number | null; "stable_id": string };
@@ -27,7 +30,7 @@ export type Matrix3 = [[number, number, number], [number, number, number], [numb
 export type Metrics = { "images": number; "map50": number | null; "map50_95": number | null; "per_class": Record<string, ClassMetrics>; "precision": number | null; "recall": number | null; "support": number };
 export type ModelRelease = { "class_ids": Array<string>; "class_map_sha256": string; "evaluation_run_ids": Array<string>; "export_format": string; "export_sha256": string; "policy": InferencePolicy; "preprocessing_sha256": string; "project_id": string; "recipe_id": string; "release_id": string; "static_input_signature": [number, number, number, number]; "tiling_mode"?: string; "torch_version": string; "ultralytics_version": string; "weights_sha256": string };
 export type ProjectCreate = { "annotation_guide": string; "classes": Array<ClassInput>; "domain": string; "expected_revision"?: 0; "project_key": string; "scope": string; "source_permitted_use": string; "task"?: "detect" };
-export type ProjectDetail = { "annotation_guide": string; "approved_steps": Array<"scope" | "classes" | "evidence" | "guide" | "sources" | "publish"> | null; "classes": Array<ClassRead>; "domain": string; "external_provider_ids": Array<string>; "guide": GuideRead | null; "intended_use": string | null; "name": string | null; "published_release_id": string | null; "references": Array<ReferenceRead> | null; "representation": string | null; "resource": Resource; "saved_at": string; "scope": string; "source_permitted_use": string; "sources": SourceGroupsRead; "specificity": string | null; "versions": Record<string, unknown> };
+export type ProjectDetail = { "annotation_guide": string; "approved_steps": Array<"scope" | "classes" | "evidence" | "guide" | "sources" | "publish"> | null; "class_catalog_draft"?: ClassCatalogRead | null; "classes": Array<ClassRead>; "domain": string; "external_provider_ids": Array<string>; "guide": GuideRead | null; "intended_use": string | null; "name": string | null; "published_release_id": string | null; "references": Array<ReferenceRead> | null; "representation": string | null; "resource": Resource; "saved_at": string; "scope": string; "source_permitted_use": string; "sources": SourceGroupsRead; "specificity": string | null; "versions": Record<string, unknown> };
 export type PromotionRequest = { "candidate_id": string; "expected_incumbent_id": string | null; "expected_revision": number; "qualification_id": string; "reason": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1" };
 export type PromotionResult = { "decision": "promoted" | "retained"; "gate_codes": Array<string>; "incumbent_id": string | null; "project_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number };
 export type RecipeBoxRead = { "box": Box; "class_id": string; "clipped": boolean; "consequence": string; "flag": "none" | "warn" | "exclude"; "object_id": string; "review_tier": "machine_verified_no_human_review" | "human_reviewed" | "adjudicated" };
@@ -166,6 +169,11 @@ export class ManagementClient {
     if (input["limit"] != null) query.set("limit", String(input["limit"]));
     if (query.size) path += `?${query}`;
     return this.request<ResourcePage>(path, "GET");
+  }
+
+  saveClassCatalogDraft(input: { "project_id": string; "idempotency-key": string; body: ClassCatalogDraft }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/classes`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
   saveGuideDraft(input: { "project_id": string; "idempotency-key": string; body: GuideDraft }): Promise<Resource> {
