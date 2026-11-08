@@ -6,7 +6,44 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Service-owned final-report selection — pending Actions
+## Population-scoped measured-outcome selection — pending Actions
+
+A trusted internal caller can supply an `AnnotationOutcomeRef` containing only the
+canonical population release key. Assembly selects the sole committed measured
+outcome for that project, population and role: ordinary outcomes have no canary
+model, and canaries require the exact selected candidate. Both audit and population
+project identities are checked in the join. The bounded query counts all matching
+outcomes, including partial, adverse and stale-digest evidence. Missing or multiple
+outcomes fail closed; scores, completeness, timestamps and digest freshness do not
+break ties. The exact reader still validates immutable audit binding, current
+canonical groups and the complete current model digest before all quality gates.
+Explicit trusted references remain available; partially specified references reject.
+
+New adapters cover query scoping, zero/one/multiple outcomes, exact-reader failures,
+strict references and both-recipe assembly/quality delegation. PostgreSQL controls
+require ordinary release-only equality and complete-plus-partial canary ambiguity
+after reconnect. A disposable sole-final candidate gets a separate unique canary
+population for automatic/explicit context equality; additional clean or low-score
+outcomes in either population must reject, and savepoint rollback recovers the
+unique control without changing registry heads/events or historical evidence.
+These new assertions are unverified pending exact-head Actions. No local tests ran.
+
+Population choice remains a trusted-service duty; uniqueness is not independent
+measurement truth, original pipeline execution, HTTP authorization or promotion.
+No endpoint, schema, migration, dependency or second qualification engine is added.
+REA angle: reuse immutable outcome/audit/population joins and the exact reader.
+
+## Service-owned final-report selection — verified baseline
+
+Exact `babed777ff1ed420e8e43af2a6ae6409edd53151`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42526895513),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42526895218) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42526895134)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42526895513/job/128872425237),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42526895513/job/128872425304),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the corrected sole-final fixture below, superseding
+its earlier pending label, not the new outcome selector or full M5 acceptance.
 
 The persisted qualification assembler may omit its evaluation key. It reads every
 linked report from the scoped complete model release and requires one unambiguous
@@ -39,8 +76,8 @@ and second-final rejection regardless of scores; savepoint rollback restores the
 unique control and leaves the original registry heads/events and explicit context
 unchanged. This unique-candidate control is transactional, not a new reconnect or
 independent measurement claim. No production selector, gate, historical evidence,
-migration or dependency changed. Corrected controls remain unverified pending
-exact-head Actions; no local tests/builds ran. REA angle: reuse immutable
+migration or dependency changed. Corrected controls passed exact-head Actions at
+`babed77`; no local tests/builds ran. REA angle: reuse immutable
 model-evaluation links, the final journal and the existing assembler, not another
 selection or qualification store. Trusted execution/measurement producers,
 service-owned outcome selection, authenticated promotion/automatic annotation and

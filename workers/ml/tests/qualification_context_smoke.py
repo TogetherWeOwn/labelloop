@@ -45,7 +45,16 @@ from labelloop_core.registry import PromotionPolicy
 
 
 def _outcome(
-    connection, release, context, actor, *, canary, group_id=None, split="train", suffix=""
+    connection,
+    release,
+    context,
+    actor,
+    *,
+    canary,
+    group_id=None,
+    split="train",
+    suffix="",
+    alternatives=True,
 ):
     """Seed synthetic sources, optionally on an already-used group; never edit CPU inputs."""
     prefix = release.release_id + ("-assembly-canary" if canary else "-assembly-audit") + suffix
@@ -170,7 +179,7 @@ def _outcome(
         evidence=evidence,
         canary_model_key=release.release_id if canary else None,
     )
-    if canary:
+    if canary and alternatives:
         ordinary = prefix + "-ordinary"
         record_annotation_audit(
             connection,
@@ -975,6 +984,54 @@ def _exercise_final_report_selection(connection, release, final, context, annota
         )
         with pytest.raises(ValueError, match="adverse or missing observations"):
             load_qualification_context(connection, **(arguments | {"canary": partial}))
+        unique_canary = _outcome(
+            connection, candidate, context, actor, canary=True, suffix="-unique", alternatives=False
+        )
+        selected_arguments = arguments | {
+            "annotation": AnnotationOutcomeRef(annotation.release_key),
+            "canary": AnnotationOutcomeRef(unique_canary.release_key),
+        }
+        unique_context = load_qualification_context(
+            connection, **(arguments | {"canary": unique_canary})
+        )
+        assert load_qualification_context(connection, **selected_arguments) == unique_context
+        from labelloop_api.annotation_evidence_store import load_annotation_evidence
+
+        for reference, model_key in ((annotation, None), (unique_canary, prefix)):
+            stored = load_annotation_evidence(
+                connection,
+                project_key=release.project_id,
+                release_key=reference.release_key,
+                audit_key=reference.audit_key,
+                evidence_key=reference.evidence_key,
+                canary_model_key=model_key,
+            )
+            for correct_labels in (0, 1):
+                with connection.begin_nested() as transaction:
+                    record_annotation_evidence(
+                        connection,
+                        project_key=release.project_id,
+                        release_key=reference.release_key,
+                        audit_key=reference.audit_key,
+                        evidence_key=reference.evidence_key + "-ambiguous",
+                        actor_id=actor,
+                        evidence=replace(
+                            stored.evidence,
+                            measurements=tuple(
+                                replace(item, correct_labels=correct_labels)
+                                for item in stored.evidence.measurements
+                            ),
+                        ),
+                        canary_model_key=model_key,
+                    )
+                    with pytest.raises(
+                        ValueError, match="one unambiguous measured annotation outcome"
+                    ):
+                        load_qualification_context(connection, **selected_arguments)
+                    transaction.rollback()
+                assert (
+                    load_qualification_context(connection, **selected_arguments) == unique_context
+                )
         for other_passes in (False, True):
             with connection.begin_nested() as transaction:
                 second = replace(candidate_final, run_id=candidate_final.run_id + "-ambiguous")
@@ -1044,6 +1101,19 @@ def exercise_context_assembly(engine, release, final, context, actor):
         )
         _exercise_evaluation_groups(connection, release, annotation, canary, actor)
         loaded = load_qualification_context(connection, **arguments)
+        assert (
+            load_qualification_context(
+                connection,
+                **(arguments | {"annotation": AnnotationOutcomeRef(annotation.release_key)}),
+            )
+            == loaded
+        )
+        # Both complete and partial candidate-bound outcomes were committed before
+        # reconnect. Never choose the passing one by score, completeness or recency.
+        with pytest.raises(ValueError, match="one unambiguous measured annotation outcome"):
+            load_qualification_context(
+                connection, **(arguments | {"canary": AnnotationOutcomeRef(canary.release_key)})
+            )
         derived_arguments = {key: value for key, value in arguments.items() if key != "lineage"}
         derived = load_qualification_context(connection, **derived_arguments)
         automatic_arguments = {

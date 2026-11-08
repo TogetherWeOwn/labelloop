@@ -119,6 +119,61 @@ def record_annotation_evidence(
     return StoredAnnotationEvidence(evidence, digest)
 
 
+def select_annotation_evidence(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    release_key: str,
+    canary_model_key: str | None = None,
+) -> StoredAnnotationEvidence:
+    """Select the sole outcome for a trusted population and role, never by quality.
+
+    Every outcome counts, including partial, adverse and stale-model-digest rows.
+    Ambiguity requires an explicit trusted decision; neither scores nor timestamps
+    break ties. Population selection and measurement provenance remain caller duties.
+    The exact reader still validates the audit, current groups and model digest.
+    """
+    for value in (project_key, release_key):
+        require_name(value)
+    if canary_model_key is not None:
+        require_name(canary_model_key)
+    project_id = lock_project(connection, project_key)
+    model_id = (
+        _canary(connection, project_id, canary_model_key)[0]
+        if canary_model_key is not None
+        else None
+    )
+    outcome = qualification_schema.annotation_evidence
+    audit = qualification_schema.annotation_audit
+    rows = (
+        connection.execute(
+            sa.select(audit.c.audit_key, outcome.c.evidence_key)
+            .select_from(outcome.join(audit).join(canonical_dataset_release))
+            .where(
+                outcome.c.project_id == project_id,
+                audit.c.project_id == project_id,
+                canonical_dataset_release.c.project_id == project_id,
+                canonical_dataset_release.c.release_key == release_key,
+                outcome.c.canary_model_id == model_id,
+            )
+            .limit(2)
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) != 1:
+        raise ValueError("qualification requires one unambiguous measured annotation outcome")
+    return load_annotation_evidence(
+        connection,
+        project_key=project_key,
+        release_key=release_key,
+        audit_key=rows[0]["audit_key"],
+        evidence_key=rows[0]["evidence_key"],
+        canary_model_key=canary_model_key,
+        require_current_groups=True,
+    )
+
+
 def load_annotation_evidence(
     connection: sa.Connection,
     *,

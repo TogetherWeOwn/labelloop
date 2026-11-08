@@ -204,6 +204,94 @@ def test_queries_bind_project_release_audit_and_canary_model(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("canary", [False, True])
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_automatic_selection_is_scoped_and_never_filters_by_quality(monkeypatch, canary, count):
+    connection = MagicMock()
+    rows = [dict(audit_key="audit", evidence_key=f"outcome-{index}") for index in range(count)]
+    connection.execute.return_value.mappings.return_value.all.return_value = rows
+    lock = MagicMock(return_value="project-id")
+    monkeypatch.setattr(store, "lock_project", lock)
+    model = MagicMock(return_value=("model-id", "a" * 64))
+    monkeypatch.setattr(store, "_canary", model)
+    loader = MagicMock(return_value=object())
+    monkeypatch.setattr(store, "load_annotation_evidence", loader)
+    args = dict(
+        project_key="project",
+        release_key="population",
+        canary_model_key="candidate" if canary else None,
+    )
+    if count == 1:
+        assert store.select_annotation_evidence(connection, **args) is loader.return_value
+        loader.assert_called_once_with(
+            connection,
+            **args,
+            audit_key="audit",
+            evidence_key="outcome-0",
+            require_current_groups=True,
+        )
+    else:
+        with pytest.raises(ValueError, match="one unambiguous measured annotation outcome"):
+            store.select_annotation_evidence(connection, **args)
+        loader.assert_not_called()
+    lock.assert_called_once_with(connection, "project")
+    if canary:
+        model.assert_called_once_with(connection, "project-id", "candidate")
+    else:
+        model.assert_not_called()
+    query = connection.execute.call_args.args[0]
+    params = query.compile().params
+    assert params == dict(
+        project_id_1="project-id",
+        project_id_2="project-id",
+        project_id_3="project-id",
+        release_key_1="population",
+        **({"canary_model_id_1": "model-id"} if canary else {}),
+        param_1=2,
+    )
+    sql = str(query)
+    for left, right in (
+        ("qualification_annotation_evidence.audit_id", "qualification_annotation_audit.id"),
+        ("qualification_annotation_audit.release_id", "canonical_dataset_release.id"),
+    ):
+        assert f"{left} = {right}" in sql or f"{right} = {left}" in sql
+    assert ("canary_model_id IS NULL" in sql) == (not canary)
+    assert not any(
+        value in sql for value in ("ORDER BY", "created_at", "record", "canary_release_sha256")
+    )
+    assert connection.execute.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "failure", ["partial or adverse", "stale digest", "current groups conflict"]
+)
+def test_automatic_selection_does_not_hide_exact_reader_failure(monkeypatch, failure):
+    connection = MagicMock()
+    connection.execute.return_value.mappings.return_value.all.return_value = [
+        dict(audit_key="audit", evidence_key="outcome")
+    ]
+    monkeypatch.setattr(store, "lock_project", MagicMock(return_value="project-id"))
+    monkeypatch.setattr(
+        store, "load_annotation_evidence", MagicMock(side_effect=ValueError(failure))
+    )
+    with pytest.raises(ValueError, match=failure):
+        store.select_annotation_evidence(
+            connection, project_key="project", release_key="population"
+        )
+
+
+@pytest.mark.parametrize("field", ["project_key", "release_key", "canary_model_key"])
+def test_automatic_selection_validates_before_database_access(field):
+    with pytest.raises(ValueError):
+        store.select_annotation_evidence(
+            None,
+            **(
+                dict(project_key="project", release_key="release", canary_model_key="model")
+                | {field: " "}
+            ),
+        )
+
+
 def test_measurement_migration_is_frozen_and_append_only():
     migration = runpy.run_path(
         str(

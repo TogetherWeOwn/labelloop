@@ -14,7 +14,10 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from labelloop_api import model_schema
-from labelloop_api.annotation_evidence_store import load_annotation_evidence
+from labelloop_api.annotation_evidence_store import (
+    load_annotation_evidence,
+    select_annotation_evidence,
+)
 from labelloop_api.audit_sample_store import require_automatic_audit_samples
 from labelloop_api.evaluation_group_store import load_evaluation_set
 from labelloop_api.final_test_store import load_final_test, require_development_uses
@@ -33,12 +36,16 @@ from labelloop_core.qualification_data import canonical_record, record_sha256, r
 @dataclass(frozen=True, slots=True)
 class AnnotationOutcomeRef:
     release_key: str
-    audit_key: str
-    evidence_key: str
+    audit_key: str | None = None
+    evidence_key: str | None = None
 
     def __post_init__(self) -> None:
-        for value in (self.release_key, self.audit_key, self.evidence_key):
-            require_name(value)
+        require_name(self.release_key)
+        if (self.audit_key is None) != (self.evidence_key is None):
+            raise ValueError("outcome references require both audit and evidence keys or neither")
+        if self.audit_key is not None:
+            require_name(self.audit_key)
+            require_name(self.evidence_key)
 
 
 def _select_final_report(connection, release):
@@ -82,6 +89,8 @@ def load_qualification_context(
     An omitted evaluation key selects the sole linked final report by role and
     exact model contract, not score or recency. Ambiguity fails before audit reads;
     the selected report still requires its current committed exposure and all gates.
+    Release-only outcome references select the sole measured outcome of that role;
+    population selection remains trusted, and partial/adverse rows are not filtered.
     This is a preflight, not registry authorization: promotion still rechecks the
     current configuration/final journal, durable veto and incumbent non-regression.
     Do not cache the result across transactions or use it as an acceptance grant.
@@ -179,6 +188,13 @@ def load_qualification_context(
         raise ValueError("qualification evaluation groups differ from current canonical membership")
 
     def outcome(reference, model=None):
+        if reference.audit_key is None:
+            return select_annotation_evidence(
+                connection,
+                project_key=project_key,
+                release_key=reference.release_key,
+                canary_model_key=model,
+            )
         return load_annotation_evidence(
             connection,
             project_key=project_key,

@@ -198,6 +198,63 @@ def test_bad_selector_is_rejected_before_lock_or_read(monkeypatch, field):
     connection.execute.assert_not_called()
 
 
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("selected", [("annotation",), ("canary",), ("annotation", "canary")])
+def test_release_only_outcome_selection_retains_all_quality_gates(monkeypatch, side, selected):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    outcomes = dict(
+        annotation=StoredAnnotationEvidence(expected.evidence.annotation_audit, None),
+        canary=StoredAnnotationEvidence(
+            expected.evidence.canary_audit, record_sha256(readers["load_release"].return_value)
+        ),
+    )
+    references = {name: args[name] for name in ("annotation", "canary")}
+    selector = MagicMock(
+        side_effect=lambda _connection, **kw: next(
+            outcomes[name] for name in selected if references[name].release_key == kw["release_key"]
+        )
+    )
+    monkeypatch.setattr(store, "select_annotation_evidence", selector)
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    for name in selected:
+        args[name] = store.AnnotationOutcomeRef(references[name].release_key)
+    assert store.load_qualification_context(connection, **args) == expected
+    assert [call.kwargs for call in selector.call_args_list] == [
+        dict(
+            project_key=args["project_key"],
+            release_key=references[name].release_key,
+            canary_model_key=args["model_key"] if name == "canary" else None,
+        )
+        for name in selected
+    ]
+    assert connection.execute.call_count == 1
+    selector.side_effect = ValueError("ambiguous outcomes")
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    with pytest.raises(ValueError, match="ambiguous outcomes"):
+        store.load_qualification_context(connection, **args)
+    selector.side_effect = lambda *_a, **kw: replace(
+        outcomes["canary" if kw["canary_model_key"] else "annotation"],
+        evidence=replace(
+            outcomes["canary" if kw["canary_model_key"] else "annotation"].evidence, observations=()
+        ),
+    )
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    with pytest.raises(ValueError, match="adverse or missing observations"):
+        store.load_qualification_context(connection, **args)
+
+
+@pytest.mark.parametrize("field", ["audit_key", "evidence_key"])
+def test_outcome_refs_reject_partial_selectors(field):
+    with pytest.raises(ValueError, match="both audit and evidence keys or neither"):
+        store.AnnotationOutcomeRef("release", **{field: "key"})
+
+
 @pytest.mark.parametrize("field", ["release_key", "audit_key", "evidence_key"])
 def test_outcome_refs_reject_empty_identity(field):
     with pytest.raises(ValueError):
