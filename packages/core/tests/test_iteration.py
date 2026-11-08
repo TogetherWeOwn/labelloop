@@ -129,6 +129,115 @@ def round_two() -> IterationState:
     )
 
 
+def test_batch_switch_cannot_reuse_old_renewal_to_raise_exhausted_ceiling() -> None:
+    state = stop(trained(round_two()), "plateau", ref("plateau"))
+    batch_a = state.manifest
+    batch_b = replace(batch_a, source_batch_id="batch-b")
+    state = next_iteration(state, "batch-b-1", batch_b)
+    state = stop(state, "no_informative_data", ref("batch-b-empty"))
+    increased = replace(batch_a, evidence=ref("third"), maximum_training_rounds=3)
+    with pytest.raises(ValueError, match="ceiling requires"):
+        next_iteration(state, "batch-a-3", increased)
+    renewed = replace(increased, policy_renewal=ref("fresh-renewal"))
+    state = next_iteration(state, "batch-a-3", renewed)
+    assert len(state.rounds) == 2
+    # A previously used renewal cannot be recycled after another batch switch.
+    state = stop(state, "plateau", ref("pause"))
+    state = next_iteration(state, "batch-b-2", batch_b)
+    state = stop(state, "plateau", ref("pause"))
+    with pytest.raises(ValueError, match="ceiling requires"):
+        next_iteration(state, "batch-a-4", replace(increased, maximum_training_rounds=4))
+
+
+def test_retired_validation_readback_preserves_consumed_correction_history() -> None:
+    state = IterationState("iteration-1", manifest())
+    for stage in SHARED[:3]:
+        state = complete(state, StageKey(stage))
+    key = StageKey("validate")
+    state = begin_stage(state, key)
+    receipt = receipt_for(state, key)
+    changed = replace(state.manifest, evidence=ref("new-evidence"))
+    state = invalidate(state, changed)
+    assert state.correction_loops == ()
+    state = reconcile_retired(state, receipt)
+    assert dict(state.correction_loops)["image-a"].passes == 2
+    assert reconcile_retired(state, receipt) == state
+    state = next_iteration(state, "iteration-2", changed)
+    for stage in SHARED[:3]:
+        state = complete(state, StageKey(stage))
+    state = begin_stage(state, key)
+    with pytest.raises(ValueError, match="cannot reset"):
+        finish_stage(
+            state,
+            key,
+            replace(
+                receipt_for(state, key),
+                correction_loops=(("image-a", replace(loop(), passes=0)),),
+            ),
+        )
+
+
+def test_invalidated_restart_eligibility_survives_later_stop_reason() -> None:
+    state = trained()
+    old_evidence = state.manifest.round_evidence
+    changed = replace(state.manifest, evidence=ref("genuinely-new-evidence"))
+    state = invalidate(state, changed)
+    state = stop(state, "insufficient_credits", ref("credits"))
+    assert changed.round_evidence != old_evidence
+    restarted = next_iteration(state, "iteration-2", changed)
+    assert restarted.ready() == (StageKey("freeze"),)
+    # A round cannot be justified merely by invalidating then restoring its original inputs.
+    original = manifest()
+    state = invalidate(state, original)
+    with pytest.raises(ValueError, match="new evidence"):
+        next_iteration(state, "iteration-2", original)
+
+
+def test_tightened_correction_ceiling_refuses_impossible_or_uncertain_history() -> None:
+    state = stop(trained(), "plateau", ref("pause"))
+    tightened = replace(state.manifest, evidence=ref("new"), maximum_correction_passes=1)
+    with pytest.raises(ValueError, match="consumed correction"):
+        next_iteration(state, "iteration-2", tightened)
+    with pytest.raises(ValueError, match="consumed correction"):
+        invalidate(state, tightened)
+    pending = IterationState("pending", manifest())
+    for stage in SHARED[:3]:
+        pending = complete(pending, StageKey(stage))
+    pending = begin_stage(pending, StageKey("validate"))
+    with pytest.raises(ValueError, match="pending validation"):
+        invalidate(pending, tightened)
+
+
+def test_retired_validation_uses_intents_original_sources_and_correction_policy() -> None:
+    state = IterationState("iteration-1", replace(manifest(), maximum_correction_passes=1))
+    for stage in SHARED[:3]:
+        state = complete(state, StageKey(stage))
+    key = StageKey("validate")
+    state = begin_stage(state, key)
+    receipt = replace(
+        receipt_for(state, key),
+        correction_loops=(
+            (
+                "image-a",
+                replace(
+                    loop(),
+                    maximum_passes=1,
+                    passes=1,
+                ),
+            ),
+        ),
+    )
+    changed = replace(manifest(), sources=(SourcePin("image-b", ref("b"), ref("label-b")),))
+    state = invalidate(state, changed)
+    with pytest.raises(ValueError, match="outside source batch"):
+        reconcile_retired(state, replace(receipt, correction_loops=(("image-b", loop()),)))
+    with pytest.raises(ValueError, match="policy mismatch"):
+        reconcile_retired(state, replace(receipt, correction_loops=(("image-a", loop()),)))
+    state = reconcile_retired(state, receipt)
+    assert dict(state.correction_loops)["image-a"].passes == 1
+    assert state.manifest.sources[0].asset_id == "image-b"
+
+
 def test_manifest_pins_complete_inputs_and_order() -> None:
     m = manifest()
     assert len(stage_keys(m)) == 17
@@ -454,5 +563,5 @@ def test_stale_wrong_duplicate_and_conflicting_receipts_are_rejected() -> None:
         finish_stage(state, key, replace(receipt, artifact=ref("wrong")))
     with pytest.raises(ValueError, match="operation identities cannot repeat"):
         replace(state, records=(*state.records, state.records[0]))
-    with pytest.raises(ValueError, match="disabled"):
+    with pytest.raises(RuntimeError, match="disabled"):
         real_iteration_ports()

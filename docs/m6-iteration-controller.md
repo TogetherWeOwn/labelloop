@@ -63,7 +63,11 @@ store's registry revision comparison, never silently updates this manifest.
 Changed source/policy/reference/teacher/recipe input conservatively retires all
 current stage records. Nothing stale remains reusable; retired artifacts remain
 available for descendant tracing. Uncertain retired intent must be settled via
-`reconcile_retired` before any new iteration. Round/correction history is retained.
+`reconcile_retired` before any new iteration. Round/correction history is retained. Validation intent pins its original source
+membership and correction ceiling; late retired-intent readback merges consumed
+passes under that original scope, even if the current manifest has changed. The
+original round-evidence digest is retained separately from the latest stop reason,
+so a subsequent credit/drift pause cannot erase valid restart provenance.
 There is no reactivation of the same invalidated training intent: create an
 explicit new iteration after reconciliation. The store must retain the complete
 projection/history, reject stale CAS writes, keep canonical batch identities
@@ -77,12 +81,17 @@ is committed, including failed or cancelled attempts. Per-source-batch lifetime
 round counts survive new iterations and invalidation. A new round needs new
 source/evidence, changed recipe/training profile or explicit policy renewal.
 Changing only a teacher or unrelated policy/configuration is insufficient. The
-configured ceiling still applies; extending it requires a different explicit
-renewal artifact. A renamed batch or iteration is not new evidence. The service
+configured ceiling still applies; extending it requires a fresh explicit renewal
+artifact not previously used for that batch. Per-batch ceiling/renewal history
+survives switches away from and back to a batch; it is not inferred from only the
+immediately preceding manifest. A renamed batch or iteration is not new evidence. The service
 must preserve canonical source-batch IDs and the retained round ledger.
 
 Correction pass counts and object-hash histories cannot decrease or reset on
 resume/new rounds; they reuse the delivered one/two-pass `CorrectionLoop` bound.
+A policy transition cannot lower the ceiling beneath consumed passes or tighten
+it while a validation intent remains uncertain. Such a transition fails explicitly
+instead of admitting a subsequent validation contract that cannot be satisfied.
 A failed recipe skips further training/evaluation and can only produce an
 explicit retain decision. Another recipe may continue, but is never implicitly
 promoted. An unqualified candidate retains the incumbent through its own

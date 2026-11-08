@@ -233,6 +233,16 @@ class StageRecord:
     operation_id: str
     input_sha256: str
     receipt: StageReceipt | None = None
+    # Preserve validation scope even if its result arrives after invalidation.
+    source_ids: tuple[str, ...] = ()
+    maximum_correction_passes: int = 2
+
+
+@dataclass(frozen=True, slots=True)
+class BatchPolicy:
+    source_batch_id: str
+    maximum_training_rounds: int
+    renewal: EvidenceRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,9 +264,29 @@ class IterationState:
     reason: str = ""
     # Invalidation preserves old intents/receipts for lineage and reconciliation.
     retired: tuple[StageRecord, ...] = ()
+    batch_policies: tuple[BatchPolicy, ...] = ()
+    # The original round inputs survive manifest invalidation and subsequent stops.
+    started_round_evidence: str = ""
 
     def __post_init__(self) -> None:
         identity(self.iteration_id)
+        if not self.batch_policies:
+            if self.rounds or self.retired:
+                raise ValueError("retained round history requires per-batch policy history")
+            object.__setattr__(
+                self,
+                "batch_policies",
+                (
+                    BatchPolicy(
+                        self.manifest.source_batch_id,
+                        self.manifest.maximum_training_rounds,
+                        self.manifest.policy_renewal,
+                    ),
+                ),
+            )
+        if not self.started_round_evidence:
+            object.__setattr__(self, "started_round_evidence", self.manifest.round_evidence)
+        require_digest(self.started_round_evidence)
         if type(self.generation) is not int or self.generation < 0:
             raise ValueError("invalid generation")
         if self.status not in {"running", "stopped", "paused", "cancelled"}:
@@ -268,6 +298,7 @@ class IterationState:
                 self.rounds,
                 self.correction_loops,
                 self.retired,
+                self.batch_policies,
             )
         ):
             raise ValueError("iteration history requires immutable tuples")
@@ -420,7 +451,16 @@ def begin_stage(
                 state.manifest.round_evidence,
             ),
         )
-    return replace(state, rounds=rounds, records=(*state.records, StageRecord(key, op, inputs)))
+    record = StageRecord(
+        key,
+        op,
+        inputs,
+        source_ids=tuple(p.asset_id for p in state.manifest.sources)
+        if key.stage == "validate"
+        else (),
+        maximum_correction_passes=state.manifest.maximum_correction_passes,
+    )
+    return replace(state, rounds=rounds, records=(*state.records, record))
 
 
 def finish_stage(state: IterationState, key: StageKey, receipt: StageReceipt) -> IterationState:
@@ -435,7 +475,7 @@ def finish_stage(state: IterationState, key: StageKey, receipt: StageReceipt) ->
         return state
     if state.input_digest(key) != record.input_sha256:
         raise ValueError("stale stage inputs")
-    loops = dict(state.correction_loops)
+    loops = _merge_corrections(state, record, receipt)
     if receipt.decision is not None and key.stage != "promote_retain":
         raise ValueError("only recipe decisions select models")
     if key.stage == "promote_retain":
@@ -452,13 +492,27 @@ def finish_stage(state: IterationState, key: StageKey, receipt: StageReceipt) ->
             receipt.selected_model is None or receipt.selected_model == incumbent
         ):
             raise ValueError("promotion requires a separately qualified candidate")
-    if receipt.correction_loops and key.stage != "validate":
+    changed = replace(record, receipt=receipt)
+    return replace(
+        state,
+        records=tuple(changed if r.key == key else r for r in state.records),
+        correction_loops=loops,
+    )
+
+
+def _merge_corrections(
+    state: IterationState,
+    record: StageRecord,
+    receipt: StageReceipt,
+) -> tuple[tuple[str, CorrectionLoop], ...]:
+    loops = dict(state.correction_loops)
+    if receipt.correction_loops and record.key.stage != "validate":
         raise ValueError("only validation records correction loops")
     for asset, loop in receipt.correction_loops:
-        if asset not in {p.asset_id for p in state.manifest.sources}:
+        if asset not in record.source_ids:
             raise ValueError("correction loop outside source batch")
         previous = loops.get(asset)
-        if loop.maximum_passes != state.manifest.maximum_correction_passes:
+        if loop.maximum_passes != record.maximum_correction_passes:
             raise ValueError("correction policy mismatch")
         if previous is not None and (
             loop.passes < previous.passes
@@ -466,17 +520,12 @@ def finish_stage(state: IterationState, key: StageKey, receipt: StageReceipt) ->
         ):
             raise ValueError("correction history cannot reset on resume")
         loops[asset] = loop
-    if key.stage == "validate" and receipt.outcome == "complete":
-        if set(dict(receipt.correction_loops)) != {p.asset_id for p in state.manifest.sources}:
+    if record.key.stage == "validate" and receipt.outcome == "complete":
+        if set(dict(receipt.correction_loops)) != set(record.source_ids):
             raise ValueError("validation must account for every source correction loop")
         if any(loop.status == "running" for _, loop in receipt.correction_loops):
             raise ValueError("settle bounded correction before adjudication/audit")
-    changed = replace(record, receipt=receipt)
-    return replace(
-        state,
-        records=tuple(changed if r.key == key else r for r in state.records),
-        correction_loops=tuple(sorted(loops.items())),
-    )
+    return tuple(sorted(loops.items()))
 
 
 def recover_stage(state: IterationState, key: StageKey) -> Literal["reuse", "reconcile"]:
@@ -497,16 +546,48 @@ def resume(state: IterationState, validated: tuple[StageReceipt, ...]) -> Iterat
     return state
 
 
+def _policy_transition(
+    state: IterationState,
+    manifest: IterationManifest,
+) -> tuple[BatchPolicy, ...]:
+    history = tuple(
+        p for p in state.batch_policies if p.source_batch_id == manifest.source_batch_id
+    )
+    policy = BatchPolicy(
+        manifest.source_batch_id,
+        manifest.maximum_training_rounds,
+        manifest.policy_renewal,
+    )
+    if (
+        history
+        and policy.maximum_training_rounds > history[-1].maximum_training_rounds
+        and (any(p.renewal == policy.renewal for p in history))
+    ):
+        raise ValueError("extending a round ceiling requires explicit policy renewal")
+    sources = {p.asset_id for p in manifest.sources}
+    if any(
+        asset in sources and loop.passes > manifest.maximum_correction_passes
+        for asset, loop in state.correction_loops
+    ):
+        raise ValueError("new ceiling is below consumed correction passes")
+    if manifest.maximum_correction_passes < state.manifest.maximum_correction_passes and any(
+        r.key.stage == "validate" and r.receipt is None for r in (*state.records, *state.retired)
+    ):
+        raise ValueError("cannot tighten correction ceiling with pending validation")
+    return (
+        (*state.batch_policies, policy)
+        if not history or policy != history[-1]
+        else state.batch_policies
+    )
+
+
 def invalidate(state: IterationState, manifest: IterationManifest) -> IterationState:
     """Conservatively invalidate all descendants, retaining history and bounds."""
     if manifest.project_id != state.manifest.project_id:
         raise ValueError("cannot move an iteration across projects")
     if manifest == state.manifest:
         return state
-    if manifest.maximum_training_rounds > state.manifest.maximum_training_rounds and (
-        manifest.policy_renewal == state.manifest.policy_renewal
-    ):
-        raise ValueError("extending a round ceiling requires explicit policy renewal")
+    policies = _policy_transition(state, manifest)
     if state.status == "cancelled":
         raise ValueError("cancelled iterations cannot restart")
     return replace(
@@ -517,6 +598,7 @@ def invalidate(state: IterationState, manifest: IterationManifest) -> IterationS
         retired=(*state.retired, *state.records),
         status="paused",
         reason="inputs_changed",
+        batch_policies=policies,
     )
 
 
@@ -529,10 +611,14 @@ def reconcile_retired(state: IterationState, receipt: StageReceipt) -> Iteration
     record = next((r for r in state.retired if r.operation_id == receipt.operation_id), None)
     if record is None or record.input_sha256 != receipt.input_sha256:
         raise ValueError("unknown retired intent")
-    if record.receipt is not None and record.receipt != receipt:
-        raise ValueError("conflicting reconciliation")
+    if record.receipt is not None:
+        if record.receipt != receipt:
+            raise ValueError("conflicting reconciliation")
+        return state
+    loops = _merge_corrections(state, record, receipt)
     return replace(
         state,
+        correction_loops=loops,
         retired=tuple(
             replace(r, receipt=receipt) if r.operation_id == receipt.operation_id else r
             for r in state.retired
@@ -582,16 +668,11 @@ def next_iteration(
         or any(r.iteration_id == iteration_id for r in state.rounds)
     ):
         raise ValueError("new iteration requires the same project and a fresh ID")
-    if manifest.source_batch_id == state.manifest.source_batch_id:
-        if (
-            manifest.round_evidence == state.manifest.round_evidence
-            and state.reason != "inputs_changed"
-        ):
-            raise ValueError("new round requires new evidence, recipe or explicit policy renewal")
-        if manifest.maximum_training_rounds > state.manifest.maximum_training_rounds and (
-            manifest.policy_renewal == state.manifest.policy_renewal
-        ):
-            raise ValueError("extending a round ceiling requires explicit policy renewal")
+    if manifest.source_batch_id == state.manifest.source_batch_id and (
+        manifest.round_evidence == state.started_round_evidence
+    ):
+        raise ValueError("new round requires new evidence, recipe or explicit policy renewal")
+    policies = _policy_transition(state, manifest)
     return IterationState(
         iteration_id,
         manifest,
@@ -599,4 +680,5 @@ def next_iteration(
         rounds=state.rounds,
         correction_loops=state.correction_loops,
         retired=(*state.retired, *state.records),
+        batch_policies=policies,
     )
