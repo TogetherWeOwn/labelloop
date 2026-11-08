@@ -1,7 +1,7 @@
 """Management route factory; mount only behind the shared session/CSRF boundary."""
 
 from collections.abc import Callable
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -34,7 +34,6 @@ from .management_ports import (
 
 IdempotencyKey = Annotated[str, Header(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")]
 PageLimit = Annotated[int, Query(ge=1, le=100)]
-T = TypeVar("T")
 
 
 def unavailable_principal(request: Request) -> ManagementPrincipal:
@@ -45,7 +44,7 @@ def unavailable_operations() -> ManagementOperations:
     raise HTTPException(503, detail="management_unavailable")
 
 
-def invoke(operation: Callable[[], T]) -> T:
+def invoke[T](operation: Callable[[], T]) -> T:
     try:
         return operation()
     except ManagementFailure as error:

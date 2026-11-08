@@ -92,10 +92,16 @@ no-store caching and refused redirects. It supplies no authorization of its own.
 Response types are compile-time types, not permission to treat server/model data
 as trusted domain state.
 
-Next: retrieve the exact-head generated artifact, check it into the API/client
-locations agreed with the shared app owner, compile/typecheck it on Actions, and
-add a checked-in drift comparison. Do not assert this pending publication/drift
-check has already passed.
+The web-build job also generates the client under `apps/web/src/generated` before
+web lint/typecheck and runs for Python changes as well as web changes. The CI
+aggregator requires that job for Python changes, so a successful Python generator
+alone cannot satisfy the client contract. No local suite is used as a substitute.
+
+Next: retrieve the exact-head generated artifact, check the schema into
+`apps/api/openapi/management.openapi.json` and the client into
+`apps/web/src/generated/management-client.ts`, and add a checked-in drift
+comparison. These remain the isolated management contract, not a final combined
+app schema. Do not assert pending publication/drift/type checks have passed.
 
 ## Acceptance evidence still required
 

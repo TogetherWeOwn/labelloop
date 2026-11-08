@@ -16,6 +16,8 @@ def contract_app() -> FastAPI:
 
 
 def typescript_type(schema: dict) -> str:
+    if not schema:
+        return "unknown"
     if "$ref" in schema:
         return schema["$ref"].rsplit("/", 1)[1]
     if "const" in schema:
@@ -32,7 +34,10 @@ def typescript_type(schema: dict) -> str:
     if kind == "object":
         if "properties" not in schema:
             additional = schema.get("additionalProperties", {})
-            value = typescript_type(additional) if isinstance(additional, dict) else "unknown"
+            if isinstance(additional, dict):
+                value = typescript_type(additional)
+            else:
+                value = "unknown" if additional else "never"
             return f"Record<string, {value}>"
         required = schema.get("required", [])
         return (

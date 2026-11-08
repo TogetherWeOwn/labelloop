@@ -8,7 +8,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from labelloop_api.management import management_router
-from labelloop_api.management_codegen import contract_app, generate, render_client
+from labelloop_api.management_codegen import (
+    contract_app,
+    generate,
+    render_client,
+    typescript_type,
+)
 from labelloop_api.management_contracts import (
     ExportRead,
     JobAccepted,
@@ -288,6 +293,29 @@ def test_unbound_contract_never_accepts_real_requests():
         client.post("/projects", json=PROJECT, headers={"Idempotency-Key": "first"}).status_code
         == 503
     )
+
+
+@pytest.mark.parametrize(
+    "schema,expected",
+    [
+        ({}, "unknown"),
+        ({"type": "object"}, "Record<string, unknown>"),
+        ({"type": "object", "additionalProperties": {}}, "Record<string, unknown>"),
+        ({"type": "object", "additionalProperties": True}, "Record<string, unknown>"),
+        ({"type": "object", "additionalProperties": False}, "Record<string, never>"),
+        (
+            {"type": "object", "additionalProperties": {"type": "integer"}},
+            "Record<string, number>",
+        ),
+    ],
+)
+def test_codegen_handles_unconstrained_and_closed_dictionary_values(schema, expected):
+    assert typescript_type(schema) == expected
+
+
+def test_codegen_does_not_silently_widen_unsupported_schema():
+    with pytest.raises(ValueError, match="unsupported schema type"):
+        typescript_type({"type": "unsupported"})
 
 
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):

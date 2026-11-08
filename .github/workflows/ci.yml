@@ -138,7 +138,7 @@ jobs:
 
   web-build:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web || fromJSON(needs.changes.outputs.areas).python
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -152,6 +152,16 @@ jobs:
         with:
           version: 10.28.2
       - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Generate management client for web lint and type checking
+        run: uv run python -m labelloop_api.management_codegen --output-dir apps/web/src/generated
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
