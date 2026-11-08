@@ -1,0 +1,331 @@
+"""Trusted local-training stage; no worker registration or canonical publication.
+
+The backend factory is deployment-owned (LocalUltralyticsBackend in the ML
+process). Model output cannot select it, filesystem paths or object-store keys.
+"""
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from typing import Protocol
+from uuid import UUID
+
+from sqlalchemy import Engine, select, text
+
+from labelloop_compiler.compiler import json_bytes
+from labelloop_core.evaluation import EvaluationImage, GroundTruth
+from labelloop_core.json_records import canonical_json
+from labelloop_core.training import (
+    InferencePolicy,
+    TrainingBackend,
+    TrainingRequest,
+    TrainingResult,
+)
+
+from .management_compile_worker import (
+    CompilationObjects,
+    CompileContext,
+    content_key,
+    pinned_release,
+)
+from .management_training import ApprovedTrainingProfile, verified_variant
+from .model_store import decode_report
+from .schema import (
+    canonical_dataset_release,
+    canonical_event,
+    preprocessing_recipe,
+    project,
+    yolo_dataset_variant,
+)
+
+
+class LocalBackendFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        dataset: Path,
+        initialization: Path,
+        output: Path,
+        validation_images: tuple[EvaluationImage, ...],
+    ) -> TrainingBackend: ...
+
+
+def checked_object(objects: CompilationObjects, digest: str, *, limit: int) -> bytes:
+    data = objects.read(content_key(digest))
+    if len(data) > limit or hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError("training object exceeds its bound or digest differs")
+    return data
+
+
+def materialize_dataset(objects: CompilationObjects, manifest: dict, root: Path) -> None:
+    hashes = manifest["file_hashes"]
+    if not hashes or len(hashes) > 100000:
+        raise ValueError("training dataset membership exceeds its bound")
+    # Validate the complete allowlist before reading an object or creating a file.
+    for name in hashes:
+        path = PurePosixPath(name)
+        if (
+            not isinstance(name, str)
+            or path.is_absolute()
+            or ".." in path.parts
+            or str(path) != name
+            or "\\" in name
+            or name == "manifest.json"
+            or not path.parts
+        ):
+            raise ValueError("invalid compiled artifact path")
+    root.mkdir()
+    total = 0
+    for name, digest in hashes.items():
+        data = checked_object(objects, digest, limit=64_000_000)
+        total += len(data)
+        if total > 512_000_000:
+            raise ValueError("training dataset bytes exceed their bound")
+        destination = root / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    (root / "manifest.json").write_bytes(json_bytes(manifest))
+
+
+def collect_training(
+    request: TrainingRequest,
+    result: TrainingResult,
+    manifest: dict,
+    output: Path,
+    objects: CompilationObjects,
+) -> dict:
+    """Check the delivered backend's files before saving immutable stage evidence."""
+    if (
+        result.request != request
+        or len(result.checkpoints) != request.epochs
+        or {checkpoint.epoch for checkpoint in result.checkpoints} != set(range(request.epochs))
+    ):
+        raise ValueError("training result differs from authorized request or epoch coverage")
+    # Reconstruct the core contract so a non-validating backend cannot bypass it.
+    replace(result)
+    reports, uploads = [], []
+    total = 0
+    for checkpoint in result.checkpoints:
+        path = output / "trainer" / "weights" / f"epoch{checkpoint.epoch}.pt"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("missing immutable checkpoint file")
+        size = path.stat().st_size
+        total += size
+        if size > 256_000_000 or total > 512_000_000:
+            raise ValueError("checkpoint bytes exceed their bound")
+        data = path.read_bytes()
+        if len(data) != size or hashlib.sha256(data).hexdigest() != checkpoint.sha256:
+            raise ValueError("checkpoint bytes differ from fixed-shape selection")
+        uploads.append((checkpoint.sha256, data))
+        report_record = json.loads(
+            (output / f"evaluation-epoch-{checkpoint.epoch}.json").read_text()
+        )
+        report = decode_report(report_record)
+        if (
+            report.run_id != checkpoint.evaluation_run_id
+            or report.role != "development"
+            or report.weights_sha256 != checkpoint.sha256
+            or report.dataset_release_id != request.dataset_release_id
+            or report.recipe_id != request.recipe_id
+            or report.class_map_sha256 != request.class_map_sha256
+            or report.policy != request.policy
+            or set(report.overall.per_class) != set(manifest["class_map"])
+            or report.overall.map50_95 != checkpoint.validation_map
+        ):
+            raise ValueError("checkpoint report differs from training lineage")
+        reports.append(report_record)
+    shapes = json.loads((output / "tensor-shapes.json").read_text())
+    if set(shapes) != {"training", "validation", "inference"} or not all(shapes.values()):
+        raise ValueError("missing actual tensor-shape evidence")
+    for records in shapes.values():
+        for shape in records:
+            request.policy.assert_shape(tuple(shape), stride=32)
+    retention = json.loads((output / "target-retention.json").read_text())
+    train_names = {
+        PurePosixPath(sample["image_path"]).name
+        for sample in manifest["samples"]
+        if sample["split"] == "train"
+    }
+    if (
+        not retention
+        or {row["sample"] for row in retention} != train_names
+        or any(
+            type(row[key]) is not int or row[key] < 0
+            for row in retention
+            for key in ("before", "after", "before_at_or_below_6px", "after_at_or_below_6px")
+        )
+        or any(
+            row["before"] != row["after"]
+            or row["before_at_or_below_6px"] > row["before"]
+            or row["after_at_or_below_6px"] > row["after"]
+            for row in retention
+        )
+    ):
+        raise ValueError("incomplete or lossy actual dataloader retention evidence")
+    record = {
+        "result": asdict(result),
+        "reports": reports,
+        "tensor_shapes": shapes,
+        "target_retention": retention,
+        "checkpoint_keys": {item.sha256: content_key(item.sha256) for item in result.checkpoints},
+    }
+    if len(canonical_json(record)) > 2_000_000:
+        raise ValueError("training exceeds the queue's bounded inline evidence")
+    # No upload occurs until all output contracts and checkpoint bytes are checked.
+    for digest, data in uploads:
+        objects.put(content_key(digest), data)
+    return record
+
+
+@dataclass(frozen=True)
+class CanonicalLocalTrainingWorker:
+    engine: Engine
+    objects: CompilationObjects
+    workspace_id: UUID
+    backend: LocalBackendFactory
+
+    def train(self, context: CompileContext) -> dict:
+        lease, inputs = context.lease, context.lease.input
+        if lease.kind != "train_local" or inputs["workspace_id"] != str(self.workspace_id):
+            raise ValueError("training workspace or kind mismatch")
+        request = TrainingRequest(
+            **(inputs["request"] | {"policy": InferencePolicy(**inputs["request"]["policy"])})
+        )
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                job = connection.execute(
+                    text("SELECT input,project_key,kind FROM worker_job WHERE job_id=:id"),
+                    {"id": lease.job_id},
+                ).one_or_none()
+                receipts = (
+                    connection.execute(
+                        select(canonical_event.c.payload).where(
+                            canonical_event.c.event_type == "management.start_training",
+                            canonical_event.c.aggregate_id == inputs["variant_id"],
+                            canonical_event.c.actor_kind == "human",
+                            canonical_event.c.actor_id == inputs["requested_by"],
+                            canonical_event.c.payload["workspace_id"].as_string()
+                            == str(self.workspace_id),
+                            canonical_event.c.payload["evidence"]["job_id"].as_string()
+                            == lease.job_id,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                variant = connection.execute(
+                    select(
+                        yolo_dataset_variant,
+                        canonical_dataset_release.c.project_id,
+                        canonical_dataset_release.c.release_key,
+                        preprocessing_recipe.c.recipe_key,
+                        preprocessing_recipe.c.policy,
+                        preprocessing_recipe.c.immutable,
+                    )
+                    .join(canonical_dataset_release)
+                    .join(project)
+                    .join(preprocessing_recipe)
+                    .where(
+                        yolo_dataset_variant.c.id == UUID(inputs["variant_id"]),
+                        project.c.workspace_id == self.workspace_id,
+                        project.c.project_key == lease.project_key,
+                        project.c.id == UUID(request.project_id),
+                    )
+                ).one_or_none()
+                if (
+                    job is None
+                    or job.kind != lease.kind
+                    or job.project_key != lease.project_key
+                    or canonical_json(job.input) != canonical_json(inputs)
+                    or len(receipts) != 1
+                    or canonical_json(receipts[0]["evidence"]["inputs"]) != canonical_json(inputs)
+                    or receipts[0]["result"]["id"] != request.run_id
+                    or variant is None
+                    or inputs["variant_revision"] != 1
+                ):
+                    raise ValueError("training input differs from owned authorized intent")
+                manifest, digest, compile_job_id = verified_variant(
+                    connection, variant, self.workspace_id
+                )
+                profile = inputs["profile"]
+                expected = ApprovedTrainingProfile(
+                    UUID(request.project_id),
+                    profile["id"],
+                    profile["revision"],
+                    profile["recipe_id"],
+                    profile["initialization_sha256"],
+                    profile["epochs"],
+                    request.batch,
+                    request.seed,
+                )
+                if (
+                    expected.request(request.run_id, variant.release_key, manifest, digest)
+                    != request
+                    or expected.read().model_dump(mode="json") != profile
+                    or compile_job_id != inputs["compile_job_id"]
+                    or inputs["manifest_key"] != content_key(digest)
+                    or inputs["initialization_key"] != content_key(request.initialization_sha256)
+                ):
+                    raise ValueError("training request differs from pinned profile or variant")
+                compile_job = connection.execute(
+                    text("SELECT input FROM worker_job WHERE job_id=:id"),
+                    {"id": compile_job_id},
+                ).scalar_one()
+                _, release, _ = pinned_release(
+                    connection.connection.driver_connection,
+                    SimpleNamespace(
+                        job_id=compile_job_id,
+                        project_key=lease.project_key,
+                        kind="compile_variant",
+                        input=compile_job,
+                    ),
+                    self.workspace_id,
+                )
+        validation_images = tuple(
+            EvaluationImage(
+                sample.asset.asset_id,
+                sample.asset.width,
+                sample.asset.height,
+                tuple(
+                    GroundTruth(
+                        obj.object_id,
+                        obj.class_id,
+                        obj.box,
+                        obj.occluded,
+                        obj.truncated_at_image_edge,
+                    )
+                    for obj in sample.revision.objects
+                ),
+                revision=sample.revision.revision,
+                source_sha256=sample.asset.sha256,
+            )
+            for sample in release.samples
+            if sample.split == "val"
+            and manifest["release_membership"][sample.asset.asset_id] == "compiled"
+        )
+        manifest_data = checked_object(self.objects, digest, limit=2_000_000)
+        if manifest_data != json_bytes(manifest):
+            raise ValueError("stored compiler manifest differs from publication")
+        initialization = checked_object(
+            self.objects, request.initialization_sha256, limit=256_000_000
+        )
+        with TemporaryDirectory(prefix="canonical-train-") as temporary:
+            root = Path(temporary)
+            dataset, output = root / "dataset", root / "run"
+            materialize_dataset(self.objects, manifest, dataset)
+            checkpoint = root / "initialization.pt"
+            checkpoint.write_bytes(initialization)
+            backend = self.backend(
+                dataset=dataset,
+                initialization=checkpoint,
+                output=output,
+                validation_images=validation_images,
+            )
+            result = backend.train(request)
+            return collect_training(request, result, manifest, output, self.objects)

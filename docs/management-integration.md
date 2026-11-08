@@ -436,9 +436,57 @@ compiler authority, SELECT-only profiles and real shared-session/CSRF dispatch.
 Profile configuration cases validate immutable bounds and baseline arguments.
 These are commissioned cases, not a pass until exact-head Actions completes.
 No new table/migration, dependency, production grant, default mount, paid call or
-model loading is introduced. The actual training handler, checkpoint byte
-verification, fenced model completion, training detail reads, evaluation/export
-and full CPU project-to-export acceptance remain incomplete.
+model loading is introduced by the producer. Fenced model completion, training
+detail reads, evaluation/export and full CPU project-to-export acceptance remain
+incomplete. The separate execution-stage adapter below does not enable them.
+
+### Local-training execution stage (partial, unmounted)
+
+`CanonicalLocalTrainingWorker` supplies a `train` stage for trusted composition
+with the existing queue, not a new controller. Its backend factory is injected by
+server code; an ML process can pass the delivered `LocalUltralyticsBackend`
+without importing vendor libraries into the API. No worker registration or
+canonical completion sink is supplied in this slice. Do **not** register a runner
+with a no-op sink: saving a stage is not successful canonical training publication.
+
+Before object access, one read-only repeatable snapshot verifies the actual job,
+workspace/project identity, exact human-attributed training receipt, historical
+profile/request and fenced compiler publication. It reuses the compiler's frozen
+snapshot rehydration, never substitutes current labels, and constructs complete
+source-frame development truth for the compiled validation members. Initialization,
+manifest and every compiled file are read only by validated content-addressed keys
+and hashed before backend construction. The complete relative-path allowlist is
+checked before any object read or file write. Worker-owned temporary paths are
+cleaned on success/failure; the dataset is a disposable copy, not edited canonical
+storage. Input limits are 100,000 files, 64 MB per dataset object, 512 MB total
+dataset bytes and 256 MB initialization. Deployment object readers must additionally
+bound transport/memory allocation; checking returned bytes cannot prevent an
+unbounded reader from allocating them first.
+
+`collect_training` validates the core result/request and complete epoch coverage,
+checkpoint bytes, matching source-frame report lineage, actual training/validation/
+inference shapes and non-lossy dataloader coverage. Only after every check succeeds
+are epoch weights uploaded under their byte hashes. Total checkpoint bytes are
+bounded to 512 MB (256 MB each); inline result/report/shape/retention evidence uses
+the existing queue's 2 MB bound. Storage failure may leave unreferenced immutable
+objects; it cannot create a canonical run or completion receipt. The stage retains
+internal resolved worker paths in its private record; future public reads must
+project only approved scalar argument keys, not expose raw records.
+
+New disposable DB cases check both recipes' historical truth/materialization,
+forged authority refusal before storage/backend access, corrupt inputs and cleanup.
+They stop at an explicitly synthetic backend and do not claim actual queued CPU
+training. Unit cases use synthetic output to check artifact/lineage/shape/retention
+refusals and safe paths. The existing real CPU smoke additionally feeds its actual
+320/640 backend output through the collector without another training run. These
+are commissioned cases, **not verified until exact-head Actions completes**.
+Canonical training/report publication must still reuse the delivered model store
+inside the queue's fenced completion transaction. Its legacy project-key contract
+must be reconciled explicitly with management's canonical UUID run inputs, without
+rewriting historical intent or duplicating persistence. Export, standalone model
+evaluation, final role provisioning, mounted app and actual new-project-to-export
+acceptance remain open. No qualification, production grant or default mount is
+introduced here.
 
 ## Canonical summary reads (partial, unmounted)
 

@@ -106,6 +106,148 @@ def database(tmp_path):
         owner.dispose()
 
 
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_training_stage_rehydrates_authorized_inputs_before_backend_execution(
+    database, compilation, compiler_worker, recipe
+):
+    import hashlib
+    import json
+
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_api.management_train_worker import CanonicalLocalTrainingWorker
+    from labelloop_worker_core.jobs import StageContext
+
+    training, _, compiled = prepared_training(database, compilation, compiler_worker, recipe)
+    initialization = b"synthetic approved checkpoint; backend is not a real trainer"
+    digest = hashlib.sha256(initialization).hexdigest()
+    training = replace(
+        training, profiles=(replace(training.profiles[0], initialization_sha256=digest),)
+    )
+    compiler_worker.objects.put(content_key(digest), initialization)
+    accepted = training_request(training, compiled.resource.id)
+    lease = compiler_worker.store.claim("train_local", "fixture-ml", job_id=accepted.job_id)
+    paths = []
+
+    def backend(**kwargs):
+        paths.extend([kwargs["dataset"], kwargs["initialization"], kwargs["output"]])
+        assert kwargs["initialization"].read_bytes() == initialization
+        manifest = json.loads((kwargs["dataset"] / "manifest.json").read_bytes())
+        assert manifest["recipe"]["recipe_id"] == recipe
+        assert len(kwargs["validation_images"]) == 1
+        image = kwargs["validation_images"][0]
+        assert image.revision == 2 and image.objects == ()
+        assert image.truth_digest() == manifest["samples"][0]["source_truth_sha256"]
+        assert not kwargs["output"].exists()
+        raise RuntimeError("synthetic backend reached")
+
+    worker = CanonicalLocalTrainingWorker(
+        training.mutations.engine, compiler_worker.objects, training.mutations.workspace_id, backend
+    )
+    with pytest.raises(RuntimeError, match="synthetic backend reached"):
+        worker.train(StageContext(compiler_worker.store, lease, {}))
+    assert paths and all(not path.exists() for path in paths)
+    with database[1].connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM training_run WHERE run_key=:key"),
+                {"key": accepted.resource.id},
+            ).scalar_one()
+            == 0
+        )
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM worker_stage_artifact WHERE job_id=:id"),
+                {"id": accepted.job_id},
+            ).scalar_one()
+            == 0
+        )
+    assert training_request(training, compiled.resource.id) == accepted
+
+
+@pytest.mark.parametrize(
+    "change", ["requester", "request", "profile", "variant", "workspace", "kind"]
+)
+def test_training_stage_refuses_forged_inputs_before_object_or_backend_access(
+    database, training_ready, compiler_worker, change
+):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from labelloop_api.management_train_worker import CanonicalLocalTrainingWorker
+    from labelloop_worker_core.jobs import StageContext
+
+    training, _, compiled = training_ready
+    accepted = training_request(training, compiled.resource.id)
+    lease = compiler_worker.store.claim("train_local", "fixture-ml", job_id=accepted.job_id)
+    inputs = deepcopy(lease.input)
+    if change == "requester":
+        inputs["requested_by"] = "forged"
+    elif change == "request":
+        inputs["request"]["epochs"] = 2
+    elif change == "profile":
+        inputs["profile"]["revision"] = 2
+    elif change == "variant":
+        inputs["variant_id"] = str(uuid4())
+    elif change == "workspace":
+        inputs["workspace_id"] = str(uuid4())
+    lease = replace(lease, input=inputs, kind="compile_variant" if change == "kind" else lease.kind)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("forged authority must fail before object or backend access")
+
+    worker = CanonicalLocalTrainingWorker(
+        training.mutations.engine,
+        SimpleNamespace(read=unexpected, put=unexpected),
+        training.mutations.workspace_id,
+        unexpected,
+    )
+    with pytest.raises(ValueError):
+        worker.train(StageContext(compiler_worker.store, lease, {}))
+
+
+@pytest.mark.parametrize("corrupt", ["manifest", "initialization", "dataset"])
+def test_training_stage_refuses_corrupt_objects_before_backend_access(
+    database, training_ready, compiler_worker, corrupt
+):
+    import hashlib
+    from types import SimpleNamespace
+
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_api.management_train_worker import CanonicalLocalTrainingWorker
+    from labelloop_worker_core.jobs import StageContext
+
+    training, _, compiled = training_ready
+    initialization = b"synthetic initialization"
+    digest = hashlib.sha256(initialization).hexdigest()
+    training = replace(
+        training, profiles=(replace(training.profiles[0], initialization_sha256=digest),)
+    )
+    compiler_worker.objects.put(content_key(digest), initialization)
+    accepted = training_request(training, compiled.resource.id)
+    lease = compiler_worker.store.claim("train_local", "fixture-ml", job_id=accepted.job_id)
+    manifest = publication_state(database[1], compiled)[0]
+    broken = {
+        "manifest": lease.input["manifest_key"],
+        "initialization": content_key(digest),
+        "dataset": content_key(manifest["file_hashes"]["class-map.json"]),
+    }[corrupt]
+
+    def read(key):
+        return b"corrupt" if key == broken else compiler_worker.objects.read(key)
+
+    def backend(**kwargs):
+        pytest.fail("corrupt bytes must fail before backend construction")
+
+    worker = CanonicalLocalTrainingWorker(
+        training.mutations.engine,
+        SimpleNamespace(read=read, put=compiler_worker.objects.put),
+        training.mutations.workspace_id,
+        backend,
+    )
+    with pytest.raises(ValueError, match="digest differs"):
+        worker.train(StageContext(compiler_worker.store, lease, {}))
+
+
 def prepared_training(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
     from uuid import UUID
 

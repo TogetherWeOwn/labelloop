@@ -269,6 +269,23 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     assert not output.exists()
     rogue_image.unlink()
     result = backend.train(request)
+    # Exercise management's artifact collector on the actual CPU backend output,
+    # without claiming this standalone fixture is a DB-backed management job.
+    from types import SimpleNamespace
+
+    from labelloop_api.management_train_worker import collect_training
+
+    saved_checkpoints = {}
+    stage_record = collect_training(
+        request,
+        result,
+        manifest,
+        output,
+        SimpleNamespace(put=lambda key, data: saved_checkpoints.__setitem__(key, data)),
+    )
+    assert stage_record["result"]["selected"]["sha256"] == result.selected.sha256
+    assert stage_record["reports"][0]["weights_sha256"] == result.selected.sha256
+    assert len(saved_checkpoints) == 1
     assert len(result.checkpoints) == 1
     assert result.selected == result.checkpoints[0]
     epoch_file = output / "trainer" / "weights" / "epoch0.pt"
