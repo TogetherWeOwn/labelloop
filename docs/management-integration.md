@@ -259,6 +259,33 @@ committed while the read is open verifies snapshot consistency and absence of
 source locks; POST must refuse that now-stale annotation revision. These cases
 are commissioned, not verified until their exact-head Actions job passes.
 
+### Frozen dataset-release details
+
+`read_release` uses one REPEATABLE READ, READ ONLY snapshot and the same
+human/workspace/managed-project authorization. It projects the release's exact
+annotation revisions and locked assignment version, not current reviews or the
+newest ontology. A later rejection does not rewrite historical membership. Class
+counts and human/system object provenance come from those pinned annotations;
+class support thresholds remain null. The previous release is selected by its
+attributed management freeze revision, and changed assets/class deltas compare
+frozen pins rather than wall-clock order or current labels.
+
+New freezes record `canonical-training-eligibility-v1` in the append-only audit
+receipt. This identifies the canonical eligibility checks, not a project quality
+target, independent gold, publication or model qualification. A detail read fails
+closed for a missing/ambiguous receipt, absent policy pin, mismatched recorded
+snapshot digest or missing pinned membership. Legacy freezes without a policy pin
+require explicit adoption; the reader does not silently assert one. It checks
+receipt-to-release identity/digest consistency, not full snapshot rehashing.
+
+Responses expose stable IDs, counts, review tiers, exclusions and authenticated
+freeze attribution, never source URIs, object keys or the raw audit/retry payload.
+A canonical snapshot digest is not a compiler manifest: manifest fields stay null
+until that producer supplies an artifact. The explicit model check stays unknown.
+The endpoint remains unmounted. Disposable Actions cases cover SELECT-only roles,
+historical reviews, denied/foreign IDs, missing evidence, exclusions and class
+count/revision deltas. New cases are commissioned, not a test-pass claim.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

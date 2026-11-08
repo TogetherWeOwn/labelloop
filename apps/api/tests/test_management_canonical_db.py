@@ -726,6 +726,7 @@ def test_freeze_plan_excludes_unreviewed_sources_but_validates_all_grouping(data
                 metric="phash",
                 value="9",
                 review_state="pending",
+                algorithm_version="fixture",
             )
         )
     denied = reads.read_freeze_plan(Reader(), created.id)
@@ -773,6 +774,180 @@ def test_freeze_plan_uses_one_snapshot_and_post_rechecks_later_review(database):
     assert release_count(owner, created.id) == 0
 
 
+def test_release_detail_uses_frozen_members_and_select_only_role(database):
+    service, owner, role = database
+    created, asset, _, payload = release_inputs(service, owner)
+    released = freeze(service, created.id, payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_release(Reader(), released.id)
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="rejected",
+            review_tier="human_reviewed",
+            scope_completeness="partial",
+            objects=[],
+            training_eligible=False,
+        )
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    counts_before = counts(owner, created.id)
+    for actor in (Actor(), Reader()):
+        detail = reads.read_release(actor, released.id)
+        assert detail == before
+        assert detail.resource == released
+        assert detail.members[0].asset_id == asset.id
+        assert detail.members[0].annotation_revision == 2
+        assert detail.members[0].scope_completeness == "exhaustive_for_scope"
+        assert detail.members[0].review_tier == "human_reviewed"
+        assert detail.previous_release_id is None
+        assert detail.changed_asset_ids == [asset.id]
+        assert detail.acceptance_policy_id == "canonical-training-eligibility-v1"
+        assert detail.frozen_at and detail.frozen_by == Actor().id
+        assert detail.manifest_sha256 is None and detail.manifest_artifact_id is None
+        assert detail.classes[0].minimum_support is None
+        assert detail.checks[1].passed is None
+        serialized = detail.model_dump_json()
+        for forbidden in ("source_uri", "object_key", "fingerprint", "idempotency_key"):
+            assert forbidden not in serialized
+    assert counts(owner, created.id) == counts_before
+
+
+@pytest.mark.parametrize(
+    "actor", [Reader(kind="service"), Reader(role="unknown"), Reader(granted=False), Reader(id="")]
+)
+def test_release_detail_refuses_untrusted_principals_before_lookup(database, actor):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read_release(actor, str(uuid4()))
+
+
+def test_release_detail_isolates_foreign_unknown_and_legacy_rows(database):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    released = freeze(service, created.id, payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    for reader, target in (
+        (replace(reads, workspace_id=uuid4()), released.id),
+        (reads, str(uuid4())),
+        (reads, "not-a-uuid"),
+        (reads, created.id),
+    ):
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reader.read_release(Reader(), target)
+
+
+@pytest.mark.parametrize("missing", ["receipt", "policy", "hash", "member"])
+def test_release_detail_refuses_missing_recorded_evidence(database, missing):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    released = freeze(service, created.id, payload)
+    copied_id = str(uuid4())
+    with owner.begin() as connection:
+        original = (
+            connection.execute(
+                select(canonical_dataset_release).where(
+                    canonical_dataset_release.c.id == released.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+        values = dict(original, id=copied_id, release_key=copied_id)
+        if missing == "member":
+            values["sample_revisions"] = {asset.id: 900}
+        connection.execute(insert(canonical_dataset_release).values(**values))
+        if missing != "receipt":
+            evidence = {
+                "acceptance_policy_id": "canonical-training-eligibility-v1",
+                "canonical_snapshot_sha256": original["hashes"]["canonical_snapshot_sha256"],
+            }
+            if missing == "policy":
+                evidence.pop("acceptance_policy_id")
+            if missing == "hash":
+                evidence["canonical_snapshot_sha256"] = "0" * 64
+            connection.execute(
+                insert(canonical_event).values(
+                    aggregate_id=created.id,
+                    actor_kind="human",
+                    actor_id=Actor().id,
+                    event_type="management.freeze_release",
+                    expected_revision=3,
+                    payload={
+                        "workspace_id": str(service.workspace_id),
+                        "result": released.model_copy(update={"id": copied_id}).model_dump(),
+                        "evidence": evidence,
+                    },
+                )
+            )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_release(Reader(), copied_id)
+
+
+def test_release_detail_computes_prior_release_and_class_delta_from_pins(database):
+    service, owner, _ = database
+    created, asset, source, payload = release_inputs(service, owner)
+    first = freeze(service, created.id, payload)
+    objects = [{"object_id": "parcel", "class_id": "package", "box": [1, 2, 8, 10]}]
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="proposed",
+            review_tier="human_reviewed",
+            scope_completeness="partial",
+            objects=objects,
+        )
+        # The changed object set invalidated completeness at revision 3. The
+        # fixture's independent human inspection now establishes it for that set.
+        connection.execute(
+            completeness_assessment.update()
+            .where(
+                completeness_assessment.c.asset_id == source.id,
+                completeness_assessment.c.revision == 3,
+            )
+            .values(scope_completeness="exhaustive_for_scope")
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=3,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=objects,
+            training_eligible=True,
+        )
+    second = freeze(
+        service,
+        created.id,
+        payload.model_copy(update={"expected_revision": 3, "annotation_revisions": {asset.id: 4}}),
+        key="second-release",
+    )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_release(Reader(), second.id)
+    assert detail.previous_release_id == first.id
+    assert detail.members[0].annotation_revision == 4
+    assert detail.members[0].objects == 1
+    assert detail.classes[0].val == 1 and detail.classes[0].delta == 1
+    assert detail.classes[0].train == detail.classes[0].test == 0
+    assert detail.human_reviewed_objects == 1 and detail.auto_accepted_objects == 0
+    assert detail.changed_asset_ids == [asset.id]
+    assert reads.read_release(Reader(), first.id).members[0].objects == 0
+
+
 def test_parallel_freeze_replays_one_immutable_release_and_audit(database):
     service, owner, _ = database
     created, asset, _, payload = release_inputs(service, owner)
@@ -801,7 +976,10 @@ def test_parallel_freeze_replays_one_immutable_release_and_audit(database):
                 canonical_event.c.event_type == "management.freeze_release",
             )
         ).one()
-        assert event.payload["evidence"] == row.hashes
+        assert event.payload["evidence"] == {
+            **row.hashes,
+            "acceptance_policy_id": "canonical-training-eligibility-v1",
+        }
         assert event.actor_id == Actor().id
     for statement in (
         "UPDATE canonical_dataset_release SET frozen = false WHERE id = :id",
@@ -952,6 +1130,12 @@ def test_freeze_pins_exclusions_and_refuses_obsolete_assignment(database):
             )
         )
     result = freeze(service, created.id, payload)
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_release(
+        Reader(), result.id
+    )
+    assert [member.asset_id for member in detail.members] == [asset.id]
+    assert detail.exclusions[0].asset_ids == [extra.id]
+    assert detail.exclusions[0].reason == "not_selected"
     with owner.begin() as connection:
         row = connection.execute(
             select(canonical_dataset_release).where(canonical_dataset_release.c.id == result.id)

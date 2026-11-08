@@ -273,7 +273,10 @@ class CanonicalManagementMutations:
                 str(owned.id),
                 payload.expected_revision,
                 result,
-                {"canonical_snapshot_sha256": snapshot_sha256},
+                {
+                    "canonical_snapshot_sha256": snapshot_sha256,
+                    "acceptance_policy_id": "canonical-training-eligibility-v1",
+                },
             )
             return result
 
