@@ -1169,24 +1169,20 @@ def test_reference_acceptance_rechecks_current_source_evidence(database, when, c
     if when == "after":
         accept(service, created.id, payload)
     with owner.begin() as connection:
-        if change in {"test", "unlocked"}:
-            connection.execute(
-                source_split_assignment.update()
-                .where(source_split_assignment.c.asset_id == source.id)
-                .values(**({"split": "test"} if change == "test" else {"locked": False}))
-            )
-        elif change == "new-version":
+        if change in {"test", "unlocked", "new-version"}:
+            # Locked history cannot be edited; publish changed evidence as a new
+            # assignment and require the old enrollment pin to fail closed.
             connection.execute(
                 insert(source_split_assignment).values(
                     assignment_version="assignment-2",
                     asset_id=source.id,
                     group_id="group-1",
-                    split="train",
+                    split="test" if change == "test" else "train",
                     seed=7,
                     algorithm="union-find-grouped-stratified-v2",
                     thresholds={"phash_max_distance": 8},
                     reason="New assignment",
-                    locked=True,
+                    locked=change != "unlocked",
                 )
             )
         elif change == "pending":

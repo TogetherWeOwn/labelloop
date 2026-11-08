@@ -688,8 +688,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 23
-    assert sum(len(methods) for methods in spec["paths"].values()) == 24
+    assert len(spec["paths"]) == 24
+    assert sum(len(methods) for methods in spec["paths"].values()) == 25
+    assert (
+        spec["paths"]["/projects/{project_id}/references/accept"]["post"]["operationId"]
+        == "acceptReference"
+    )
+    assert "export type ReferenceAccept =" in client
     assert (
         spec["paths"]["/projects/{project_id}/references"]["post"]["operationId"]
         == "enrollReference"
