@@ -28,6 +28,8 @@ if (scenario === 'empty') {
 }
 if (scenario === 'source-details-missing') snapshot.draft.source_assets = null;
 if (scenario === 'dispatch-published') snapshot.draft.published = true;
+if (scenario === 'dispatch-unapproved-scope') snapshot.draft.approved_steps = [];
+if (scenario === 'dispatch-paid-paused') snapshot.paid_paused = true;
 if (scenario === 'frozen' && snapshot.release) {
   snapshot.release.state = 'Frozen'; snapshot.release.frozen_at = snapshot.updated_at; snapshot.release.frozen_by = 'Fixture admin';
 }

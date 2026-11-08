@@ -27,7 +27,7 @@ second registry, status poller or full-screen navigation should be mounted.
 
 | Accepted screen | Fixture implementation | Contract/browser coverage |
 | --- | --- | --- |
-| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
+| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, assistant draft request capture and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
 | 03 Dataset releases | Accepted-label provenance, distribution table, changed images, exclusions, gate/build/quarantine/identical/frozen states, in-place freeze confirmation | Frozen release exposes no edit/freeze, compiler reason visible, freeze pins expected revision |
 | 04 Size/crop recipes | Shared-scale J22 frames, recorded affine/box geometry, image-level exclusion consequences, locked recipe versioning, compilation/artifact surfaces | Browser rectangles cross-checked with the Python compiler geometry, 640 frame twice 320, compile pins recipe IDs |
 | 05 Local training | Local-only run table and selected details, explicit start/cancel panels, fixed-shape development selection, settings mismatch table, retention and checkpoint hashes | Start pins release/recipe/base hash, size not user-overridden, cancel explicit, no paid start |
@@ -147,6 +147,21 @@ revision conflict; discard never autosaves. The real typed key normalization,
 transitive grouping, cross-split quarantine and approval invalidation still belong
 to the producer. This capture is not a generated setup command or working ingestion.
 
+The accepted “Draft with the assistant” action now opens an explicit fixture-only
+request capture using the existing A1 controls, A14 notices and facts layout. It
+pins the inspected scope, draft ID and revision. Opening/discarding never sends a
+command; a changed revision, unapproved scope, paid-pause, reviewer, published,
+stale or disconnected state refuses capture. Navigation, editing and approval
+cannot race the pending request. A deterministic lifecycle fixture returns one
+Proposed row; its acceptance is a separate command at the refreshed revision.
+`draft_assistant_classes` sends no class definitions, provider, endpoint, secret,
+split, approval or spend settings. It is not in the generated wire contract and
+must not be connected to paid generation as-is. Actual permitted-provider,
+validated-proposal ingestion, dry-run consent, budget, revision locking and
+approval invalidation remain server responsibilities. No LLM/provider call,
+model-output parser, real ingestion, persistent store or automatic approval is
+implemented by this capture. New browser/keyboard/axe cases are pending on Actions.
+
 ## Remaining acceptance and final wiring obligations
 
 These remain open; merging fixture components does not discharge them:
@@ -166,22 +181,17 @@ These remain open; merging fixture components does not discharge them:
   Platform run extension and the operational canary/drift extension. Do not mount
   their standalone fixture screens as competing application screens.
 - Complete exact-head Actions evidence and native UX, QA and Security stages.
-  At `18c4aee`, Actions run `42434915472`, web job `128591607135` passed 35
-  web unit cases, 154 browser cases (including reference-link entry, keyboard/axe),
-  both builds and the six-box compiler DOM cross-check. The browser artifact is
-  `13598744337`. CI/ci-ok and CodeQL passed; required gitleaks remained red.
-  At `61ddbc9`, Actions run `42436119580`, web job `128595231561` passed lint,
-  types, 35 web unit cases and both builds, then recorded 148 browser passes and
-  one behavior-contract timeout. After discarding metadata edits, the test filled
-  the unchanged baseline and waited for a Save control that correctly did not
-  exist. The corrected save and deferred-save cases use a different declaration;
-  an explicit baseline inequality and clean-form assertion prevent recurrence.
-  This is a test-input repair, not evidence of a broken save control. The source
-  lifecycle, exact-payload, authority, role, keyboard and axe cases still require
-  a complete corrected-head Actions pass. Required gitleaks remained red; no gate
-  is waived. A supplemental fresh-context review of `4272a28` was
-  completed with eight findings addressed in `752a914`; it is not native approval.
-  Screenshots generated by mockups are not browser evidence.
+  At `88dbce1`, [Actions run `42437203164`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42437203164),
+  [web job `128598512274`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42437203164/job/128598512274)
+  passed lint, types, 35 web unit cases, both builds, all **157 browser cases**
+  (including source metadata lifecycle, keyboard/axe) and the six-box compiler
+  DOM cross-check. [Browser artifact `13600515191`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42437203164/artifacts/13600515191).
+  CI/ci-ok, CodeQL and required gitleaks passed on that head. The earlier
+  metadata-test baseline error is repaired; no scanner waiver was needed.
+  These results predate assistant request capture and do not verify its new cases.
+  A supplemental fresh-context review of `4272a28` was completed with eight
+  findings addressed in `752a914`; it is not native approval. Screenshots
+  generated by mockups are not browser evidence.
 - Demonstrate original-frame immutability and per-recipe commands through the
   real facade. UI affordances alone do not establish canonical state transitions.
 

@@ -109,6 +109,8 @@ export type ManagementCommand =
   | { kind: 'approve_step'; draft_id: string; expected_revision: number; step: SetupStep }
   | { kind: 'accept_class' | 'accept_reference'; draft_id: string; expected_revision: number; id: string }
   | { kind: 'add_class'; draft_id: string; expected_revision: number; name: string }
+  // Fixture capture only; not a paid-generation authorization or generated wire command.
+  | { kind: 'draft_assistant_classes'; draft_id: string; expected_revision: number }
   | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: Pick<ClassRow, 'name' | 'aliases' | 'parent' | 'exclusions' | 'mirror_safe'> }
   | { kind: 'add_reference'; draft_id: string; expected_revision: number; values: ReferenceInput }
   | { kind: 'resolve_pair'; draft_id: string; expected_revision: number; pair_id: string; same_group: boolean }

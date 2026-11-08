@@ -53,13 +53,14 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
       read: () => Promise.resolve(structuredClone(snapshot)),
       execute: (command) => {
         capture(command);
-        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference') return new Promise((resolve) => {
+        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes') return new Promise((resolve) => {
           finishSave = () => {
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
             if (command.kind === 'save_setup' && command.step === 'Sources and groups' && typeof command.values.metadata_keys === 'string') snapshot.draft.sources.metadata_keys = command.values.metadata_keys;
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
             if (command.kind === 'add_reference') snapshot.draft.references = [...snapshot.draft.references, { id: 'ref-linked', ...command.values, provenance: 'Proposed' }];
+            if (command.kind === 'draft_assistant_classes') snapshot.draft.classes = [...snapshot.draft.classes, { id: 'assistant-oat', name: 'Oat milk 1 L', aliases: '', parent: '', exclusions: 'Soy milk', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
             resolve({ message: 'Captured save only' });
           };
         });
@@ -76,12 +77,14 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
         document.dispatchEvent(new Event('visibilitychange'));
       },
       finish: () => { finishSave?.(); },
+      pausePaid: () => { snapshot.paid_paused = true; document.dispatchEvent(new Event('visibilitychange')); },
     };
   });
   return <>
     <p>Refresh lifecycle fixture. Revisions and save responses are simulated; no server is connected.</p>
     <button onClick={() => rig.refresh()}>Refresh external records</button>
     <button onClick={() => rig.finish()}>Finish pending save</button>
+    <button onClick={() => rig.pausePaid()}>Pause paid steps</button>
     <ManagementModule screen={screen} role="admin" port={rig.port} />
   </>;
 }

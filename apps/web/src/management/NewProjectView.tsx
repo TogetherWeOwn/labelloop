@@ -12,7 +12,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [unsavedFields, setUnsavedFields] = useState(false);
   const [editing, setEditing] = useState<{ row: ClassRow; revision: number; draftId: string } | null>(null);
   const [referenceEntry, setReferenceEntry] = useState<{ revision: number; draftId: string } | null>(null);
-  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null;
+  const [assistantEntry, setAssistantEntry] = useState<{ revision: number; draftId: string; scope: string } | null>(null);
+  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null || assistantEntry !== null;
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -39,7 +40,9 @@ export function NewProjectView({ data, actions }: ScreenProps) {
         </Table>
         {editing && <ClassFields key={editing.row.id} draft={draft} actions={actions} row={editing.row} revision={editing.revision} draftId={editing.draftId} readOnly={readOnly} onClose={() => setEditing(null)} />}
         {actions.role === 'admin' && <form onSubmit={(event) => { event.preventDefault(); if (!readOnly && !pendingEdits) void addClass(); }} className="stack"><label htmlFor="new-class">Add a class</label><input id="new-class" value={name} readOnly={readOnly || pendingEdits} onChange={(event) => setName(event.currentTarget.value)} /><CommandButton actions={actions} disabled={readOnly || pendingEdits} reason={!name.trim() ? 'Enter a class name first.' : undefined} onClick={() => { void addClass(); }}>Add class</CommandButton><p className="help">Mirror-safe means a left-right flip does not change the class. Text on packs usually means no.</p></form>}
-        <Notice tone="info">Dataset import and assistant drafting are not connected in this module. Assistant rows remain Proposed until accepted individually.</Notice>
+        <Notice tone="info">Dataset import and assistant generation are not connected in this module. Assistant request capture does not call a provider, authorize spend or approve classes. Returned proposals need individual admin acceptance.</Notice>
+        <CommandButton actions={actions} disabled={readOnly || pendingEdits} reason={data.paid_paused ? 'Paid steps are paused. Assistant drafting is unavailable.' : !draft.approved_steps.includes('Scope') ? 'Approve the scope before requesting draft classes.' : undefined} onClick={() => setAssistantEntry({ revision: draft.revision, draftId: draft.id, scope: draft.scope.detect })}>Draft with the assistant</CommandButton>
+        {assistantEntry && <AssistantDraft draft={draft} actions={actions} revision={assistantEntry.revision} draftId={assistantEntry.draftId} scope={assistantEntry.scope} readOnly={readOnly || data.paid_paused} onClose={() => setAssistantEntry(null)} />}
         {draft.dataset_import ? <section className="stack" aria-label="Dataset import validation">
           <h3>Dataset import validation</h3>
           <Facts items={[[ 'Report', draft.dataset_import.id ], ['Source', draft.dataset_import.source_name], ['Rows checked', draft.dataset_import.rows], ['Result', draft.dataset_import.state]]} />
@@ -83,6 +86,30 @@ export function NewProjectView({ data, actions }: ScreenProps) {
     </section>
     <div className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={pendingEdits || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></div></div>
   </>;
+}
+
+function AssistantDraft({ draft, actions, revision, draftId, scope, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; scope: string; readOnly: boolean; onClose: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const conflict = draftId !== draft.id || revision !== draft.revision;
+  const reason = conflict ? 'The draft changed. Discard this request and inspect the current scope before drafting again.' : !draft.approved_steps.includes('Scope') ? 'Approve the scope before requesting draft classes.' : undefined;
+  async function capture() {
+    if (readOnly || saving || reason) return;
+    setSaving(true);
+    const saved = await actions.send({ kind: 'draft_assistant_classes', draft_id: draftId, expected_revision: revision });
+    setSaving(false); setFailed(!saved);
+    if (saved) onClose();
+  }
+  return <section className="stack" aria-label="Assistant class draft request">
+    <h3>Draft with the assistant</h3>
+    <Facts items={[[ 'Inspected scope', scope ], ['Inspected draft', `${draftId} · revision ${revision}`]]} />
+    <Notice tone="info">Fixture request capture only. No provider is called and no spend is authorized. Real generation requires the server's permitted-provider, dry-run and budget gates; those are not connected here.</Notice>
+    <p>Assistant output is untrusted. Only validated returned rows can enter this draft as Proposed; accepting each class is a separate admin action. No references, source groups, splits or bulk jobs are changed by this request.</p>
+    {conflict && <Notice tone="danger">The draft changed while this request was open. No request was retargeted to the new revision.</Notice>}
+    {failed && <Notice tone="danger">The assistant draft request was not confirmed. Refresh uncertain records before trying again. No class approval is implied.</Notice>}
+    <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void capture(); }}>{saving ? 'Capturing assistant request…' : 'Capture assistant draft request'}</CommandButton>
+    <Button disabled={saving || actions.busy} onClick={onClose}>Discard assistant request</Button>
+  </section>;
 }
 
 function ClassFields({ draft, actions, row, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; row: ClassRow; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {
