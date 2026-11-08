@@ -522,7 +522,7 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
     from labelloop_worker_core.jobs import JobRunner, Stage
 
     service, owner, _ = database
-    created, asset, source, payload = release_inputs(service, owner)
+    created, asset, source, payload = release_inputs(service, owner, complete=False)
     objects = [{"object_id": "box-1", "class_id": "package", "box": [1, 1, 11, 9]}]
     with owner.begin() as connection:
         append_review(
@@ -530,23 +530,43 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
             asset_id=asset.id,
             actor_kind="human",
             actor_id=Actor().id,
-            expected_revision=2,
+            expected_revision=1,
             approval_state="draft",
             review_tier="human_reviewed",
             scope_completeness="unreviewed",
             objects=objects,
         )
-        assessment = connection.execute(
-            select(completeness_assessment).where(
-                completeness_assessment.c.asset_id == source.id,
-                completeness_assessment.c.revision == 2,
+        assert (
+            connection.execute(
+                select(completeness_assessment).where(
+                    completeness_assessment.c.asset_id == source.id
+                )
+            ).first()
+            is None
+        )
+        with pytest.raises(ValueError, match="valid current completeness"):
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=2,
+                approval_state="human_accepted",
+                review_tier="human_reviewed",
+                scope_completeness="exhaustive_for_scope",
+                training_eligible=True,
+                objects=objects,
             )
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
         ).one()
         connection.execute(
             insert(completeness_assessment).values(
                 asset_id=source.id,
-                revision=3,
-                ontology_hash=assessment.ontology_hash,
+                revision=2,
+                ontology_hash=completeness_context_hash(
+                    ontology.class_map, ontology.classes, "Visible packages"
+                ),
                 scope_completeness="exhaustive_for_scope",
                 actor_kind="human",
                 actor_id=Actor().id,
@@ -559,14 +579,14 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
             asset_id=asset.id,
             actor_kind="human",
             actor_id=Actor().id,
-            expected_revision=3,
+            expected_revision=2,
             approval_state="human_accepted",
             review_tier="human_reviewed",
             scope_completeness="exhaustive_for_scope",
             training_eligible=True,
             objects=objects,
         )
-    payload = payload.model_copy(update={"annotation_revisions": {asset.id: 4}})
+    payload = payload.model_copy(update={"annotation_revisions": {asset.id: 3}})
     release = freeze(service, created.id, payload)
     accepted = compile_request(compilation, release.id, recipe=recipe)
     worker = compiler_worker
@@ -581,7 +601,7 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
     assert job.status == "succeeded"
     sample = manifest["samples"][0]
     assert sample["objects"][0]["source_box"] == [1, 1, 11, 9]
-    assert sample["verified_negative"] is False and sample["revision"] == 4
+    assert sample["verified_negative"] is False and sample["revision"] == 3
     assert manifest["class_support"]["package"]["val"] == 1
     labels = worker.objects.read(content_key(sample["label_sha256"])).decode()
     assert labels == sample["objects"][0]["yolo_row"] + "\n"
