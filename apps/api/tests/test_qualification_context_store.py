@@ -117,6 +117,76 @@ def test_assembly_uses_only_scoped_current_stored_inputs_and_real_quality_gates(
     assert connection.execute.call_count == 1  # SELECT only; assembly grants no state change.
 
 
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_assembly_derives_lineage_from_recorded_inputs_and_selection(monkeypatch, side, calibrated):
+    from labelloop_core.evaluation_lifecycle import EvaluationSet
+
+    connection, args, expected, readers = setup(monkeypatch, side)
+    args.pop("lineage")
+    inputs = ModelInputGroups(
+        ("inherited-training", "train-group"), (), references=("recorded-reference",)
+    )
+    readers["model_input_groups"].return_value = inputs
+    calibration = None
+    if calibrated:
+        calibration = EvaluationSet(
+            "calibration-set", args["project_key"], ("calibration-group",), "calibration"
+        )
+        final = expected.current_final_test
+        assessment = final.assessments[0]
+        final = replace(
+            final,
+            assessments=(
+                replace(
+                    assessment,
+                    selection=replace(
+                        assessment.selection,
+                        calibration_run_id="calibration-run",
+                        calibration_set_id=calibration.release_id,
+                    ),
+                ),
+            ),
+        )
+        readers["load_final_test"].return_value = final
+        original = readers["load_evaluation_set"].side_effect
+        readers["load_evaluation_set"].side_effect = lambda *a, **kw: (
+            calibration if kw["role"] == "calibration" else original(*a, **kw)
+        )
+    loaded = store.load_qualification_context(connection, **args)
+    assert loaded.evidence.lineage.training_group_ids == inputs.training
+    assert loaded.evidence.lineage.reference_group_ids == inputs.references
+    assert loaded.evidence.lineage.development == expected.evidence.lineage.development
+    assert loaded.evidence.lineage.calibration == calibration
+    assert loaded.evidence.annotation_audit == expected.evidence.annotation_audit
+    readers["model_input_groups"].assert_called_once_with(
+        connection, project_id="project-id", model_id="model-id"
+    )
+    assert connection.execute.call_count == 1
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("influence", ["training", "selection", "recorded_selection", "references"])
+@pytest.mark.parametrize("role", ["final", "canary"])
+def test_derived_lineage_does_not_hide_recorded_influence(monkeypatch, side, influence, role):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    args.pop("lineage")
+    group = (
+        expected.current_final_test.dataset.group_ids[0]
+        if role == "final"
+        else expected.evidence.canary_audit.sources[0].group_id
+    )
+    inputs = readers["model_input_groups"].return_value
+    readers["model_input_groups"].return_value = replace(
+        inputs, **{influence: (*getattr(inputs, influence), group)}
+    )
+    with pytest.raises(ValueError, match="overlap|fresh"):
+        store.load_qualification_context(connection, **args)
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
 @pytest.mark.parametrize(
     "field", ["project_key", "recipe_key", "model_key", "evaluation_key", "qualification_key"]
 )
@@ -149,8 +219,11 @@ def test_outcome_refs_reject_empty_identity(field):
         "load_annotation_evidence",
     ],
 )
-def test_missing_or_conflicting_record_never_yields_a_context(monkeypatch, reader):
+@pytest.mark.parametrize("derived", [False, True])
+def test_missing_or_conflicting_record_never_yields_a_context(monkeypatch, reader, derived):
     connection, args, _, readers = setup(monkeypatch)
+    if derived:
+        args.pop("lineage")
     readers[reader].side_effect = ValueError("missing or current group conflict")
     with pytest.raises(ValueError, match="missing or current group conflict"):
         store.load_qualification_context(connection, **args)

@@ -6,7 +6,49 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Original automatic-acceptance policy snapshot — pending Actions
+## Server-derived qualification lineage — pending Actions
+
+The existing context assembler can now derive lineage without a supplied assertion.
+It uses the same persisted checkpoint/teacher/reference input reader for training
+and recorded reference groups, and the committed final exposure for development
+and optional calibration identities. Canonical evaluation readers still reload
+complete current membership and enforce identity/role. The existing qualification
+engine and input-isolation checks still reject final/fresh-canary reuse of training,
+compiled selection, recorded selection/calibration or recorded reference groups.
+No second grouping/ancestry engine, endpoint, schema, migration or dependency is added.
+
+Trusted callers may retain conservative additional lineage assertions; omission of
+an actual recorded group still fails closed. Derivation does not invent missing
+historical/external/imported influence, original acceptance/reviewer execution,
+score/threshold calibration, source/condition truth or independent measurements.
+The authenticated service still owns outcome selection; there is no new HTTP grant.
+Ordinary sampling still needs explicit handling of missing original automatic
+provenance and human attribution rather than backfilled policy labels.
+
+Both-recipe adapter cases cover derived training/reference influence, optional
+calibration, missing/conflicting readers and final/canary reuse. Both-recipe
+PostgreSQL controls reconnect and assemble without a lineage argument, compare
+against independently reloaded input groups, consume the context in the actual
+automatic-acceptance guard and reject a clean canary on a compiled selection group.
+They retain complete registry heads/event count. New assertions await exact-head
+Actions; copied fixture metrics are software mechanics, not domain gold.
+
+Baseline `febaf9062e1c42d3556a668915fb5d878a5171f8`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42496406613) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42496406204) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42496406613/job/128779638747),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42496406613/job/128779638888),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42496406613/job/128779638738),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract. This verifies the original snapshot slice below, not this new
+lineage derivation or HTTP/UI/expanded-restore/milestone acceptance. Required
+independent reviews remain gates. Real null targets fail closed; the fixed
+2026-11-09T12:00:00Z checkpoint and owned fallback are unchanged.
+
+REA angle: reuse the current stored selection and canonical input/evaluation
+readers instead of a second lineage producer or request-supplied group lists.
+
+## Original automatic-acceptance policy snapshot — verified baseline
 
 After the current qualification/drift guard succeeds, the annotation transaction
 now records the checked pipeline and qualification targets using the existing
@@ -29,7 +71,8 @@ legacy records and pre-write failure. Both-recipe PostgreSQL annotation exercise
 now reload the actual saved snapshot, change current reviewer policy and retain the
 original snapshot while rejecting old-context acceptance, and verify injected
 revision/origin failures leave no next-revision provenance before a successful retry.
-These new assertions await exact-head Actions; no local tests or new PASS claimed.
+These assertions passed exact-head Actions at `febaf90`, linked above; no local
+tests ran and no HTTP/UI/expanded-restore or milestone acceptance is inferred.
 
 This records the policy actually checked by the internal acceptance guard, not
 proof the pinned reviewer/prompt/reference pipeline executed, score/threshold

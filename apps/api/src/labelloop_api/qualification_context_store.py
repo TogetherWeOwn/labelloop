@@ -3,9 +3,10 @@
 This read port validates compiled inputs, recorded ancestor selection/calibration
 and linked proposal references against canonical groups, not original pipeline
 execution, measurement truth or complete historical/external influence.
-The authorized service must derive the remaining lineage and outcome selectors from
-trusted producers. No production route may treat caller-supplied lineage as that
-producer. The outer transaction and locks must survive through the decision.
+Without a lineage assertion, assembly derives recorded influence and evaluation
+roles from these same readers. Missing historical/external influence is not inferred.
+The authorized service still owns outcome selectors and original execution/measurement
+provenance. The outer transaction and locks must survive through the decision.
 """
 
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ def load_qualification_context(
     qualification_key: str,
     annotation: AnnotationOutcomeRef,
     canary: AnnotationOutcomeRef,
-    lineage: QualificationLineage,
+    lineage: QualificationLineage | None = None,
 ) -> QualificationContext:
     """Reload committed outcomes and fail closed on quality, lifecycle or freshness.
 
@@ -80,7 +81,7 @@ def load_qualification_context(
     ):
         raise ValueError("qualification requires the exact project, recipe and model release")
     inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
-    if not set(inputs.training) <= set(lineage.training_group_ids):
+    if lineage is not None and not set(inputs.training) <= set(lineage.training_group_ids):
         raise ValueError("qualification lineage omits compiled training groups")
     report = stored_report(connection, release, evaluation_key)
     final_test = load_final_test(
@@ -124,6 +125,20 @@ def load_qualification_context(
         dataset_key=report.dataset_release_id,
         role="locked_final_test",
     )
+    for dataset, key, role in (
+        (development, selections[0].development_set_id, "development"),
+        (calibration, calibration_key, "calibration"),
+        (final_dataset, report.dataset_release_id, "locked_final_test"),
+    ):
+        if (dataset is None) != (key is None) or (
+            dataset is not None
+            and (dataset.project_id, dataset.release_id, dataset.role) != (project_key, key, role)
+        ):
+            raise ValueError(
+                "qualification evaluation groups differ from current canonical membership"
+            )
+    if lineage is None:
+        lineage = QualificationLineage(inputs.training, inputs.references, development, calibration)
     if (lineage.development, lineage.calibration, final_test.dataset) != (
         development,
         calibration,

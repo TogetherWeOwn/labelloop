@@ -844,6 +844,30 @@ def exercise_context_assembly(engine, release, final, context, actor):
         )
         _exercise_evaluation_groups(connection, release, annotation, canary, actor)
         loaded = load_qualification_context(connection, **arguments)
+        derived_arguments = {key: value for key, value in arguments.items() if key != "lineage"}
+        derived = load_qualification_context(connection, **derived_arguments)
+        from labelloop_api.training_group_store import model_input_groups
+
+        recorded = model_input_groups(connection, project_id=project_id, model_id=model_id)
+        assert derived.evidence.lineage.training_group_ids == recorded.training
+        assert derived.evidence.lineage.reference_group_ids == recorded.references
+        assert derived.evidence.lineage.development == loaded.evidence.lineage.development
+        assert derived.evidence.lineage.calibration == loaded.evidence.lineage.calibration
+        assert replace(derived.evidence, lineage=loaded.evidence.lineage) == loaded.evidence
+        require_automatic_acceptance(
+            connection,
+            **scope,
+            evaluation_key=final.run_id,
+            qualification=derived,
+            scope=context.evidence.scope[0],
+        )
+        assert load_registry(connection, **scope) == before
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+            ).scalar_one()
+            == count
+        )
         assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit
@@ -883,8 +907,6 @@ def exercise_context_assembly(engine, release, final, context, actor):
         validation_sample = next(
             sample for sample in manifest["samples"] if sample["split"] == "val"
         )
-        from labelloop_api.training_group_store import model_input_groups
-
         inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
         assert inputs.training == training_groups
         assert {
@@ -920,6 +942,10 @@ def exercise_context_assembly(engine, release, final, context, actor):
                 ValueError, match="canary groups overlap compiled checkpoint selection"
             ):
                 load_qualification_context(connection, **(arguments | {"canary": reused}))
+            with pytest.raises(
+                ValueError, match="canary groups overlap compiled checkpoint selection"
+            ):
+                load_qualification_context(connection, **(derived_arguments | {"canary": reused}))
             with pytest.raises(
                 ValueError, match="canary groups overlap compiled checkpoint selection"
             ):
@@ -1147,6 +1173,8 @@ def exercise_context_assembly(engine, release, final, context, actor):
     return {
         "scope": "synthetic canonical assembly/acceptance mechanics, never domain quality or HTTP",
         "reconnected_model_report_policy_final_and_both_measured_outcomes": True,
+        "lineage_derived_from_recorded_inputs_and_selection_without_assertion": True,
+        "derived_context_passes_acceptance_and_rejects_selection_group_canary": True,
         "canonical_training_reload_rejects_omitted_groups_and_new_relations_in_consumers": True,
         "canonical_evaluation_groups_recover_and_reject_missing_or_conflicting_sources": True,
         "assembly_rejects_declared_group_substitution_and_new_evaluation_relations": True,
