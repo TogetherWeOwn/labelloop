@@ -212,7 +212,10 @@ class CanonicalLocalTrainingWorker:
     workspace_id: UUID
     backend: LocalBackendFactory
 
-    def train(self, context: CompileContext) -> dict:
+    def resolve(
+        self, context: CompileContext
+    ) -> tuple[TrainingRequest, dict, tuple[EvaluationImage, ...]]:
+        """Recheck immutable intent/compiler authority before training or export I/O."""
         lease, inputs = context.lease, context.lease.input
         if lease.kind != "train_local" or inputs["workspace_id"] != str(self.workspace_id):
             raise ValueError("training workspace or kind mismatch")
@@ -341,7 +344,13 @@ class CanonicalLocalTrainingWorker:
             if sample.split == "val"
             and manifest["release_membership"][sample.asset.asset_id] == "compiled"
         )
-        manifest_data = checked_object(self.objects, digest, limit=2_000_000)
+        return request, manifest, validation_images
+
+    def train(self, context: CompileContext) -> dict:
+        request, manifest, validation_images = self.resolve(context)
+        manifest_data = checked_object(
+            self.objects, request.dataset_manifest_sha256, limit=2_000_000
+        )
         if manifest_data != json_bytes(manifest):
             raise ValueError("stored compiler manifest differs from publication")
         initialization = checked_object(

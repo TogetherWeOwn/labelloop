@@ -312,31 +312,38 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         for path in dataset.rglob("*")
         if path.is_file()
     }
-    exported = export_and_compare(
-        weights=epoch_file,
-        expected_weights_sha256=result.selected.sha256,
-        images=tuple(
-            dataset / sample["image_path"]
-            for sample in manifest["samples"]
-            if sample["split"] == "val"
-        ),
-        policy=request.policy,
-        evidence=output / "export-equivalence.json",
-    )
-    from labelloop_api.management_model_worker import collect_export
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_api.management_model_worker import export_training
 
-    saved_exports = {}
-    export_stage = collect_export(
-        result,
-        manifest,
-        epoch_file.with_suffix(".onnx"),
-        asdict(exported),
-        SimpleNamespace(put=lambda key, data: saved_exports.__setitem__(key, data)),
-    )
-    assert saved_exports == {
-        export_stage["export_key"]: epoch_file.with_suffix(".onnx").read_bytes()
+    # Exercise the real orchestration helper with CPU export_and_compare, not a
+    # synthetic exporter. This standalone fixture still does not prove DB wiring.
+    stored = saved_checkpoints | {
+        content_key(digest): (dataset / name).read_bytes()
+        for name, digest in manifest["file_hashes"].items()
     }
+    stored[content_key(request.dataset_manifest_sha256)] = (dataset / "manifest.json").read_bytes()
+    saved_exports, results = {}, []
+
+    def exporter(**kwargs):
+        exported = export_and_compare(**kwargs)
+        (output / "export-equivalence.json").write_bytes(kwargs["evidence"].read_bytes())
+        results.append(exported)
+        return asdict(exported)
+
+    export_stage = export_training(
+        request,
+        manifest,
+        stage_record,
+        SimpleNamespace(
+            read=stored.__getitem__,
+            put=lambda key, data: saved_exports.__setitem__(key, data),
+        ),
+        exporter,
+    )
+    exported = results[0]
+    assert list(saved_exports) == [export_stage["export_key"]]
     assert export_stage["evidence"] == asdict(exported)
+    epoch_file.with_suffix(".onnx").write_bytes(saved_exports[export_stage["export_key"]])
     assert exported.static_input_signature == (1, 3, side, side)
     assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
     assert exported.sample_count == len(validation_images)

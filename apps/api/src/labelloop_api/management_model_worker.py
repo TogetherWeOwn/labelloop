@@ -1,24 +1,139 @@
 """Local export collection and atomic candidate publication, never qualification.
 
-The ML process supplies export_and_compare evidence. No default worker, export
-stage or app mount is installed here; deployment owns that trusted composition.
+The ML process supplies the export_and_compare adapter. The stage rechecks pinned
+intent and bytes, never exporter-selected identity or paths. No default worker or
+app mount is installed here; deployment owns that trusted composition.
 """
 
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
+from typing import Protocol
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from labelloop_compiler.compiler import json_bytes
 from labelloop_core.json_records import canonical_json
 from labelloop_core.registry import ModelRelease
-from labelloop_core.training import TrainingResult
+from labelloop_core.training import InferencePolicy, TrainingRequest, TrainingResult
 
-from .management_compile_worker import CompilationObjects, CompileLease, content_key
-from .management_train_worker import CanonicalLocalTrainingWorker, decode_training
-from .model_store import record_digest, save_model_transaction, validate_export
+from .management_compile_worker import CompilationObjects, CompileContext, CompileLease, content_key
+from .management_train_worker import (
+    CanonicalLocalTrainingWorker,
+    checked_object,
+    decode_training,
+    materialize_dataset,
+    validate_runtime_evidence,
+)
+from .model_store import (
+    decode_report,
+    record_digest,
+    save_model_transaction,
+    validate_checkpoint_reports,
+    validate_export,
+)
+
+
+class LocalExporter(Protocol):
+    def __call__(
+        self,
+        *,
+        weights: Path,
+        expected_weights_sha256: str,
+        images: tuple[Path, ...],
+        policy: InferencePolicy,
+        evidence: Path,
+    ) -> dict: ...
+
+
+class ModelContext(CompileContext, Protocol):
+    artifacts: dict
+
+
+def export_training(
+    request: TrainingRequest,
+    manifest: dict,
+    record: dict,
+    objects: CompilationObjects,
+    exporter: LocalExporter,
+) -> dict:
+    """Run the controlled exporter on hash-verified saved training and recipe pixels.
+
+    The caller supplies an already-authorized request/manifest, not model output.
+    No original test images or initialization checkpoint are needed on resume.
+    """
+    result = decode_training(record["result"])
+    if (
+        result.request != request
+        or len(result.checkpoints) != request.epochs
+        or {item.epoch for item in result.checkpoints} != set(range(request.epochs))
+        or record["checkpoint_keys"]
+        != {item.sha256: content_key(item.sha256) for item in result.checkpoints}
+    ):
+        raise ValueError("export training differs from authorized request")
+    validate_runtime_evidence(
+        request, manifest, record["tensor_shapes"], record["target_retention"]
+    )
+    validate_checkpoint_reports(
+        result, tuple(decode_report(item) for item in record["reports"]), manifest["class_map"]
+    )
+    # Use at most 16 deterministic validation derivatives, never train/test samples.
+    names = sorted(
+        sample["image_path"] for sample in manifest["samples"] if sample["split"] == "val"
+    )
+    if (
+        not names
+        or len(set(names)) != len(names)
+        or any(
+            name not in manifest["file_hashes"]
+            or PurePosixPath(name).parts[:2] != ("images", "val")
+            for name in names
+        )
+    ):
+        raise ValueError("export needs distinct compiled validation samples")
+    if checked_object(objects, request.dataset_manifest_sha256, limit=2_000_000) != json_bytes(
+        manifest
+    ):
+        raise ValueError("stored compiler manifest differs from publication")
+    data = checked_object(objects, result.selected.sha256, limit=256_000_000)
+    with TemporaryDirectory(prefix="canonical-export-") as temporary:
+        root = Path(temporary)
+        dataset = root / "dataset"
+        materialize_dataset(objects, manifest, dataset)
+        weights = root / "selected.pt"
+        weights.write_bytes(data)
+        images = tuple(dataset / name for name in names[:16])
+        evidence = exporter(
+            weights=weights,
+            expected_weights_sha256=result.selected.sha256,
+            images=images,
+            policy=request.policy,
+            evidence=root / "export-equivalence.json",
+        )
+        if (
+            evidence.get("sample_count") != len(images)
+            or weights.is_symlink()
+            or not weights.is_file()
+            or weights.stat().st_size != len(data)
+            or weights.read_bytes() != data
+        ):
+            raise ValueError("export changed its checkpoint or sample coverage")
+        return collect_export(result, manifest, weights.with_suffix(".onnx"), evidence, objects)
+
+
+@dataclass(frozen=True)
+class CanonicalLocalExportWorker:
+    training: CanonicalLocalTrainingWorker
+    exporter: LocalExporter
+
+    def export(self, context: ModelContext) -> dict:
+        request, manifest, _ = self.training.resolve(context)
+        return export_training(
+            request, manifest, context.artifacts["training"], self.training.objects, self.exporter
+        )
 
 
 def candidate_release(

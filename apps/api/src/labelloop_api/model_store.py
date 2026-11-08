@@ -141,6 +141,14 @@ def validate_training(
         or manifest["recipe"]["output_size"] != request.policy.imgsz
     ):
         raise ValueError("persisted variant digests or recipe do not match training")
+    validate_checkpoint_reports(result, reports, context["class_map"])
+
+
+def validate_checkpoint_reports(
+    result: TrainingResult, reports: tuple[EvaluationReport, ...], class_map: dict
+) -> None:
+    """Shared artifact-only gate, including export before training is published."""
+    request = result.request
     if len(reports) != len(result.checkpoints) or {r.run_id for r in reports} != {
         c.evaluation_run_id for c in result.checkpoints
     }:
@@ -154,7 +162,7 @@ def validate_training(
             or report.weights_sha256 != checkpoint.sha256
             or report.class_map_sha256 != request.class_map_sha256
             or report.policy != request.policy
-            or set(report.overall.per_class) != set(context["class_map"])
+            or set(report.overall.per_class) != set(class_map)
             or report.overall.map50_95 != checkpoint.validation_map
         ):
             raise ValueError("checkpoint evaluation lineage mismatch")

@@ -514,6 +514,55 @@ Export/model publication, standalone evaluation, final role provisioning, mounte
 app and actual new-project-to-export acceptance remain open. No qualification or
 default mount is introduced here.
 
+### Candidate export and trusted execution (partial, unmounted)
+
+`CanonicalLocalModelPublisher` composes the training/report sink and delivered
+model-store lineage/export validation inside the existing queue application
+transaction. Candidate identity, class order, preprocessing and policy come from
+verified training, not exporter-selected registry fields. The candidate, its
+selected development-evaluation link, attributed export receipt, training/reports
+and queue success commit together. No promotion or qualification is performed.
+`collect_export` validates the controlled export evidence and actual bounded ONNX
+bytes before content-addressed upload. It is a collector, not an ONNX verifier.
+
+`CanonicalLocalExportWorker(training, exporter)` supplies the next `export` stage
+for the same `train_local` job. Its trusted callable port matches the delivered
+ML `export_and_compare` keyword arguments and returns its dataclass as a dictionary;
+only the ML process imports the vendor implementation. Before any object access,
+the stage reuses `training.resolve` to recheck owned durable human intent, historical
+profile/request, frozen truth and fenced compiler authority. The shared artifact
+validator checks saved checkpoint reports; request/epoch/key and actual shape/
+retention evidence are rechecked before a checkpoint can reach the exporter.
+
+The execution helper rehashes the published manifest, selected checkpoint and
+compiled files in fresh worker-owned temporary paths. It deterministically chooses
+at most 16 distinct validation derivatives in path order, never training or final
+test pixels for comparison. The callback receives only those paths, verified digest
+and server-pinned inference policy, not arbitrary output paths or commands from a
+stage artifact. Only the fixed adjacent `selected.onnx` is collected. Returned
+comparison coverage must match the supplied samples, the selected checkpoint must
+remain unchanged, and all temporary paths are cleaned after success or failure.
+Transport bounds still belong to the object adapter. No initialization download,
+retraining or new controller is needed after a saved training stage.
+
+Trusted deployment composition uses existing `JobRunner` stages `training` then
+`export`, with `CanonicalLocalModelPublisher.publish` as the completion sink.
+No default handler/worker, app mount or production grant is installed here. Native
+lease renewal, bounded retries, immutable stages, cancellation and application
+fencing remain the only scheduler/recovery authority. An export retry can reuse
+saved training; saved training plus export can publish without ML/object I/O.
+Unreferenced immutable objects after a storage or lease failure are not candidates.
+
+New disposable Actions cases use real canonical/compiler/queue authority with an
+explicitly synthetic exporter: both recipe sizes, owned-intent and saved-artifact
+refusal before I/O, corrupt manifest/checkpoint/dataset, callback/output failures,
+cleanup and saved-training retry followed by atomic candidate publication. Existing
+actual CPU 320/640 smoke now runs the orchestration helper with the delivered
+`export_and_compare`, without a second export. These cases are commissioned, not
+verified until exact-head Actions completes. They still do not establish a DB-backed
+new-project-to-CPU-export path. Standalone evaluation, detailed reads, full runtime
+registration/grants, effective setup, admission and final mounting remain open.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`

@@ -106,6 +106,262 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_export_stage(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_api.management_model_worker import CanonicalLocalExportWorker
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.objects.put(
+        content_key(training["result"]["selected"]["sha256"]), b"synthetic weights"
+    )
+    paths = []
+
+    def exporter(**kwargs):
+        weights = kwargs["weights"]
+        paths.extend([weights, kwargs["evidence"], *kwargs["images"]])
+        assert weights.read_bytes() == b"synthetic weights"
+        assert kwargs["expected_weights_sha256"] == training["result"]["selected"]["sha256"]
+        assert kwargs["policy"].imgsz == (320 if "320" in recipe else 640)
+        assert len(kwargs["images"]) == 1
+        for image in kwargs["images"]:
+            assert image.parts[-3:-1] == ("images", "val")
+            assert Image.open(image).size == (kwargs["policy"].imgsz,) * 2
+        assert not kwargs["evidence"].exists() and not weights.with_suffix(".onnx").exists()
+        weights.with_suffix(".onnx").write_bytes(b"synthetic ONNX; not executable export evidence")
+        return exported["evidence"]
+
+    return (
+        CanonicalLocalExportWorker(publisher.training, exporter),
+        publisher,
+        accepted,
+        lease,
+        training,
+        exported,
+        paths,
+    )
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_export_stage_resolves_saved_training_and_publishes_through_queue(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_worker_core.jobs import StageContext
+
+    stage, publisher, accepted, lease, training, exported, paths = prepared_export_stage(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    record = stage.export(StageContext(compiler_worker.store, lease, {"training": training}))
+    assert record == exported
+    assert paths and all(not path.exists() for path in paths)
+    assert compiler_worker.objects.read(record["export_key"]) == (
+        b"synthetic ONNX; not executable export evidence"
+    )
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+    compiler_worker.store.save_stage(lease, "export", record)
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    assert len(model_publication_state(database[1], accepted)[0]) == 1
+
+
+@pytest.mark.parametrize("change", ["request", "keys", "report", "shapes", "retention"])
+def test_export_stage_refuses_forged_training_before_object_or_exporter_access(
+    database, compilation, compiler_worker, change
+):
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import StageContext
+
+    stage, _, _, lease, training, _, _ = prepared_export_stage(
+        database, compilation, compiler_worker
+    )
+    if change == "request":
+        training["result"]["request"]["initialization_sha256"] = "0" * 64
+    elif change == "keys":
+        training["checkpoint_keys"] = {}
+    elif change == "report":
+        training["reports"][0]["role"] = "locked_final_test"
+    elif change == "shapes":
+        training["tensor_shapes"]["training"] = [[1, 3, 352, 352]]
+    else:
+        training["target_retention"] = []
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("forged training must fail before I/O")
+
+    stage = replace(
+        stage,
+        training=replace(stage.training, objects=SimpleNamespace(read=unexpected, put=unexpected)),
+        exporter=unexpected,
+    )
+    with pytest.raises(ValueError):
+        stage.export(StageContext(compiler_worker.store, lease, {"training": training}))
+
+
+@pytest.mark.parametrize("change", ["workspace", "kind", "requester", "variant"])
+def test_export_stage_rechecks_owned_intent_before_object_or_exporter_access(
+    database, compilation, compiler_worker, change
+):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import StageContext
+
+    stage, _, _, lease, training, _, _ = prepared_export_stage(
+        database, compilation, compiler_worker
+    )
+    inputs = deepcopy(lease.input)
+    if change == "workspace":
+        inputs["workspace_id"] = str(uuid4())
+    elif change == "requester":
+        inputs["requested_by"] = "forged"
+    elif change == "variant":
+        inputs["variant_id"] = str(uuid4())
+    lease = replace(lease, input=inputs, kind="compile_variant" if change == "kind" else lease.kind)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("forged authority must fail before I/O")
+
+    stage = replace(
+        stage,
+        training=replace(stage.training, objects=SimpleNamespace(read=unexpected, put=unexpected)),
+        exporter=unexpected,
+    )
+    with pytest.raises(ValueError):
+        stage.export(StageContext(compiler_worker.store, lease, {"training": training}))
+
+
+@pytest.mark.parametrize("corrupt", ["manifest", "checkpoint", "dataset"])
+def test_export_stage_refuses_corrupt_bytes_before_exporter(
+    database, compilation, compiler_worker, corrupt
+):
+    from types import SimpleNamespace
+
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_worker_core.jobs import StageContext
+
+    stage, _, _, lease, training, _, _ = prepared_export_stage(
+        database, compilation, compiler_worker
+    )
+    _, manifest, _ = stage.training.resolve(StageContext(compiler_worker.store, lease, {}))
+    broken = {
+        "manifest": lease.input["manifest_key"],
+        "checkpoint": content_key(training["result"]["selected"]["sha256"]),
+        "dataset": content_key(manifest["file_hashes"]["class-map.json"]),
+    }[corrupt]
+
+    def read(key):
+        return b"corrupt" if key == broken else compiler_worker.objects.read(key)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("corrupt bytes must fail before exporter/upload")
+
+    stage = replace(
+        stage,
+        training=replace(stage.training, objects=SimpleNamespace(read=read, put=unexpected)),
+        exporter=unexpected,
+    )
+    with pytest.raises(ValueError, match="digest differs"):
+        stage.export(StageContext(compiler_worker.store, lease, {"training": training}))
+
+
+@pytest.mark.parametrize("failure", ["raises", "checkpoint", "coverage", "missing"])
+def test_export_stage_failure_cleans_paths_without_upload_or_publication(
+    database, compilation, compiler_worker, failure
+):
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import StageContext
+
+    stage, _, accepted, lease, training, _, paths = prepared_export_stage(
+        database, compilation, compiler_worker
+    )
+
+    def exporter(**kwargs):
+        evidence = stage.exporter(**kwargs).copy()
+        if failure == "raises":
+            raise ValueError("synthetic export failure")
+        if failure == "checkpoint":
+            kwargs["weights"].write_bytes(b"mutated checkpoint")
+        elif failure == "coverage":
+            evidence["sample_count"] = 2
+        else:
+            kwargs["weights"].with_suffix(".onnx").unlink()
+        return evidence
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid export must not upload")
+
+    broken = replace(
+        stage,
+        training=replace(
+            stage.training,
+            objects=SimpleNamespace(read=compiler_worker.objects.read, put=unexpected),
+        ),
+        exporter=exporter,
+    )
+    with pytest.raises(ValueError):
+        broken.export(StageContext(compiler_worker.store, lease, {"training": training}))
+    assert paths and all(not path.exists() for path in paths)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+
+
+def test_export_stage_retry_uses_saved_training_then_atomic_completion(
+    database, compilation, compiler_worker
+):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    stage, publisher, accepted, lease, training, _, _ = prepared_export_stage(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("saved training must not execute again")
+
+    calls = []
+
+    def exporter(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("synthetic transient export failure")
+        return stage.exporter(**kwargs)
+
+    worker = replace(stage, exporter=exporter)
+    runner = JobRunner(
+        compiler_worker.store,
+        "train_local",
+        (Stage("training", unexpected), Stage("export", worker.export)),
+        publisher.publish,
+        job_id=lease.job_id,
+    )
+    assert runner.run_once("replacement")
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET available_at=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+    assert runner.run_once("replacement")
+    assert not runner.run_once("replacement")
+    assert len(calls) == 2
+    assert len(model_publication_state(database[1], accepted)[0]) == 1
+    assert training_publication_state(database[1], accepted)[4].generation == 3
+
+
 def prepared_model_publication(
     database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
 ):
