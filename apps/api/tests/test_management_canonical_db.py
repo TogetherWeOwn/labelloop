@@ -184,13 +184,14 @@ def test_canonical_reads_project_asset_release_and_current_revisions(database):
 
 
 def test_canonical_read_pages_are_bounded_and_scoped_keysets(database):
-    service, _, _ = database
+    service, owner, _ = database
     created = [create(service, key=f"create-{index}") for index in range(3)]
     target = created[0].id
     assets = [
         ingest(service, target, image_payload(index + 1), key=f"asset-{index}")
         for index in range(3)
     ]
+    other_asset = ingest(service, created[1].id, key="other-project-asset")
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     actor = Reader()
     first = reads.list_projects(actor, None, 2)
@@ -202,10 +203,29 @@ def test_canonical_read_pages_are_bounded_and_scoped_keysets(database):
     one = reads.list_resources(actor, target, "asset", None, 1)
     two = reads.list_resources(actor, target, "asset", one.next_cursor, 1)
     three = reads.list_resources(actor, target, "asset", two.next_cursor, 1)
-    assert [item.id for item in one.items + two.items + three.items] == sorted(
-        item.id for item in assets
-    )
+    # The public asset key and internal UUID are independently generated.
+    # Keyset order is the internal UUID, not lexical order of the public key.
+    with owner.connect() as connection:
+        ordered = connection.execute(
+            select(source_asset.c.id, source_asset.c.asset_key)
+            .where(source_asset.c.project_id == target)
+            .order_by(source_asset.c.id)
+        ).all()
+    expected = [row.asset_key for row in ordered]
+    assert set(expected) == {item.id for item in assets}
+    assert other_asset.id not in expected
+    assert [item.id for item in one.items + two.items + three.items] == expected
+    assert one.next_cursor.rsplit(".", 1)[1] == ordered[0].id.hex
+    assert two.next_cursor.rsplit(".", 1)[1] == ordered[1].id.hex
     assert three.next_cursor is None
+    for limit in (2, 3, 100):
+        page = reads.list_resources(actor, target, "asset", None, limit)
+        found = list(page.items)
+        if page.next_cursor is not None:
+            page = reads.list_resources(actor, target, "asset", page.next_cursor, limit)
+            found.extend(page.items)
+        assert page.next_cursor is None
+        assert [item.id for item in found] == expected
     for call in (
         lambda: reads.list_resources(actor, target, "asset", first.next_cursor, 1),
         lambda: reads.list_resources(actor, created[1].id, "asset", one.next_cursor, 1),
@@ -214,6 +234,50 @@ def test_canonical_read_pages_are_bounded_and_scoped_keysets(database):
     ):
         with pytest.raises(ManagementFailure, match="invalid_request"):
             call()
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 100])
+def test_canonical_release_pages_keep_frozen_revisions_after_later_review(database, limit):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    releases = [
+        freeze(
+            service,
+            created.id,
+            payload.model_copy(update={"expected_revision": 2 + index}),
+            key=f"freeze-{index}",
+        )
+        for index in range(3)
+    ]
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            training_eligible=True,
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    cursor = None
+    found = []
+    for _ in range(3):
+        page = reads.list_resources(Reader(), created.id, "dataset-release", cursor, limit)
+        assert 1 <= len(page.items) <= limit
+        found.extend(page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    assert cursor is None
+    assert found == sorted(releases, key=lambda item: item.id)
+    assert reads.read(Reader(), "asset", asset.id).revision == 3
+    assert all(item.revision == 1 and item.state == "frozen" for item in found)
+    assert counts(owner, created.id) == before
 
 
 @pytest.mark.parametrize("cursor", ["bad", "a" * 129, "a" * 32 + "." + "z" * 32])
