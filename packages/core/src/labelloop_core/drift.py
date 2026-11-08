@@ -132,8 +132,15 @@ class AcceptanceState:
         if self.is_paused(scope):
             raise ValueError("automatic acceptance paused for affected class/source/condition")
         self._require_not_invalidated(release, context, (scope,))
+        self._require_remediation(context, (scope,))
+
+    def _require_remediation(
+        self,
+        context: QualificationContext,
+        scope: tuple[ScopeCell, ...],
+    ) -> None:
         if any(
-            scope in item.scope
+            set(scope) & set(item.scope)
             and self.incident_reference(item.pause_id) not in context.evidence.remediation_for
             for item in self.pauses
         ):
@@ -183,9 +190,8 @@ class AcceptanceState:
                 or not set(previous.scope) <= set(context.evidence.scope)
             ):
                 raise ValueError("resume requires a new qualified release covering affected scope")
-            if self.incident_reference(pause_id) not in context.evidence.remediation_for:
-                raise ValueError("resume requires post-incident qualification and canary evidence")
             self._require_not_invalidated(release, context, previous.scope)
+            self._require_remediation(context, previous.scope)
         return replace(
             self,
             revision=self.revision + 1,

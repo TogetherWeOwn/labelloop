@@ -308,6 +308,21 @@ def test_declared_error_target_requires_independent_group_sample_bound() -> None
         audit.require_quality(current.current_pipeline, current.evidence.scope, targets)
 
 
+@pytest.mark.parametrize("canary", [False, True])
+def test_zero_precision_target_still_requires_configured_independent_support(canary: bool) -> None:
+    current = context()
+    audit = replace(current.evidence.annotation_audit, truth_basis="adjudicated")
+    targets = replace(current.evidence.targets, fixture_only=False, min_accepted_precision=0.0)
+    audit.require_quality(current.current_pipeline, current.evidence.scope, targets, canary=canary)
+    with pytest.raises(ValueError, match="independent source-group support"):
+        audit.require_quality(
+            current.current_pipeline,
+            current.evidence.scope,
+            replace(targets, min_audit_groups=2, min_canary_groups=2),
+            canary=canary,
+        )
+
+
 def test_critical_ap50_regression_fails_even_when_map50_95_passes() -> None:
     release = model(320)
     good = report(release)

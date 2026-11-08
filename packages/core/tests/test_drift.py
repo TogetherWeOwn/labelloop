@@ -204,6 +204,81 @@ def test_predrift_qualification_or_relabelled_old_canary_cannot_clear_an_inciden
         resumed.require_acceptance(second, report(second), old, first_context.evidence.scope[0])
 
 
+def test_successive_drift_resumption_requires_all_overlapping_incidents() -> None:
+    first, second, third = model(320), model(320, "second"), model(320, "third")
+    gate = PromotionPolicy(1, 0.9)
+    scope = (
+        ScopeCell("object", "camera-a", "ordinary"),
+        ScopeCell("object", "camera-b", "ordinary"),
+    )
+    first_context = qualification_context(first, report(first), gate, scope=scope)
+    paused_first = AcceptanceState(first.project_id, first.recipe_id).pause(
+        first,
+        pause_id="first-drift",
+        qualification_id=first_context.evidence.qualification_id,
+        scope=(scope[0],),
+        reason="first camera shift",
+        expected_revision=0,
+    )
+    first_incident = paused_first.incident_reference("first-drift")
+    second_context = qualification_context(
+        second, report(second), gate, scope=scope, remediation_for=(first_incident,)
+    )
+    resumed_first = paused_first.resume(
+        second, report(second), second_context, pause_ids=("first-drift",), expected_revision=1
+    )
+    resumed_first.require_acceptance(second, report(second), second_context, scope[0])
+    paused_second = resumed_first.pause(
+        second,
+        pause_id="second-drift",
+        qualification_id=second_context.evidence.qualification_id,
+        scope=(scope[0],),
+        reason="second camera shift",
+        expected_revision=2,
+    )
+    second_incident = paused_second.incident_reference("second-drift")
+    # Neither the latest incident alone nor the historical incident alone is sufficient.
+    for incidents in ((second_incident,), (first_incident,)):
+        incomplete = qualification_context(
+            third, report(third), gate, scope=scope, remediation_for=incidents
+        )
+        with pytest.raises(ValueError, match="post-incident"):
+            paused_second.resume(
+                third, report(third), incomplete, pause_ids=("second-drift",), expected_revision=3
+            )
+        assert paused_second.revision == 3 and paused_second.is_paused(scope[0])
+    # A historical incident in another source must not become a global requirement.
+    paused_other = paused_second.pause(
+        first,
+        pause_id="other-source-drift",
+        qualification_id=first_context.evidence.qualification_id,
+        scope=(scope[1],),
+        reason="unrelated source shift",
+        expected_revision=3,
+    )
+    complete = qualification_context(
+        third,
+        report(third),
+        gate,
+        scope=scope,
+        remediation_for=(first_incident, second_incident),
+    )
+    restored = loads(dumps(paused_other), AcceptanceState)
+    complete = loads(dumps(complete), QualificationContext)
+    resumed_second = restored.resume(
+        third, report(third), complete, pause_ids=("second-drift",), expected_revision=4
+    )
+    resumed_second = loads(dumps(resumed_second), AcceptanceState)
+    assert resumed_second.revision == 5 and not resumed_second.is_paused(scope[0])
+    resumed_second.require_acceptance(third, report(third), complete, scope[0])
+    assert resumed_second.is_paused(scope[1])
+    with pytest.raises(ValueError, match="paused"):
+        resumed_second.require_acceptance(third, report(third), complete, scope[1])
+    assert resumed_second.pauses[:1] == resumed_first.pauses
+    with pytest.raises(ValueError, match="drift-invalidated"):
+        resumed_second.require_acceptance(first, report(first), first_context, scope[0])
+
+
 def test_resume_rejects_a_historically_drift_invalidated_release_before_mutating_state() -> None:
     first, second = model(320), model(320, "second")
     gate = PromotionPolicy(1, 0.9)

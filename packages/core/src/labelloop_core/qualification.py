@@ -226,7 +226,7 @@ class AnnotationEvidence:
         assert targets.min_accepted_precision is not None
         assert targets.min_discovery_recall is not None
         assert targets.max_geometry_error is not None
-        if not targets.fixture_only:
+        if not targets.fixture_only and targets.min_accepted_precision > 0:
             minimum = audit_sample_size(1 - targets.min_accepted_precision, minimum)
         for item in self.measurements:
             covered = {
