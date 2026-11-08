@@ -18,6 +18,7 @@ INVALIDATING_OPERATIONS = (
     "save_source_policy_draft",
     "enroll_reference",
     "accept_reference",
+    "revalidate_reference",
     "withdraw_reference",
 )
 

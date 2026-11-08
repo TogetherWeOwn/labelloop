@@ -25,6 +25,7 @@ from .management_contracts import (
     ProjectCreate,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceRevalidate,
     ReferenceWithdraw,
     ReleaseFreeze,
     Resource,
@@ -37,6 +38,7 @@ from .management_ports import ManagementFailure, ManagementPrincipal, MutationCo
 from .management_references import accept_reference as approve_reference
 from .management_references import enroll_reference as create_reference
 from .management_references import reference_context_sha256, require_retired_references
+from .management_references import revalidate_reference as renew_reference
 from .management_references import withdraw_reference as retire_reference
 from .management_release import freeze_candidate
 from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
@@ -663,6 +665,53 @@ class CanonicalManagementMutations:
                     "assignment_version": payload.assignment_version,
                     "reason": payload.reason,
                     "context_sha256": reference_context_sha256(owned),
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
+
+    def revalidate_reference(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ReferenceRevalidate
+    ) -> Resource:
+        self.authorize(actor, context, "revalidate_reference", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            reference, pins = renew_reference(connection, owned, self.workspace_id, payload)
+            policy = dict(owned.access_policy)
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "reference": reference.model_dump(mode="json"),
+                    **pins,
+                    "previous_approval_revision": payload.previous_approval_revision,
+                    "reason": payload.reason,
                     "invalidated_steps": [
                         "scope",
                         "classes",

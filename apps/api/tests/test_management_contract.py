@@ -89,7 +89,13 @@ CATALOG_PUBLISH = {
     "draft_sha256": "a" * 64,
     "reason": "Reviewed catalog version",
 }
+REFERENCE_REVALIDATE = {
+    **REFERENCE_ACCEPT,
+    "expected_revision": 5,
+    "previous_approval_revision": 4,
+}
 MUTATIONS = [
+    ("/projects/p/references/revalidate", "revalidate_reference", REFERENCE_REVALIDATE, 200),
     ("/projects/p/setup/classes/publish", "publish_class_catalog", CATALOG_PUBLISH, 200),
     ("/projects/p/references/withdraw", "withdraw_reference", REFERENCE_WITHDRAW, 200),
     ("/projects/p/setup/approvals", "approve_setup_step", SETUP_APPROVAL, 200),
@@ -786,13 +792,47 @@ def test_catalog_publication_refuses_untrusted_authority(field, value):
     assert service.calls == []
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("previous_approval_revision", 0),
+        ("previous_approval_revision", True),
+        ("previous_approval_revision", "4"),
+        ("expected_revision", True),
+        ("base_ontology_id", ""),
+        ("assignment_version", ""),
+        ("reference_id", ""),
+        ("reason", ""),
+        ("class_id", "other"),
+        ("source", "replacement"),
+        ("approved", True),
+        ("actor_id", "forged"),
+        ("context_sha256", "a" * 64),
+    ],
+)
+def test_reference_revalidation_refuses_identity_replacement_and_untrusted_authority(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/references/revalidate",
+        json={**REFERENCE_REVALIDATE, field: value},
+        headers={"Idempotency-Key": "renewal"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     generate(tmp_path)
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 27
-    assert sum(len(methods) for methods in spec["paths"].values()) == 28
+    assert len(spec["paths"]) == 28
+    assert sum(len(methods) for methods in spec["paths"].values()) == 29
+    assert (
+        spec["paths"]["/projects/{project_id}/references/revalidate"]["post"]["operationId"]
+        == "revalidateReference"
+    )
+    assert "export type ReferenceRevalidate =" in client
     assert (
         spec["paths"]["/projects/{project_id}/setup/classes/publish"]["post"]["operationId"]
         == "publishClassCatalog"

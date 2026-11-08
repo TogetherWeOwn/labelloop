@@ -168,6 +168,11 @@ class ReferenceAccept(Mutation):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
+class ReferenceRevalidate(ReferenceAccept):
+    # A renewal names the latest attributed approval, never replacement metadata.
+    previous_approval_revision: Annotated[int, Field(ge=1)]
+
+
 class ReferenceWithdraw(Mutation):
     reference_id: Identifier
     reason: Annotated[str, Field(min_length=1, max_length=4096)]

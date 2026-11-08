@@ -28,6 +28,7 @@ from .management_contracts import (
     PromotionResult,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceRevalidate,
     ReferenceWithdraw,
     ReleaseFreeze,
     Resource,
@@ -125,6 +126,10 @@ class ManagementOperations(Protocol):
 
     def accept_reference(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ReferenceAccept
+    ) -> Resource: ...
+
+    def revalidate_reference(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ReferenceRevalidate
     ) -> Resource: ...
 
     def withdraw_reference(

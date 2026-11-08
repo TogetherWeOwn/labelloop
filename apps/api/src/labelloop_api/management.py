@@ -24,6 +24,7 @@ from .management_contracts import (
     RecipeId,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceRevalidate,
     ReferenceWithdraw,
     ReleaseFreeze,
     Resource,
@@ -279,6 +280,23 @@ def management_router(
             actor, idempotency_key, "accept_reference", project_id, payload
         )
         return invoke(lambda: service.accept_reference(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/references/revalidate",
+        response_model=Resource,
+        operation_id="revalidateReference",
+    )
+    def revalidate_reference(
+        project_id: Identifier,
+        payload: ReferenceRevalidate,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "revalidate_reference", project_id, payload
+        )
+        return invoke(lambda: service.revalidate_reference(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/references/withdraw",

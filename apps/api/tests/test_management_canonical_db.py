@@ -25,6 +25,7 @@ from labelloop_api.management_contracts import (
     ProjectCreate,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceRevalidate,
     ReferenceWithdraw,
     ReleaseFreeze,
     ScopeDraft,
@@ -2058,6 +2059,361 @@ def test_reference_acceptance_enforces_workspace_context_and_project_ownership(d
             service, other.id, payload.model_copy(update={"expected_revision": 1}), key="other-ref"
         )
     assert counts(owner, created.id)[2] == 3
+
+
+def revalidate(service, project_id, payload, actor=None, key="revalidate-reference"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "revalidate_reference", project_id, payload)
+    return service.revalidate_reference(actor, context, payload)
+
+
+def revalidation_inputs(service, owner):
+    created, source, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    save_scope(service, created.id, scope_payload(4))
+    payload = ReferenceRevalidate(
+        **approval.model_dump(exclude={"expected_revision"}),
+        expected_revision=5,
+        previous_approval_revision=4,
+    )
+    return created, source, payload
+
+
+def test_reference_revalidation_preserves_history_and_binds_current_context(database):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with owner.connect() as connection:
+        before = connection.execute(
+            select(reference_example).where(reference_example.c.id == payload.reference_id)
+        ).one()
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+    result = revalidate(service, created.id, payload)
+    assert result.revision == 6 and result.state == "draft"
+    assert revalidate(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        revalidate(service, created.id, payload.model_copy(update={"reason": "Changed"}))
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.references[0].approval == "admin_approved"
+    assert detail.approved_steps == [] and detail.published_release_id is None
+    with owner.connect() as connection:
+        after = connection.execute(
+            select(reference_example).where(reference_example.c.id == payload.reference_id)
+        ).one()
+        assert after == before
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.revalidate_reference",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.payload["evidence"]["previous_approval_revision"] == 4
+        assert receipt.payload["evidence"]["reason"] == payload.reason
+        assert receipt.payload["evidence"]["reference"] == detail.references[0].model_dump()
+    assert counts(owner, created.id)[2] == 6
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_reference_revalidation_serializes_retries_and_revision(database, same_key):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return revalidate(
+                service, created.id, payload, key="same" if same_key else key
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(6) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id)[2] == 6
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_reference_revalidation_refuses_nonadmin(database, actor):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        revalidate(service, created.id, payload, actor=actor)
+    assert counts(owner, created.id)[2] == 5
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("previous_approval_revision", 3, "revision_conflict"),
+        ("base_ontology_id", "missing", "revision_conflict"),
+        ("assignment_version", "missing", "missing_evidence"),
+        ("reference_id", "missing", "not_found"),
+    ],
+)
+def test_reference_revalidation_checks_explicit_pins(database, field, value, code):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match=code):
+        revalidate(service, created.id, payload.model_copy(update={field: value}))
+    assert counts(owner, created.id)[2] == 5
+
+
+@pytest.mark.parametrize("state", ["proposed", "withdrawn", "unchanged"])
+def test_reference_revalidation_never_reactivates_or_repeats_unchanged_approval(database, state):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    revision = 3
+    if state != "proposed":
+        accept(service, created.id, approval)
+        revision = 4
+    if state == "withdrawn":
+        withdraw(service, created.id, withdrawal_payload(approval))
+        revision = 5
+    payload = ReferenceRevalidate(
+        **approval.model_dump(exclude={"expected_revision"}),
+        expected_revision=revision,
+        previous_approval_revision=4,
+    )
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        revalidate(service, created.id, payload)
+    assert counts(owner, created.id)[2] == revision
+
+
+@pytest.mark.parametrize("change", ["train", "test", "unlocked", "pending", "class-draft"])
+def test_reference_revalidation_rechecks_current_grouping_and_identity(database, change):
+    service, owner, _ = database
+    created, source, payload = revalidation_inputs(service, owner)
+    if change == "class-draft":
+        save_catalog(
+            service,
+            created.id,
+            ClassCatalogDraft(
+                expected_revision=5,
+                base_ontology_id=payload.base_ontology_id,
+                classes=[
+                    {
+                        "stable_id": "package",
+                        "name": "Parcel",
+                        "definition": "Visible parcel",
+                        "aliases": [],
+                        "parent_id": None,
+                        "positive_examples": [],
+                        "exclusions": [],
+                        "mirror_safe": False,
+                    }
+                ],
+            ),
+        )
+        payload = payload.model_copy(update={"expected_revision": 6})
+    elif change == "pending":
+        with owner.begin() as connection:
+            connection.execute(
+                insert(borderline_review).values(
+                    left_asset_id=source.id,
+                    right_asset_id=source.id,
+                    metric="phash",
+                    value="7",
+                    algorithm_version="fixture-v1",
+                    review_state="pending",
+                )
+            )
+    else:
+        with owner.begin() as connection:
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version="assignment-2",
+                    asset_id=source.id,
+                    group_id="group-1",
+                    split="test" if change == "test" else "train",
+                    seed=7,
+                    algorithm="union-find-grouped-stratified-v2",
+                    thresholds={"phash_max_distance": 8},
+                    reason="New assignment",
+                    locked=change != "unlocked",
+                )
+            )
+        payload = payload.model_copy(update={"assignment_version": "assignment-2"})
+    if change == "train":
+        assert revalidate(service, created.id, payload).revision == 6
+        assert (
+            CanonicalManagementReads(service.engine, service.workspace_id)
+            .read_project(Reader(), created.id)
+            .references[0]
+            .approval
+            == "admin_approved"
+        )
+    else:
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            revalidate(service, created.id, payload)
+        assert counts(owner, created.id)[2] == payload.expected_revision
+
+
+@pytest.mark.parametrize(
+    "privilege", ["INSERT ON canonical_event", "UPDATE (access_policy) ON project"]
+)
+def test_reference_revalidation_rolls_back_atomic_receipt_and_invalidation(database, privilege):
+    service, owner, role = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        revalidate(service, created.id, payload)
+    assert counts(owner, created.id)[2] == 5
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} TO "{role}"'))
+    assert revalidate(service, created.id, payload).revision == 6
+
+
+def test_reference_revalidation_chain_and_withdrawal_preserve_read_only_history(database):
+    service, owner, role = database
+    created, _, payload = revalidation_inputs(service, owner)
+    revalidate(service, created.id, payload)
+    save_guide(service, created.id, guide_payload(6))
+    second = payload.model_copy(update={"expected_revision": 7, "previous_approval_revision": 6})
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        revalidate(
+            service,
+            created.id,
+            second.model_copy(update={"previous_approval_revision": 4}),
+            key="old-pin",
+        )
+    assert revalidate(service, created.id, second, key="renew-again").revision == 8
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+        connection.execute(
+            text(f'REVOKE UPDATE (scope, domain, access_policy) ON project FROM "{role}"')
+        )
+        connection.execute(text(f'REVOKE UPDATE (approved) ON reference_example FROM "{role}"'))
+    assert reads.read_project(Reader(), created.id).references[0].approval == "admin_approved"
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (access_policy) ON project TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (approved) ON reference_example TO "{role}"'))
+    withdraw(service, created.id, withdrawal_payload(payload, 8))
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.references[0].approval == "withdrawn"
+    assert counts(owner, created.id)[2] == 9
+
+
+def test_reference_revalidation_enforces_workspace_ownership_and_context(database):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        revalidate(replace(service, workspace_id=uuid4()), created.id, payload)
+    other = create(service, key="other")
+    with pytest.raises(ManagementFailure, match="not_found"):
+        revalidate(
+            service,
+            other.id,
+            payload.model_copy(update={"expected_revision": 1}),
+            key="foreign-ref",
+        )
+    context = MutationContext.bind(Actor(), "renew", "revalidate_reference", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.revalidate_reference(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id)[2] == 5
+
+
+def test_reference_revalidation_cannot_launder_a_historical_holdout(database):
+    service, owner, _ = database
+    created, source, payload = revalidation_inputs(service, owner)
+    for version, split in (("assignment-2", "test"), ("assignment-3", "train")):
+        with owner.begin() as connection:
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version=version,
+                    asset_id=source.id,
+                    group_id="group-1",
+                    split=split,
+                    seed=7,
+                    algorithm="union-find-grouped-stratified-v2",
+                    thresholds={"phash_max_distance": 8},
+                    reason="Changed assignment",
+                    locked=True,
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        revalidate(
+            service, created.id, payload.model_copy(update={"assignment_version": "assignment-3"})
+        )
+    assert counts(owner, created.id)[2] == 5
+
+
+@pytest.mark.parametrize("change", ["scope", "guide", "sources"])
+def test_reference_revalidation_never_falls_back_to_earlier_approval(database, change):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    revalidate(service, created.id, payload)
+    if change == "scope":
+        save_scope(
+            service,
+            created.id,
+            scope_payload(6).model_copy(update={"scope": "New target scope"}),
+            key="scope-again",
+        )
+    elif change == "guide":
+        save_guide(service, created.id, guide_payload(6))
+    else:
+        save_sources(service, created.id, source_policy_payload(6))
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+    assert counts(owner, created.id)[2] == 7
+
+
+def test_reference_revalidation_and_withdrawal_share_the_project_lock(database):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(operation):
+        barrier.wait()
+        try:
+            result = (
+                revalidate(service, created.id, payload)
+                if operation == "renew"
+                else withdraw(service, created.id, withdrawal_payload(payload, 5))
+            )
+            return result.revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("renew", "withdraw")))
+    assert outcomes.count(6) == outcomes.count("revision_conflict") == 1
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.references[0].approval in {"admin_approved", "withdrawn"}
+    assert counts(owner, created.id)[2] == 6
+
+
+@pytest.mark.parametrize("field,value", [("approved", False), ("evidence_provenance", "{}")])
+def test_reference_revalidation_refuses_persisted_history_mismatch(database, field, value):
+    service, owner, _ = database
+    created, _, payload = revalidation_inputs(service, owner)
+    with owner.begin() as connection:
+        connection.execute(
+            reference_example.update()
+            .where(reference_example.c.id == payload.reference_id)
+            .values(**{field: value})
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        revalidate(service, created.id, payload)
+    assert counts(owner, created.id)[2] == 5
 
 
 def withdraw(service, project_id, payload, actor=None, key="withdraw-reference"):

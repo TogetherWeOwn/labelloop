@@ -10,6 +10,7 @@ from .management_contracts import (
     ManagementError,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceRevalidate,
     ReferenceWithdraw,
 )
 from .management_details import ReferenceRead
@@ -220,6 +221,37 @@ def accept_reference(
     return reference.model_copy(update={"approval": "admin_approved"})
 
 
+def revalidate_reference(
+    connection: Connection, project_row, workspace_id, payload: ReferenceRevalidate
+) -> tuple[ReferenceRead, dict]:
+    read_setup_approvals(connection, project_row, workspace_id)
+    history = _reference_history(connection, project_row, workspace_id)
+    if (
+        len(reference_receipts(connection, project_row, workspace_id, "revalidate_reference"))
+        >= 1000
+    ):
+        reject("management_unavailable")
+    entry = next((item for item in history if item[0].id == payload.reference_id), None)
+    if entry is None:
+        reject("not_found")
+    ref, enrollment, approval = entry
+    if ref.approval != "admin_approved":
+        reject("revision_conflict")
+    if approval["receipt_revision"] != payload.previous_approval_revision:
+        reject("revision_conflict")
+    current = {
+        "ontology_id": payload.base_ontology_id,
+        "assignment_version": payload.assignment_version,
+        "context_sha256": reference_context_sha256(project_row),
+    }
+    if all(approval[key] == value for key, value in current.items()):
+        reject("revision_conflict")
+    # Preserve the enrolled identity/provenance. Only current authority pins renew.
+    validation = enrolled_payload({**enrollment, **current})
+    validate_reference_source(connection, project_row, validation)
+    return ref, current
+
+
 def withdraw_reference(
     connection: Connection, project_row, workspace_id, payload: ReferenceWithdraw
 ) -> ReferenceRead:
@@ -250,7 +282,8 @@ def _reference_history(connection: Connection, project_row, workspace_id):
     receipts = reference_receipts(connection, project_row, workspace_id, "enroll_reference")
     approvals = reference_receipts(connection, project_row, workspace_id, "accept_reference")
     withdrawals = reference_receipts(connection, project_row, workspace_id, "withdraw_reference")
-    if not rows and not receipts and not approvals and not withdrawals:
+    renewals = reference_receipts(connection, project_row, workspace_id, "revalidate_reference")
+    if not rows and not receipts and not approvals and not withdrawals and not renewals:
         return []
     if (
         len(rows) > 1000
@@ -260,10 +293,18 @@ def _reference_history(connection: Connection, project_row, workspace_id):
         reject("missing_evidence")
     by_id = {receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in receipts}
     approved = {
-        receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in approvals
+        receipt["evidence"]["reference"]["id"]: {
+            **receipt["evidence"],
+            "receipt_revision": receipt["aggregate_revision"],
+        }
+        for receipt in approvals
     }
     withdrawn = {
-        receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in withdrawals
+        receipt["evidence"]["reference"]["id"]: {
+            **receipt["evidence"],
+            "receipt_revision": receipt["aggregate_revision"],
+        }
+        for receipt in withdrawals
     }
     if (
         len(by_id) != len(rows)
@@ -271,8 +312,13 @@ def _reference_history(connection: Connection, project_row, workspace_id):
         or len(withdrawn) != len(withdrawals)
         or not approved.keys() <= by_id.keys()
         or not withdrawn.keys() <= by_id.keys()
+        or len(renewals) > 1000
+        or any(item["evidence"]["reference"]["id"] not in approved for item in renewals)
     ):
         reject("missing_evidence")
+    by_reference = {}
+    for receipt in sorted(renewals, key=lambda item: item["aggregate_revision"]):
+        by_reference.setdefault(receipt["evidence"]["reference"]["id"], []).append(receipt)
     result = []
     for row in rows:
         evidence = by_id.get(str(row.id))
@@ -301,6 +347,20 @@ def _reference_history(connection: Connection, project_row, workspace_id):
             ):
                 reject("missing_evidence")
             ref = accepted
+            for receipt in by_reference.get(ref.id, []):
+                renewal = receipt["evidence"]
+                previous = approved[ref.id]
+                if (
+                    renewal["reference"] != ref.model_dump(mode="json")
+                    or renewal["previous_approval_revision"] != previous["receipt_revision"]
+                    or receipt["aggregate_revision"] <= previous["receipt_revision"]
+                    or (
+                        ref.id in withdrawn
+                        and receipt["aggregate_revision"] >= withdrawn[ref.id]["receipt_revision"]
+                    )
+                ):
+                    reject("missing_evidence")
+                approved[ref.id] = {**renewal, "receipt_revision": receipt["aggregate_revision"]}
         if ref.id in withdrawn:
             ref = ref.model_copy(update={"approval": "withdrawn"})
             if withdrawn[ref.id]["reference"] != ref.model_dump(mode="json"):
@@ -333,7 +393,7 @@ def read_references(
             validate_reference_source(
                 connection,
                 project_row,
-                enrolled_payload(evidence),
+                enrolled_payload({**evidence, **approval}),
                 lock_sources=False,
                 validation_cache=validation_cache,
             )

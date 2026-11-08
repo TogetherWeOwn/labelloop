@@ -204,6 +204,32 @@ held-out sets or historical releases. New freezes fail closed until validated
 source-policy approval/publication and grouping binding are implemented.
 Real admission remains unbound pending exact-consuming-head Security acceptance.
 
+## Reference revalidation (unmounted)
+
+`revalidateReference`, `POST /projects/{project_id}/references/revalidate`, renews
+an existing admin-approved reference against current context and source pins.
+Send the expected project revision, reference ID, current ontology and assignment
+IDs, a reason, and `previous_approval_revision` from the last successful acceptance
+or renewal's resource revision. Keep that acknowledgement; current project revision
+alone does not identify the approval being renewed. A fresh key is required for a
+new renewal, while exact retries return the original acknowledgement.
+
+The transaction uses the existing owned-project/retry locks and source validator.
+It validates immutable enrollment and the complete attributed approval/renewal
+chain, then rechecks current ontology/classes, locked grouping, pending pairs and
+historical holdout exclusion. It never replaces enrolled source, class, provenance
+or validity metadata; changed metadata requires withdrawal and fresh enrollment.
+Proposed/withdrawn references and unchanged approval pins cannot be renewed. Class
+publication still requires retirement of all references; this is not an ontology
+migration or a way to reactivate retired evidence.
+
+Only a new atomic attributed receipt and project approval invalidation are written;
+the reference row, original enrollment/acceptance receipts and historical releases
+are unchanged. Reads validate the latest renewal's context and source pins, never
+fall back to an older valid approval, and remain SELECT-only. A later context or
+source change fails closed again until explicitly renewed or withdrawn. No pack,
+retrieval, admission, automatic acceptance, qualification or publication is enabled.
+
 ## Proposed reference enrollment (unmounted)
 
 `enrollReference`, `POST /projects/{project_id}/references`, enrolls **metadata

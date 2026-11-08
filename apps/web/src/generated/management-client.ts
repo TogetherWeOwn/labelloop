@@ -39,6 +39,7 @@ export type RecipePreviewRead = { "below_minimum_targets": number; "boxes": Arra
 export type ReferenceAccept = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "reason": string; "reference_id": string };
 export type ReferenceEnroll = { "asset_id": string; "assignment_version": string; "base_ontology_id": string; "class_id": string; "confused_with": Array<string>; "expected_revision": number; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
 export type ReferenceRead = { "approval": "proposed" | "admin_approved" | "withdrawn"; "asset_id": string; "class_id": string; "confused_with": Array<string>; "id": string; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
+export type ReferenceRevalidate = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "previous_approval_revision": number; "reason": string; "reference_id": string };
 export type ReferenceWithdraw = { "expected_revision": number; "reason": string; "reference_id": string };
 export type RegistryDetail = { "candidate": ModelRelease | null; "champion": ModelRelease | null; "checks": Array<CheckRead>; "history": Array<RegistryHistoryRead>; "next_history_cursor": string | null; "project_id": string; "qualification": "unqualified" | "evaluating" | "qualified"; "qualification_id": string | null; "reason": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number; "rollback": ModelRelease | null };
 export type RegistryHistoryRead = { "action": "promoted" | "retained" | "rolled_back"; "event_id": string; "occurred_at": string; "principal_id": string; "prior_release_id": string | null; "reason": string; "release_id": string | null };
@@ -166,6 +167,11 @@ export class ManagementClient {
 
   acceptReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceAccept }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/references/accept`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  revalidateReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceRevalidate }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/references/revalidate`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
