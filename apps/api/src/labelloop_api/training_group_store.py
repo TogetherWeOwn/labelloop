@@ -1,28 +1,33 @@
 """Current compiled input groups across stored checkpoint and teacher ancestors.
 
-Reference use and noncompiled selection/calibration still need trusted producers.
-Missing external/imported lineage is not inferred. The caller retains the project
-and canonical group locks through its decision.
+Recorded selection/calibration contributes influence even when not in a compiled
+variant. Reference use and missing external/imported lineage still need trusted
+producers. The caller retains project and canonical group locks through its decision.
 """
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 
 import sqlalchemy as sa
 
-from labelloop_api import model_schema
+from labelloop_api import model_schema, qualification_schema
 from labelloop_api.annotation_audit_store import training_ancestor_runs
 from labelloop_api.generated_label_store import label_teacher_runs
+from labelloop_api.model_store import load_release, stored_report
 from labelloop_api.qualification_store import release_membership
 from labelloop_api.schema import canonical_dataset_release, yolo_dataset_variant
 from labelloop_api.source_group_store import current_release_groups
+from labelloop_core.evaluation_lifecycle import CandidateSelection, select_candidate
 from labelloop_core.qualification import QualificationEvidence
 from labelloop_core.qualification_data import require_name
+from labelloop_core.qualification_wire import loads
 
 
 @dataclass(frozen=True, slots=True)
 class ModelInputGroups:
     training: tuple[str, ...]
     selection: tuple[str, ...]
+    recorded_selection: tuple[str, ...] = ()
 
     def require_isolated(self, evidence: QualificationEvidence) -> None:
         if not set(self.training) <= set(evidence.lineage.training_group_ids):
@@ -31,6 +36,12 @@ class ModelInputGroups:
             raise ValueError("final-test groups overlap compiled checkpoint selection")
         if set(self.selection) & {source.group_id for source in evidence.canary_audit.sources}:
             raise ValueError("canary groups overlap compiled checkpoint selection")
+        if set(self.recorded_selection) & set(evidence.final_test.dataset.group_ids):
+            raise ValueError("final-test groups overlap recorded selection or calibration")
+        if set(self.recorded_selection) & {
+            source.group_id for source in evidence.canary_audit.sources
+        }:
+            raise ValueError("canary groups overlap recorded selection or calibration")
 
 
 def model_training_groups(
@@ -91,7 +102,77 @@ def model_input_groups(
     return ModelInputGroups(
         tuple(sorted({group for groups in compiled for group in groups.training})),
         tuple(sorted({group for groups in compiled for group in groups.selection})),
+        _recorded_selection_groups(connection, project_id, ancestors),
     )
+
+
+def _recorded_selection_groups(connection, project_id, ancestors):
+    # Reuse the same run closure for every registered sibling checkpoint. An earlier
+    # selection still influenced the run even if later report links extend its digest.
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+
+    table = qualification_schema.candidate_selection
+    model = model_schema.model_release
+    rows = (
+        connection.execute(
+            sa.select(table.c.selection_key, table.c.record, model.c.id.label("model_id"))
+            .select_from(
+                table.join(
+                    model,
+                    sa.and_(
+                        model.c.project_id == table.c.project_id,
+                        model.c.release_key == table.c.record["payload"]["release_id"].as_string(),
+                    ),
+                )
+            )
+            .where(table.c.project_id == project_id, model.c.training_run_id.in_(ancestors))
+            .order_by(table.c.selection_key)
+        )
+        .mappings()
+        .all()
+    )
+    groups = set()
+    for row in rows:
+        selection = loads(json.dumps(row["record"]), CandidateSelection)
+        release = load_release(connection, row["model_id"])
+        if release is None or (
+            selection.selection_id,
+            selection.project_id,
+            selection.release_id,
+        ) != (row["selection_key"], release.project_id, release.release_id):
+            raise ValueError("recorded selection identity mismatch")
+        development = load_evaluation_set(
+            connection,
+            project_key=release.project_id,
+            dataset_key=selection.development_set_id,
+            role="development",
+        )
+        calibration = (
+            load_evaluation_set(
+                connection,
+                project_key=release.project_id,
+                dataset_key=selection.calibration_set_id,
+                role="calibration",
+            )
+            if selection.calibration_set_id is not None
+            else None
+        )
+        checked = select_candidate(
+            release,
+            stored_report(connection, release, selection.development_run_id),
+            development,
+            selection_id=selection.selection_id,
+            calibration=stored_report(connection, release, selection.calibration_run_id)
+            if selection.calibration_run_id is not None
+            else None,
+            calibration_set=calibration,
+        )
+        if replace(selection, release_sha256=checked.release_sha256) != checked:
+            raise ValueError("recorded selection differs from stored evaluation evidence")
+        groups.update(development.group_ids)
+        if calibration is not None:
+            groups.update(calibration.group_ids)
+    return tuple(sorted(groups))
 
 
 def _compiled_input_groups(connection, project_id, row):

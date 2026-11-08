@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Compiled checkpoint-selection isolation — pending Actions
+## Recorded selection and calibration isolation — pending Actions
+
+The existing compiled-input ancestry closure now also selects persisted candidate
+selection journals for every registered checkpoint of each reachable run. Complete
+canonical development/calibration populations are reloaded using the existing group
+reader; typed selections must match their stored project/model/key and linked
+reports. All recorded selections contribute, not only the one in the candidate's
+current final exposure. Later report links can extend the atomic-release digest,
+but never erase earlier selection influence. This is conservative influence
+accounting, not authorization to reuse a historical selection for final exposure.
+
+Recorded selection/calibration groups cannot become independent final or fresh
+canary evidence in assembly or consuming registry/acceptance/drift transactions.
+Shared development remains permitted. There is one ancestor traversal, no new
+schema/codec, migration, endpoint or dependency. Reference and external/imported
+influence still require trusted producers and are not inferred from missing rows.
+
+Seventeen new reader adapter cases plus sixteen additional assembly/consumer cases
+cover canonical reload, calibration, historical digest retention, identity/report/
+root substitution, missing evidence and irrelevant-run exclusion. Existing graph
+cases assert reuse of the exact checkpoint/teacher closure. Both-recipe PostgreSQL
+controls add an unselected sibling checkpoint on the same stored run with a
+noncompiled development or calibration release, then persist a clean candidate-bound
+canary on that used group. Assembly and actual registry/acceptance consumers must
+reject it without changing complete heads/event counts. These new assertions remain
+unverified until exact-head Actions; synthetic scores are not domain gold.
+
+Preceding exact `57046b1655343b6e1f5a47d23993cab3b0015531`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42490432167) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42490431737) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42490432167/job/128761420933),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42490432167/job/128761420910),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42490432167/job/128761421078),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract. This verifies compiled selection isolation, not the new recorded
+selection reader or final HTTP/UI/expanded-restore acceptance. Real null targets
+remain fail-closed. Trusted original acceptance/pipeline/score/threshold, source/
+condition and independent-measurement producers plus authenticated consumers remain
+unfinished. The fixed integration checkpoint and owned fallback remain unchanged.
+
+## Compiled checkpoint-selection isolation — historical preparation
 
 The existing compiled-input reader now returns distinct training and validation-use
 sets from one traversal of the same stored checkpoint/recorded teacher ancestry.

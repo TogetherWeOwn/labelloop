@@ -51,13 +51,21 @@ def test_compiled_selection_includes_reachable_ancestors_not_tests_or_unrelated_
     assert "test-group" not in (*inputs.training, *inputs.selection)
     assert all("unrelated" not in call.kwargs["asset_keys"] for call in current.call_args_list)
     assert connection.execute.call_count == 2  # One ancestry read, not one graph per use.
+    training_group_store._recorded_selection_groups.assert_called_once_with(
+        connection,
+        "project",
+        {"run"}
+        | ({"parent"} if edge in {"checkpoint", "mixed-cycle"} else set())
+        | ({"teacher"} if edge in {"teacher", "mixed-cycle"} else set()),
+    )
 
 
 @pytest.mark.parametrize("side", [320, 640])
 @pytest.mark.parametrize("port", ["assembly", "consumer"])
 @pytest.mark.parametrize("role", ["final", "canary", "development", "unrelated"])
+@pytest.mark.parametrize("origin", ["compiled", "recorded"])
 def test_compiled_selection_cannot_be_replayed_as_independent_final_or_fresh_canary(
-    monkeypatch, side, port, role
+    monkeypatch, side, port, role, origin
 ):
     connection, arguments, expected, readers = setup(monkeypatch, side)
     evidence = expected.evidence
@@ -67,7 +75,11 @@ def test_compiled_selection_cannot_be_replayed_as_independent_final_or_fresh_can
         "development": evidence.lineage.development.group_ids[0],
         "unrelated": "prior-development-group",
     }[role]
-    inputs = ModelInputGroups(evidence.lineage.training_group_ids, (group,))
+    inputs = ModelInputGroups(
+        evidence.lineage.training_group_ids,
+        (group,) if origin == "compiled" else (),
+        (group,) if origin == "recorded" else (),
+    )
     readers["model_input_groups"].return_value = inputs
     if port == "assembly":
         from labelloop_api.qualification_context_store import load_qualification_context
@@ -96,7 +108,12 @@ def test_compiled_selection_cannot_be_replayed_as_independent_final_or_fresh_can
             )
 
     if role in {"final", "canary"}:
-        with pytest.raises(ValueError, match="overlap compiled checkpoint selection"):
+        message = (
+            "overlap compiled checkpoint selection"
+            if origin == "compiled"
+            else "overlap recorded selection or calibration"
+        )
+        with pytest.raises(ValueError, match=message):
             consume()
     else:
         # Development may be shared across generations, but never become final or canary.

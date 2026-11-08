@@ -562,6 +562,164 @@ def _exercise_evaluation_groups(connection, release, annotation, canary, actor):
     )
 
 
+def _exercise_recorded_selection(
+    connection, release, final, loaded, arguments, actor, before, count
+):
+    from evaluation_fixture import independent_evaluation_variant
+
+    from labelloop_api.annotation_evidence_store import load_annotation_evidence
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+    from labelloop_api.final_test_store import record_candidate_selection
+    from labelloop_api.model_store import json_record, save_evaluation
+    from labelloop_api.training_group_store import model_input_groups
+
+    scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
+    project_id = lock_project(connection, release.project_id)
+    model = (
+        connection.execute(
+            sa.select(model_schema.model_release).where(
+                model_schema.model_release.c.project_id == project_id,
+                model_schema.model_release.c.release_key == release.release_id,
+            )
+        )
+        .mappings()
+        .one()
+    )
+    source_variant = connection.execute(
+        sa.select(model_schema.evaluation_run.c.variant_id).where(
+            model_schema.evaluation_run.c.run_key == final.run_id
+        )
+    ).scalar_one()
+    for role in ("development", "calibration"):
+        with connection.begin_nested() as transaction:
+            # An unselected sibling of this stored run used a noncompiled holdout.
+            # Keep the candidate's existing final/canary digest unchanged.
+            prefix = release.release_id + "-prior-" + role
+            dataset = prefix + "-dataset"
+            variant = independent_evaluation_variant(connection, source_variant, dataset)
+            development_dataset = dataset if role == "development" else prefix + "-development"
+            development_variant = (
+                variant
+                if role == "development"
+                else independent_evaluation_variant(connection, source_variant, development_dataset)
+            )
+            development = replace(
+                final,
+                run_id=prefix + "-development-run",
+                dataset_release_id=development_dataset,
+                role="development",
+            )
+            calibration = (
+                replace(
+                    final,
+                    run_id=prefix + "-calibration-run",
+                    dataset_release_id=dataset,
+                    role="calibration",
+                )
+                if role == "calibration"
+                else None
+            )
+            sibling = replace(
+                release,
+                release_id=prefix,
+                evaluation_run_ids=(development.run_id,)
+                + ((calibration.run_id,) if calibration else ()),
+            )
+            values = {key: value for key, value in model.items() if key not in {"id", "created_at"}}
+            values.update(release_key=sibling.release_id, record=json_record(sibling))
+            connection.execute(sa.insert(model_schema.model_release).values(**values))
+            save_evaluation(
+                connection,
+                model_key=sibling.release_id,
+                variant_id=development_variant,
+                report=development,
+            )
+            if calibration:
+                save_evaluation(
+                    connection, model_key=sibling.release_id, variant_id=variant, report=calibration
+                )
+            record_candidate_selection(
+                connection,
+                project_key=release.project_id,
+                model_key=sibling.release_id,
+                selection_key=prefix + "-selection",
+                development_key=development.run_id,
+                development_set=load_evaluation_set(
+                    connection,
+                    project_key=release.project_id,
+                    dataset_key=development_dataset,
+                    role="development",
+                ),
+                actor_id=actor,
+                calibration_key=calibration.run_id if calibration else None,
+                calibration_set=load_evaluation_set(
+                    connection,
+                    project_key=release.project_id,
+                    dataset_key=dataset,
+                    role="calibration",
+                )
+                if calibration
+                else None,
+            )
+            assert (
+                dataset + "-group"
+                in model_input_groups(
+                    connection, project_id=project_id, model_id=model["id"]
+                ).recorded_selection
+            )
+            reused = _outcome(
+                connection,
+                release,
+                loaded,
+                actor,
+                canary=True,
+                group_id=dataset + "-group",
+                split="test",
+                suffix="-recorded-" + role,
+            )
+            stored = load_annotation_evidence(
+                connection,
+                project_key=release.project_id,
+                release_key=reused.release_key,
+                audit_key=reused.audit_key,
+                evidence_key=reused.evidence_key,
+                canary_model_key=release.release_id,
+            )
+            replay = replace(
+                loaded, evidence=replace(loaded.evidence, canary_audit=stored.evidence)
+            )
+            message = "canary groups overlap recorded selection or calibration"
+            with pytest.raises(ValueError, match=message):
+                load_qualification_context(connection, **(arguments | {"canary": reused}))
+            with pytest.raises(ValueError, match=message):
+                require_automatic_acceptance(
+                    connection,
+                    **scope,
+                    evaluation_key=final.run_id,
+                    qualification=replay,
+                    scope=loaded.evidence.scope[0],
+                )
+            with pytest.raises(ValueError, match=message):
+                change_registry(
+                    connection,
+                    **scope,
+                    actor_id=actor,
+                    expected_revision=before.revision,
+                    candidate_key=release.release_id,
+                    evaluation_key=final.run_id,
+                    policy=PromotionPolicy(1, 0.0),
+                    qualification=replay,
+                )
+            assert load_registry(connection, **scope) == before
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                ).scalar_one()
+                == count
+            )
+            transaction.rollback()
+
+
 def exercise_context_assembly(engine, release, final, context, actor):
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
@@ -621,6 +779,9 @@ def exercise_context_assembly(engine, release, final, context, actor):
         assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit
+        _exercise_recorded_selection(
+            connection, release, final, loaded, arguments, actor, before, count
+        )
         with pytest.raises(ValueError, match="differ from current canonical membership"):
             load_qualification_context(
                 connection,

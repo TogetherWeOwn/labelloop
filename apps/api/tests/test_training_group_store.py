@@ -32,6 +32,7 @@ def fixture(monkeypatch):
     current = MagicMock(return_value={item["asset_id"]: item["group_id"] for item in samples})
     monkeypatch.setattr(store, "current_release_groups", current)
     monkeypatch.setattr(store, "label_teacher_runs", MagicMock(return_value={}))
+    monkeypatch.setattr(store, "_recorded_selection_groups", MagicMock(return_value=()))
     return connection, row, current
 
 
