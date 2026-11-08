@@ -6,6 +6,28 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Final-role adapter fixture correction
+
+At `c0b395d`, [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42466087162)
+failed: unit **7 failed, 1309 passed, 80 skipped**. Four adapted-state adapter cases
+attempted adaptation before any final exposure; the root-substitution case tried
+to serialize an unsupported root before reaching the loader. The fixture correction
+uses the actual development selection and final exposure transitions before
+adaptation, and serializes a supported candidate-selection root for loader rejection.
+Additional exposed-but-unadapted cases retain the development/calibration denial.
+No production transition, codec or guard is weakened. Corrected assertions await
+new-head Actions; no local tests or dependency installation ran.
+
+The other two unit failures are global migration-head assertions. Disposable
+PostgreSQL migration setup also failed on multiple heads. Auth/jobs repair remains
+independently owned; later qualification composition remains an integration gate.
+ML smoke, dev-stack, types and import-contract failed before their commands when
+setup-uv release downloads returned HTTP 504; lint separately failed downloading
+checksum-pinned actionlint with HTTP 504. Thus those job failures do not establish
+results for the new PostgreSQL assertions. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42466086323)
+passed at `c0b395d`. Neither prior-head green evidence nor these download failures
+clear the migration or new-head verification gates.
+
 REA angle: reuse the delivered original-frame evaluator, M2 registry and store
 codecs, M1 compiler and audit primitives. Existing model-store PostgreSQL failure,
 concurrency and append-only assertions live in `workers/ml/tests/registry_smoke.py`;

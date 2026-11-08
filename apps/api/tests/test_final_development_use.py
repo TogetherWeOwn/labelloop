@@ -9,23 +9,41 @@ from qualification_fixture import qualification_context, synthetic_final
 from test_m5_integration_contract import make_release, make_report
 
 from labelloop_api import final_test_store as store
-from labelloop_core.evaluation_lifecycle import EvaluationSet, FinalTestState
+from labelloop_core.evaluation_lifecycle import (
+    CandidateSelection,
+    EvaluationSet,
+    FinalTestState,
+    select_candidate,
+)
 from labelloop_core.qualification_wire import dumps
 from labelloop_core.registry import PromotionPolicy
 
 
-def journal(dataset="dev", project="project"):
-    return FinalTestState(EvaluationSet(dataset, project, ("group",), "locked_final_test"))
+def journal(dataset="dev", project="project", *, exposed=False):
+    state = FinalTestState(EvaluationSet(dataset, project, ("group",), "locked_final_test"))
+    if not exposed:
+        return state
+    release = replace(make_release(320, "challenger"), project_id=project)
+    development = make_report(release)
+    final = synthetic_final(development, run_id="final", dataset_id=dataset)
+    release = replace(release, evaluation_run_ids=(*release.evaluation_run_ids, final.run_id))
+    selection = select_candidate(
+        release,
+        development,
+        EvaluationSet(development.dataset_release_id, project, ("dev-group",), "development"),
+        selection_id="selection",
+    )
+    return state.expose(release, selection, final, expected_revision=0)
 
 
 @pytest.mark.parametrize("target", ["development", "calibration"])
 @pytest.mark.parametrize(
-    "state", ["locked", "adapted", "quarantined", "adapted-quarantined", "absent"]
+    "state", ["locked", "exposed", "adapted", "quarantined", "adapted-quarantined", "absent"]
 )
 def test_current_journal_controls_development_use(target, state):
-    stored = journal(target)
+    stored = journal(target, exposed=state == "exposed" or "adapted" in state)
     if "adapted" in state:
-        stored = stored.record_adaptation("result guided change", expected_revision=0)
+        stored = stored.record_adaptation("result guided change", expected_revision=stored.revision)
     if "quarantined" in state:
         stored = stored.quarantine("group integrity", expected_revision=stored.revision)
     connection = MagicMock()
@@ -61,7 +79,11 @@ def test_substituted_journal_cannot_authorize_development(substitution):
         dataset="other" if substitution == "dataset" else "dev",
         project="other" if substitution == "project" else "project",
     )
-    record = stored.dataset if substitution == "root" else stored
+    record = (
+        CandidateSelection("selection", "project", "model", "a" * 64, "dev-run", "dev", None, None)
+        if substitution == "root"
+        else stored
+    )
     connection = MagicMock()
     connection.execute.return_value.scalar_one_or_none.return_value = json.loads(dumps(record))
     with patch.object(store, "lock_project", return_value="project-id"):
@@ -103,8 +125,6 @@ def test_selection_rechecks_journal_before_append():
 
 
 def test_exposure_rechecks_prior_selection_before_returning_any_final_result():
-    from labelloop_core.evaluation_lifecycle import CandidateSelection
-
     selection = CandidateSelection(
         "selection", "project", "model", "a" * 64, "dev-run", "dev", None, None
     )
