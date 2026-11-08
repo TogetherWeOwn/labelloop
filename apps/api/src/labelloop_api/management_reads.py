@@ -5,10 +5,12 @@ import json
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import Engine, String, case, cast, func, literal, select
+from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 
 from .management_canonical import refuse
 from .management_contracts import Resource, ResourceKind, ResourcePage
+from .management_details import FreezePlanRead
+from .management_freeze_plan import freeze_plan
 from .management_ports import ManagementPrincipal
 from .schema import (
     annotation_revision,
@@ -164,6 +166,25 @@ class CanonicalManagementReads:
         if row is None:
             refuse("not_found")
         return self.resource(kind, row)
+
+    def read_freeze_plan(self, actor: ManagementPrincipal, project_id: str) -> FreezePlanRead:
+        authorize_reader(actor)
+        owned = self.project_rows()
+        # One snapshot for ownership, revision, labels, completeness and grouping.
+        # This read must not take mutation locks or require UPDATE/INSERT grants.
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(project, owned.c.revision.label("management_revision"))
+                    .join(owned, project.c.id == owned.c.id)
+                    .where(cast(project.c.id, String) == project_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                return freeze_plan(connection, row, row.management_revision)
 
     @staticmethod
     def resource(kind: ResourceKind, row) -> Resource:

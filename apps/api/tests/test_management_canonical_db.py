@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import pytest
 from PIL import Image
-from sqlalchemy import create_engine, func, insert, select, text
+from sqlalchemy import create_engine, event, func, insert, select, text
 from sqlalchemy.exc import DBAPIError
 
 from labelloop_api.management_canonical import CanonicalManagementMutations
@@ -600,6 +600,177 @@ def release_count(owner, project_id):
             .select_from(canonical_dataset_release)
             .where(canonical_dataset_release.c.project_id == project_id)
         ).scalar_one()
+
+
+def test_freeze_plan_is_select_only_and_supplies_a_real_freeze_payload(database):
+    service, owner, role = database
+    created, asset, _, _ = release_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    for actor in (Actor(), Reader()):
+        plan = reads.read_freeze_plan(actor, created.id)
+        assert plan.payload is not None
+        assert plan.payload.expected_revision == 2
+        assert plan.payload.annotation_revisions == {asset.id: 2}
+        assert plan.exclusions == []
+        assert plan.checks[0].passed is True
+        assert "Not model qualification" in plan.checks[0].reason
+        assert set(plan.model_dump()) == {"project_id", "payload", "checks", "exclusions"}
+    assert counts(owner, created.id) == before
+    assert release_count(owner, created.id) == 0
+    # Restore only the fixture's known grants, then consume the actual plan.
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'GRANT INSERT ON canonical_event, canonical_dataset_release TO "{role}"')
+        )
+        connection.execute(text(f'GRANT UPDATE (scope) ON project TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
+    assert freeze(service, created.id, plan.payload).state == "frozen"
+
+
+@pytest.mark.parametrize(
+    ("options", "reason"),
+    [
+        ({"complete": False}, "incomplete_labels"),
+        ({"split": "train"}, "incomplete_labels"),
+        ({"locked": False}, "missing_evidence"),
+    ],
+)
+def test_freeze_plan_reports_unready_without_inventing_membership(database, options, reason):
+    service, owner, _ = database
+    created, _, _, _ = release_inputs(service, owner, **options)
+    plan = CanonicalManagementReads(service.engine, service.workspace_id).read_freeze_plan(
+        Reader(), created.id
+    )
+    assert plan.payload is None
+    assert plan.checks[0].passed is False
+    assert plan.checks[0].reason == reason
+    assert release_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize(
+    "actor", [Reader(kind="service"), Reader(role="worker"), Reader(granted=False), Reader(id="")]
+)
+def test_freeze_plan_denies_untrusted_principals(database, actor):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read_freeze_plan(actor, str(uuid4()))
+
+
+def test_freeze_plan_ownership_and_legacy_isolation(database):
+    service, owner, _ = database
+    created = create(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with owner.begin() as connection:
+        legacy = connection.execute(
+            insert(project)
+            .values(
+                project_key="legacy-" + uuid4().hex,
+                workspace_id=service.workspace_id,
+                task="detect",
+                scope="legacy",
+                domain="fixture",
+                access_policy={},
+            )
+            .returning(project.c.id)
+        ).scalar_one()
+    for reader, target in (
+        (replace(reads, workspace_id=uuid4()), created.id),
+        (reads, str(uuid4())),
+        (reads, "not-a-uuid"),
+        (reads, str(legacy)),
+    ):
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reader.read_freeze_plan(Reader(), target)
+    empty = reads.read_freeze_plan(Reader(), created.id)
+    assert empty.payload is None and empty.checks[0].reason == "missing_evidence"
+
+
+def test_freeze_plan_excludes_unreviewed_sources_but_validates_all_grouping(database):
+    service, owner, _ = database
+    created, asset, _, _ = release_inputs(service, owner)
+    other = ingest(service, created.id, image_payload(2), key="unreviewed")
+    with owner.begin() as connection:
+        source_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == other.id)
+        ).scalar_one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=source_id,
+                group_id="group-1",
+                split="val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=True,
+            )
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    plan = reads.read_freeze_plan(Reader(), created.id)
+    assert plan.payload is not None
+    assert plan.payload.annotation_revisions == {asset.id: 2}
+    assert plan.exclusions[0].asset_ids == [other.id]
+    assert plan.exclusions[0].reason == "incomplete_labels"
+    with owner.begin() as connection:
+        connection.execute(
+            insert(borderline_review).values(
+                left_asset_id=source_id,
+                right_asset_id=source_id,
+                metric="phash",
+                value="9",
+                review_state="pending",
+            )
+        )
+    denied = reads.read_freeze_plan(Reader(), created.id)
+    assert denied.payload is None and denied.checks[0].reason == "missing_evidence"
+
+
+def test_freeze_plan_uses_one_snapshot_and_post_rechecks_later_review(database):
+    service, owner, _ = database
+    created, asset, _, _ = release_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    changed = False
+
+    def concurrent_review(connection, cursor, statement, parameters, context, executemany):
+        nonlocal changed
+        if changed or "FROM source_asset" not in statement:
+            return
+        changed = True
+        # The read snapshot is already open. This writer must neither block nor
+        # enter the reader's partially prepared result. It uses a separate engine.
+        with owner.begin() as writer:
+            append_review(
+                writer,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=2,
+                approval_state="rejected",
+                review_tier="human_reviewed",
+                scope_completeness="partial",
+                objects=[],
+                training_eligible=False,
+            )
+
+    event.listen(service.engine, "after_cursor_execute", concurrent_review)
+    try:
+        plan = reads.read_freeze_plan(Reader(), created.id)
+    finally:
+        event.remove(service.engine, "after_cursor_execute", concurrent_review)
+    assert changed and plan.payload is not None
+    assert plan.payload.annotation_revisions == {asset.id: 2}
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        freeze(service, created.id, plan.payload)
+    current = reads.read_freeze_plan(Reader(), created.id)
+    assert current.payload is None and current.checks[0].reason == "incomplete_labels"
+    assert release_count(owner, created.id) == 0
 
 
 def test_parallel_freeze_replays_one_immutable_release_and_audit(database):

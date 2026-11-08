@@ -226,8 +226,38 @@ Reads need only SELECT and append no event, revision, job or retry receipt. Acti
 Postgres cases additionally exercise reviewer reads with INSERT/UPDATE revoked,
 current annotation revisions, frozen summaries, bounded traversal, cursor scope,
 invalid limits/cursors, denied principals and foreign/legacy ID isolation. These
-new cases require exact-head Actions results; no session/CSRF, detailed read,
+new cases require exact-head Actions results; no session/CSRF,
 setup-publication or complete operations binding is established by them.
+
+### Canonical freeze-plan read
+
+`read_freeze_plan` authorizes the human reader and managed project in one
+Postgres REPEATABLE READ, READ ONLY transaction. It selects the latest ontology,
+annotation/completeness evidence and published assignment version, excludes
+currently ineligible images with explicit reasons, and reuses the actual freeze
+validator and core release invariants without taking source-row locks. Grouping
+checks still include excluded sources. An empty selection, absent/ambiguous
+assignment, pending group review or other failed prerequisite returns a null
+payload and a failed canonical-freeze check, never fabricated membership.
+Preparation is bounded to 10,000 project sources; larger projects need a future
+explicit selection surface and return unavailable evidence rather than silently
+truncating membership.
+
+A ready plan contains the current project revision and exact selected annotation
+revisions. It is evidence at one read snapshot, not a reservation or approval.
+POST repeats validation under its existing project/source locks, including when a
+later review did not increment the management project revision. No write grant,
+audit event, retry receipt, queue, derived artifact or qualification is produced.
+The passed check means canonical freeze eligibility only, never model quality or
+independent final-test qualification. The adapter remains unmounted; other detail
+reads, setup/publication and shared producer composition remain incomplete.
+
+Disposable Actions cases cover the real plan-to-freeze handoff, SELECT-only
+reviewer access, workspace/legacy and principal refusal, missing prerequisites,
+explicit exclusions and pending grouping through an excluded image. A writer
+committed while the read is open verifies snapshot consistency and absence of
+source locks; POST must refuse that now-stale annotation revision. These cases
+are commissioned, not verified until their exact-head Actions job passes.
 
 ## Acceptance evidence still required
 

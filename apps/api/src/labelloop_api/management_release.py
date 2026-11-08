@@ -1,8 +1,9 @@
-"""Load a freeze candidate from locked canonical rows, never request-supplied labels.
+"""Load a freeze candidate from canonical rows, never request-supplied labels.
 
-The caller owns the project lock and transaction. Review writers synchronize on
-source rows through append_review; setup/grouping writers must lock the project
-before publishing ontology, relation or assignment versions.
+Mutation callers own the project lock and transaction and keep source locking
+on. Only read-only snapshot preparation disables it. Review writers synchronize
+on source rows through append_review; setup/grouping writers must lock the
+project before publishing ontology, relation or assignment versions.
 """
 
 from typing import NoReturn
@@ -40,11 +41,36 @@ def reject(code: str) -> NoReturn:
     raise ManagementFailure(ManagementError.model_validate({"detail": code}))
 
 
+def revision_refusal(project_row, context_hash: str, current, assessment) -> str | None:
+    if (
+        assessment is None
+        or assessment.ontology_hash != context_hash
+        or assessment.scope_completeness != "exhaustive_for_scope"
+        or assessment.output_truncated
+        or assessment.unresolved_regions
+        or not current.training_eligible
+        or current.review_tier == "unreviewed"
+    ):
+        return "incomplete_labels"
+    if current.actor_kind == "system":
+        qualification = project_row.access_policy.get("auto_accept_qualification", {})
+        if (
+            not qualification.get("id")
+            or qualification["id"] != current.actor_id
+            or current.approval_state != "auto_accepted"
+            or current.review_tier != "machine_verified_no_human_review"
+        ):
+            return "missing_evidence"
+    return None
+
+
 def freeze_candidate(
     connection: Connection,
     project_row,
     payload: ReleaseFreeze,
     release_id: str,
+    *,
+    lock_sources: bool = True,
 ) -> CanonicalDatasetRelease:
     ontology = connection.execute(
         select(ontology_release)
@@ -55,12 +81,14 @@ def freeze_candidate(
     # The bootstrap ontology key is public; the SQL UUID is an implementation ID.
     if ontology is None or ontology.ontology_key != payload.ontology_id:
         reject("revision_conflict")
-    assets = connection.execute(
+    asset_query = (
         select(source_asset)
         .where(source_asset.c.project_id == project_row.id)
         .order_by(source_asset.c.id)
-        .with_for_update()
-    ).all()
+    )
+    if lock_sources:
+        asset_query = asset_query.with_for_update()
+    assets = connection.execute(asset_query).all()
     by_key = {row.asset_key: row for row in assets}
     if not set(payload.annotation_revisions) <= by_key.keys():
         reject("not_found")
@@ -161,25 +189,8 @@ def freeze_candidate(
         if current is None or current.revision != requested_revision:
             reject("revision_conflict")
         assessment = assessments.get(asset.id)
-        if (
-            assessment is None
-            or assessment.ontology_hash != context_hash
-            or assessment.scope_completeness != "exhaustive_for_scope"
-            or assessment.output_truncated
-            or assessment.unresolved_regions
-            or not current.training_eligible
-            or current.review_tier == "unreviewed"
-        ):
-            reject("incomplete_labels")
-        if current.actor_kind == "system":
-            qualification = project_row.access_policy.get("auto_accept_qualification", {})
-            if (
-                not qualification.get("id")
-                or qualification["id"] != current.actor_id
-                or current.approval_state != "auto_accepted"
-                or current.review_tier != "machine_verified_no_human_review"
-            ):
-                reject("missing_evidence")
+        if reason := revision_refusal(project_row, context_hash, current, assessment):
+            reject(reason)
         assignment = by_asset[asset.id]
         try:
             revision = AnnotationRevision(
