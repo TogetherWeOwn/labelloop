@@ -45,7 +45,11 @@ The browser harness exercises 1280 and 390 widths, both roles and the shared
 states with WCAG A/AA and best-practice axe rules, skip-link keyboard behavior,
 page-overflow checks, screenshots, and a separate command-payload capture mode.
 That mode has **no server connection and never claims to change a canonical
-record**. `management-evidence/results.json` records the exact PR head supplied
+record**. A separate dispatch-contract fixture exercises `ManagementModule`
+itself with explicitly simulated server provenance: successful capture, reviewer
+control hiding, fixture/stale refusal and an uncertain command that stays disabled
+until records refresh. No callback in either harness performs a real mutation.
+`management-evidence/results.json` records the exact PR head supplied
 by Actions. `recipe-dom.json` is checked against `full_frame_transform` by
 `scripts/check_management_geometry.py`. No paid/provider calls occur.
 

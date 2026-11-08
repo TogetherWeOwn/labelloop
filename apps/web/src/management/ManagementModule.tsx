@@ -38,16 +38,17 @@ export function ManagementModule({ screen, role, port, initialRecipe, platformRu
     }
   }, [port]);
   useEffect(() => {
-    void load();
+    const initial = window.setTimeout(() => { void load(); }, 0);
     const refresh = () => { if (document.visibilityState === 'visible' && !busyRef.current) void load(); };
     const interval = window.setInterval(refresh, 30_000);
     document.addEventListener('visibilitychange', refresh);
-    return () => { request.current?.abort(); command.current?.abort(); window.clearInterval(interval); document.removeEventListener('visibilitychange', refresh); };
+    return () => { request.current?.abort(); command.current?.abort(); window.clearTimeout(initial); window.clearInterval(interval); document.removeEventListener('visibilitychange', refresh); };
   }, [load]);
   const connected = Boolean(port.execute && data?.provenance === 'server' && !data.stale && !failed);
   async function send(input: ManagementCommand) {
     if (role !== 'admin' || !connected || !port.execute || busyRef.current) return false;
     busyRef.current = true; setBusy(true);
+    request.current?.abort();
     const controller = new AbortController(); command.current = controller;
     try {
       await port.execute(input, controller.signal);
@@ -67,23 +68,22 @@ export function ManagementModule({ screen, role, port, initialRecipe, platformRu
     }
   }
   const actions: Actions = { role, connected, busy, send };
-  const props = data ? { data, actions } : null;
   return <section className="management" aria-label="Project management">
     <div role="status" aria-live="polite" className="sr">{status}</div>
     {!data && failed && <h1>Project management</h1>}
     {failed && <Notice tone="danger">Records did not load or refresh. Check the connection and try again. <Button onClick={() => { void load(); }}>Try again</Button></Notice>}
     {!data && !failed && <div className="card" aria-busy="true"><h1>Project management</h1><p>Loading records…</p></div>}
-    {data && props && <>
+    {data && <>
       {data.provenance === 'fixture' && <Notice tone="info">Recorded fixture preview — all names, counts, hashes and metrics are invented examples, not measured quality or connected commands. No project, release, training job or model will change here.</Notice>}
       {role === 'admin' && !port.execute && <p>Management commands are not connected. Inspect the recorded data; use the authenticated facade after shell integration.</p>}
       {data.paid_paused && <Notice tone="danger">Paid steps paused. No paid work will be retried automatically. Local work has no account charge.</Notice>}
       <p className={`label ${data.stale || failed ? 'stale' : ''}`}>{data.stale || failed ? 'Stale data · ' : ''}{data.provenance === 'fixture' ? 'Recorded fixture at ' : 'Last refreshed '}<Utc value={data.updated_at} /> · visible records refresh every 30 s</p>
-      {screen === 'new-project' && <NewProjectView {...props} />}
-      {screen === 'releases' && <ReleasesView {...props} />}
-      {screen === 'recipes' && <RecipesView {...props} />}
-      {screen === 'runs' && <RunsView {...props} platform={platformRuns} />}
-      {screen === 'evaluation' && <EvaluationView {...props} initialRecipe={initialRecipe} />}
-      {screen === 'models' && <ModelsView {...props} extensions={modelExtensions} />}
+      {screen === 'new-project' && <NewProjectView data={data} actions={actions} />}
+      {screen === 'releases' && <ReleasesView data={data} actions={actions} />}
+      {screen === 'recipes' && <RecipesView data={data} actions={actions} />}
+      {screen === 'runs' && <RunsView data={data} actions={actions} platform={platformRuns} />}
+      {screen === 'evaluation' && <EvaluationView data={data} actions={actions} initialRecipe={initialRecipe} />}
+      {screen === 'models' && <ModelsView data={data} actions={actions} extensions={modelExtensions} />}
     </>}
   </section>;
 }

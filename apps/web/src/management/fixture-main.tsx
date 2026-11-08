@@ -35,8 +35,21 @@ if (scenario === 'qualified' || scenario === 'command-contract') {
   if (snapshot.release) snapshot.release.state = 'Frozen';
 }
 if (query.get('release') === 'draft' && snapshot.release) snapshot.release.state = 'Draft';
+const dispatchContract = scenario.startsWith('dispatch-');
+if (dispatchContract) {
+  // Simulate the authenticated port boundary, never a server or real mutation.
+  snapshot.provenance = scenario === 'dispatch-fixture' ? 'fixture' : 'server';
+  snapshot.stale = scenario === 'dispatch-stale';
+}
 const fixturePort = createFixturePort(snapshot);
-const port: ManagementPort = scenario === 'loading' ? { read: (signal) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }); }) } : scenario === 'error' ? { read: () => Promise.reject(new Error('Recorded fixture failure')) } : fixturePort;
+const port: ManagementPort = dispatchContract ? {
+  read: fixturePort.read,
+  execute: (command) => {
+    document.documentElement.dataset.lastCommand = JSON.stringify(command);
+    if (scenario === 'dispatch-failed') return Promise.reject(new Error('Recorded uncertain command'));
+    return Promise.resolve({ message: 'Captured only; no canonical mutation.' });
+  },
+} : scenario === 'loading' ? { read: (signal) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }); }) } : scenario === 'error' ? { read: () => Promise.reject(new Error('Recorded fixture failure')) } : fixturePort;
 const initialRecipe = query.get('recipe') as RecipeId | null;
 // Browser contract tests exercise command payloads without connecting a server or
 // adding mutation capabilities to the recorded fixture port. Never a production entry.
@@ -56,6 +69,6 @@ const commandView = {
 createRoot(document.getElementById('root')!).render(<>
   <a className="fixture-skip" href="#main">Skip to content</a>
   <header className="fixture-header"><p>labelloop · isolated management fixture, not the application shell</p><nav aria-label="Fixture screens">{screens.map((item) => <a key={item} href={`?screen=${item}&role=${role}`} aria-current={screen === item ? 'page' : undefined}>{item.replaceAll('-', ' ')}</a>)}</nav></header>
-  <main id="main">{scenario === 'command-contract' ? <section className="management"><p>Command-contract fixture. Commands are captured for tests only; nothing is changed or sent to a server.</p>{commandView}</section> : <ManagementModule screen={screen} role={role} port={port} initialRecipe={initialRecipe ?? undefined} />}</main>
+  <main id="main">{dispatchContract && <p>Dispatch-contract fixture: server provenance is simulated to exercise the module guard. No server connection or canonical mutation exists.</p>}{scenario === 'command-contract' ? <section className="management"><p>Command-contract fixture. Commands are captured for tests only; nothing is changed or sent to a server.</p>{commandView}</section> : <ManagementModule screen={screen} role={role} port={port} initialRecipe={initialRecipe ?? undefined} />}</main>
   <footer>labelloop is free software under the AGPL-3.0. <a href="https://github.com/TogetherWeOwn/labelloop">Get the source code.</a></footer>
 </>);

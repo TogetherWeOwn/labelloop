@@ -65,7 +65,11 @@ function DraftFields({ draft, actions, step, values, labels, readOnly }: { draft
   async function save(form: HTMLFormElement) {
     if (readOnly || saving) return;
     const fields = new FormData(form);
-    const next = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, typeof value === 'boolean' ? fields.has(name) : typeof value === 'number' ? Number(fields.get(name)) : String(fields.get(name) ?? '')]));
+    const next = Object.fromEntries(Object.entries(values).map(([name, value]) => {
+      const field = fields.get(name);
+      const text = typeof field === 'string' ? field : '';
+      return [name, typeof value === 'boolean' ? fields.has(name) : typeof value === 'number' ? Number(text) : text];
+    }));
     setSaving(true);
     const saved = await actions.send({ kind: 'save_setup', draft_id: draft.id, expected_revision: draft.revision, step, values: next });
     setFailed(!saved); setSaving(false);

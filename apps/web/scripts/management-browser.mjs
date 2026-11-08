@@ -116,8 +116,31 @@ try {
     await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: new RegExp(step) }).click();
     await page.getByRole('heading', { level: 2, name: new RegExp(step) }).waitFor();
   }
-  await page.close();
   results.push({ key: 'command-contracts', pass: true, commands: ['compile', 'start-local', 'cancel-local', 'locked-test', 'promote', 'rollback', 'accept-class'], realCommands: false });
+  for (const state of ['dispatch-ready', 'dispatch-fixture', 'dispatch-stale', 'dispatch-failed']) {
+    await page.goto(`${entry}?screen=new-project&state=${state}`);
+    const accept = page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true });
+    await accept.waitFor();
+    if (state === 'dispatch-fixture' || state === 'dispatch-stale') {
+      assert.equal(await accept.isDisabled(), true, `${state}: dispatch must fail closed`);
+      assert.equal(await last(), null);
+    } else {
+      await accept.click();
+      await page.getByRole('status').filter({ hasText: state === 'dispatch-ready' ? 'Command completed' : 'The change could not be confirmed' }).waitFor();
+      assert.deepEqual(await last(), { kind: 'accept_class', draft_id: 'draft-shelf', expected_revision: 7, id: 'almond' });
+      if (state === 'dispatch-failed') {
+        assert.equal(await accept.isDisabled(), true, 'uncertain command requires a refresh before retry');
+        await page.getByRole('button', { name: 'Try again', exact: true }).click();
+        await page.waitForFunction(() => ![...document.querySelectorAll('button')].find((button) => button.textContent === 'Accept Almond milk 1 L')?.disabled);
+      }
+    }
+  }
+  await page.goto(`${entry}?screen=new-project&state=dispatch-ready&role=reviewer`);
+  await page.getByText('Read-only. Only an admin', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true }).count(), 0);
+  assert.equal(await last(), null);
+  results.push({ key: 'module-dispatch-guards', pass: true, realCommands: false });
+  await page.close();
   const assets = await readdir('dist/management-fixture/assets');
   for (const asset of assets.filter((name) => /\.(js|css)$/.test(name))) {
     const text = await readFile(`dist/management-fixture/assets/${asset}`, 'utf8');
