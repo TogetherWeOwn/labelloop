@@ -33,8 +33,11 @@ its schema and geometry conventions do not. No existing release is rewritten.
 Use uv 0.13.6's native three-day artifact-age filter for the refreshed Pillow
 package and disable third-party source builds. Other dependency versions are
 retained. A global age filter is not adopted by this bounded refresh: it would
-reject an unrelated existing SDK pin. Workspace editable Hatchling builds remain
-necessary; `no-build` is not a universal script-execution sandbox.
+reject an unrelated existing SDK pin. Reviewed workspace Hatchling builds remain
+necessary; `no-build` is not a universal script-execution sandbox. Container builds
+use `uv sync --frozen --no-editable` to build only the selected group's first-party
+workspace members while refusing third-party source builds. Unlike workspace sync,
+`uv pip install --no-editable` does not exempt first-party paths from `no-build`.
 
 ## Consequences
 
