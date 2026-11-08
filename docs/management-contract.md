@@ -35,8 +35,10 @@ never raw logs/provider dictionaries containing paths, tokens or signed URLs.
 Artifacts are application IDs authorized through the common artifact boundary.
 
 The schema/client generator includes these models and operations in its Actions
-artifact. Checked-in generated publication and final combined auth/app OpenAPI
-remain incomplete; do not hand-edit a second client from these tables.
+artifact and the checked-in `apps/api/openapi/management.openapi.json` and
+`apps/web/src/generated/management-client.ts`. Actions checks both tracked files
+for drift before checking the client. Final combined auth/app OpenAPI remains
+incomplete; do not hand-edit a second client from these tables.
 
 ## Mutation alignment
 

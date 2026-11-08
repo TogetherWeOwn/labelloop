@@ -105,6 +105,8 @@ jobs:
           version: "0.13.6"
           enable-cache: false
       - run: uv sync --frozen
+      - name: Check published management contract drift
+        run: uv run python -m labelloop_api.management_codegen --check
       - name: Generate management contract artifacts
         run: uv run python -m labelloop_api.management_codegen --output-dir "$RUNNER_TEMP/management-contract"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -160,8 +162,8 @@ jobs:
           version: "0.13.6"
           enable-cache: false
       - run: uv sync --frozen
-      - name: Generate management client for web lint and type checking
-        run: uv run python -m labelloop_api.management_codegen --output-dir apps/web/src/generated
+      - name: Check published management contract before web checks
+        run: uv run python -m labelloop_api.management_codegen --check
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test

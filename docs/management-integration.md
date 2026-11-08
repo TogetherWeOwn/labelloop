@@ -92,16 +92,26 @@ no-store caching and refused redirects. It supplies no authorization of its own.
 Response types are compile-time types, not permission to treat server/model data
 as trusted domain state.
 
-The web-build job also generates the client under `apps/web/src/generated` before
-web lint/typecheck and runs for Python changes as well as web changes. The CI
-aggregator requires that job for Python changes, so a successful Python generator
-alone cannot satisfy the client contract. No local suite is used as a substitute.
+The tracked schema is `apps/api/openapi/management.openapi.json`; the tracked
+client is `apps/web/src/generated/management-client.ts`. Both the unit and
+web-build jobs compare fresh generation with these exact bytes before tests:
 
-Next: retrieve the exact-head generated artifact, check the schema into
-`apps/api/openapi/management.openapi.json` and the client into
-`apps/web/src/generated/management-client.ts`, and add a checked-in drift
-comparison. These remain the isolated management contract, not a final combined
-app schema. Do not assert pending publication/drift/type checks have passed.
+```sh
+uv run python -m labelloop_api.management_codegen --check
+```
+
+A missing or stale file fails without rewriting it. To update the publication,
+generate into an empty artifact directory with `--output-dir`, then copy the
+schema and client to those tracked paths together. Do not hand-edit the outputs.
+The initial schema publication comes from the detail-contract Actions artifact;
+the client uses that schema with the corrected union renderer. The new head's
+drift, lint, type and request tests must pass before that publication is verified.
+
+The web job checks the **tracked** client rather than replacing it before lint,
+typecheck and tests. It runs for Python changes as well as web changes, and the
+CI aggregator requires it for both. A successful Python generator alone cannot
+satisfy the client contract. These remain the isolated management contract, not
+a final combined app schema. No local suite is used as a substitute.
 
 ## Acceptance evidence still required
 

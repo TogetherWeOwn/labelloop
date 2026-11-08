@@ -25,7 +25,8 @@ def typescript_type(schema: dict) -> str:
     if "enum" in schema:
         return " | ".join(json.dumps(value) for value in schema["enum"])
     if "anyOf" in schema:
-        return " | ".join(typescript_type(part) for part in schema["anyOf"])
+        # JSON Schema integers and numbers both map to TypeScript number.
+        return " | ".join(dict.fromkeys(typescript_type(part) for part in schema["anyOf"]))
     kind = schema.get("type")
     if kind == "array":
         if "prefixItems" in schema:
@@ -139,19 +140,46 @@ def render_client(spec: dict) -> str:
     return "\n".join(lines)
 
 
-def generate(destination: Path) -> None:
+def rendered_contract() -> tuple[str, str]:
     spec = contract_app().openapi()
+    return json.dumps(spec, indent=2, sort_keys=True) + "\n", render_client(spec)
+
+
+def generate(destination: Path) -> None:
+    schema, client = rendered_contract()
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / "management.openapi.json").write_text(
-        json.dumps(spec, indent=2, sort_keys=True) + "\n"
-    )
-    (destination / "management-client.ts").write_text(render_client(spec))
+    (destination / "management.openapi.json").write_text(schema, encoding="utf-8")
+    (destination / "management-client.ts").write_text(client, encoding="utf-8")
+
+
+def check_published(schema_path: Path, client_path: Path) -> list[Path]:
+    """Detect absent or stale tracked artifacts without rewriting them."""
+    schema, client = rendered_contract()
+    return [
+        path
+        for path, expected in ((schema_path, schema), (client_path, client))
+        if not path.is_file() or path.read_bytes() != expected.encode("utf-8")
+    ]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    generate(parser.parse_args().output_dir)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--output-dir", type=Path)
+    mode.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--schema-path", type=Path, default=Path("apps/api/openapi/management.openapi.json")
+    )
+    parser.add_argument(
+        "--client-path", type=Path, default=Path("apps/web/src/generated/management-client.ts")
+    )
+    args = parser.parse_args()
+    if args.check:
+        drift = check_published(args.schema_path, args.client_path)
+        if drift:
+            parser.exit(1, "Management contract drift: " + ", ".join(map(str, drift)) + "\n")
+    else:
+        generate(args.output_dir)
 
 
 if __name__ == "__main__":

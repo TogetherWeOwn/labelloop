@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from labelloop_api.management import management_router
 from labelloop_api.management_codegen import (
+    check_published,
     contract_app,
     generate,
     render_client,
@@ -349,6 +350,43 @@ def test_unbound_contract_never_accepts_real_requests():
 )
 def test_codegen_handles_unconstrained_and_closed_dictionary_values(schema, expected):
     assert typescript_type(schema) == expected
+
+
+@pytest.mark.parametrize(
+    "parts,expected",
+    [
+        ([{"type": "integer"}, {"type": "number"}], "number"),
+        (
+            [{"type": "string"}, {"type": "integer"}, {"type": "number"}, {"type": "null"}],
+            "string | number | null",
+        ),
+        (
+            [{"$ref": "#/components/schemas/Resource"}, {"type": "null"}],
+            "Resource | null",
+        ),
+    ],
+)
+def test_codegen_deduplicates_typescript_unions_without_losing_nullability(parts, expected):
+    assert typescript_type({"anyOf": parts}) == expected
+
+
+def test_published_contract_check_reports_missing_files_without_writing(tmp_path):
+    schema = tmp_path / "management.openapi.json"
+    client = tmp_path / "management-client.ts"
+    assert check_published(schema, client) == [schema, client]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("name", ["management.openapi.json", "management-client.ts"])
+def test_published_contract_check_detects_drift_in_each_file_without_overwriting(tmp_path, name):
+    generate(tmp_path)
+    schema = tmp_path / "management.openapi.json"
+    client = tmp_path / "management-client.ts"
+    assert check_published(schema, client) == []
+    changed = tmp_path / name
+    changed.write_text("stale contract\n", encoding="utf-8")
+    assert check_published(schema, client) == [changed]
+    assert changed.read_text(encoding="utf-8") == "stale contract\n"
 
 
 def test_codegen_does_not_silently_widen_unsupported_schema():

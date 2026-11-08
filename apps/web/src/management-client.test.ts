@@ -74,16 +74,21 @@ describe('generated management client', () => {
     const body = { expected_revision: 4, training_profile_id: 'cpu-320-v1' };
     await client.startTraining({ variant_id: 'v', 'idempotency-key': 'train-1', body });
     await client.startTraining({ variant_id: 'v', 'idempotency-key': 'train-1', body });
-    expect(request).toHaveBeenNthCalledWith(1, '/api/variants/v/training-runs',
-      expect.objectContaining({
+    for (const [index, token] of ['first', 'second'].entries()) {
+      expect(request).toHaveBeenNthCalledWith(index + 1, '/api/variants/v/training-runs', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': token,
+          'Idempotency-Key': 'train-1',
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
         body: JSON.stringify(body),
-        headers: expect.objectContaining({ 'X-CSRF-Token': 'first' }),
-      }));
-    expect(request).toHaveBeenNthCalledWith(2, '/api/variants/v/training-runs',
-      expect.objectContaining({
-        body: JSON.stringify(body),
-        headers: expect.objectContaining({ 'X-CSRF-Token': 'second' }),
-      }));
+      });
+    }
   });
 
   it('does not retry conflicts or reflect server error bodies', async () => {
