@@ -418,6 +418,8 @@ def change_registry(
             .mappings()
             .one()
         )
+        if row["revision"] != expected_revision:
+            raise ValueError("stale registry revision")
         state = RegistryState(
             project_key,
             recipe_key,

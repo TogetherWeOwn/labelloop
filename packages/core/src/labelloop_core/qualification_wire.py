@@ -8,7 +8,7 @@ import json
 import math
 import types
 from dataclasses import fields, is_dataclass
-from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Union, cast, get_args, get_origin, get_type_hints
 
 from .drift import AcceptanceState
 from .evaluation_lifecycle import CandidateSelection, FinalTestState
@@ -24,17 +24,16 @@ _ROOTS = (
     QualificationContext,
     QualificationEvidence,
 )
-Record = TypeVar(
-    "Record",
-    AcceptanceState,
-    CandidateSelection,
-    FinalTestState,
-    QualificationContext,
-    QualificationEvidence,
+type QualificationRecord = (
+    AcceptanceState
+    | CandidateSelection
+    | FinalTestState
+    | QualificationContext
+    | QualificationEvidence
 )
 
 
-def dumps(record: Record) -> str:
+def dumps(record: QualificationRecord) -> str:
     if type(record) not in _ROOTS:
         raise ValueError("unknown qualification root record")
     encoded = canonical_record(
@@ -47,7 +46,7 @@ def dumps(record: Record) -> str:
     if len(encoded.encode()) > MAX_RECORD_BYTES:
         raise ValueError("qualification record exceeds the durable record bound")
     # Enforce the same strict shapes on both sides of the storage boundary.
-    loads(encoded, type(record))
+    _decode(json.loads(encoded)["payload"], type(record))
     return encoded
 
 
@@ -89,7 +88,8 @@ def _decode(value: object, annotation: Any) -> Any:
     if annotation is float:
         if type(value) not in (int, float) or not math.isfinite(cast(float, value)):
             raise ValueError("expected a finite qualification number")
-        return float(cast(float, value))
+        # Preserve JSON's integer/float spelling so roundtrips do not change content hashes.
+        return value
     if origin in (tuple, frozenset):
         if not isinstance(value, list):
             raise ValueError("expected a qualification array")
@@ -116,7 +116,15 @@ def _decode(value: object, annotation: Any) -> Any:
     raise ValueError("unsupported qualification field type")
 
 
-def loads(payload: str, record_type: type[Record]) -> Record:
+def loads[
+    Record: (
+        AcceptanceState,
+        CandidateSelection,
+        FinalTestState,
+        QualificationContext,
+        QualificationEvidence,
+    )
+](payload: str, record_type: type[Record]) -> Record:
     if record_type not in _ROOTS or len(payload.encode()) > MAX_RECORD_BYTES:
         raise ValueError("unknown or oversized qualification record")
     try:

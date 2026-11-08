@@ -38,7 +38,8 @@ def test_missing_evidence_is_not_a_promotion_and_old_state_is_unchanged() -> Non
 @pytest.mark.parametrize("name", [item.name for item in fields(QualificationTargets)])
 def test_every_null_or_missing_target_retains_the_incumbent(name: str) -> None:
     current = context()
-    targets = replace(current.evidence.targets, **{name: () if name == "critical_slices" else None})
+    changes: dict[str, Any] = {name: () if name == "critical_slices" else None}
+    targets = replace(current.evidence.targets, **changes)
     with pytest.raises(ValueError, match="targets retain"):
         promote(replace(current, evidence=replace(current.evidence, targets=targets)))
 
@@ -47,7 +48,8 @@ def test_every_null_or_missing_target_retains_the_incumbent(name: str) -> None:
 def test_null_critical_slice_target_cannot_pass(name: str) -> None:
     current = context()
     targets = current.evidence.targets
-    sliced = replace(targets.critical_slices[0], **{name: None})
+    changes: dict[str, Any] = {name: None}
+    sliced = replace(targets.critical_slices[0], **changes)
     with pytest.raises(ValueError, match="null critical"):
         promote(
             replace(

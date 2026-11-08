@@ -61,9 +61,9 @@ class QualificationTargets:
     critical_slices: tuple[SliceTarget, ...] = ()
 
     def __post_init__(self) -> None:
-        for value in (self.min_class_support, self.min_audit_groups, self.min_canary_groups):
-            if value is not None:
-                require_count(value, minimum=1)
+        for count in (self.min_class_support, self.min_audit_groups, self.min_canary_groups):
+            if count is not None:
+                require_count(count, minimum=1)
         for value in (
             self.min_map50_95,
             self.max_regression,
