@@ -22,6 +22,13 @@ let reads = 0;
 const reader = fixturePort(snapshot);
 const port: PlatformReadPort = {
   read(signal) {
+    if (state === 'status_transitions') {
+      const statuses = ['queued', 'queued', 'running', 'running', 'completed', 'completed', 'failed', 'failed'] as const;
+      const index = reads++;
+      const run = platformFixture.runs.find((run) => run.status === statuses[Math.min(index, statuses.length - 1)])!;
+      return fixturePort({ ...snapshot, observedAt: new Date(Date.parse(snapshot.observedAt) + index * 30_000).toISOString(),
+        runs: [{ ...run, id: 'run-31', operationId: 'operation-fixture-31' }] }).read(signal);
+    }
     if (state === 'error') return Promise.reject(new Error('Fixture unavailable'));
     if (state === 'loading' || (state === 'pending_refresh' && reads++ > 0)) {
       return new Promise<PlatformSnapshot>(() => { /* Intentional pending read fixture. */ });

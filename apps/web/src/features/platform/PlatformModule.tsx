@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { PlatformReadPort, PlatformSnapshot, ViewerRole } from './contracts.ts';
+import { statusCopy } from './contracts.ts';
 import { ConnectionsView } from './ConnectionsView.tsx';
 import { PlatformRunsView } from './PlatformRunsView.tsx';
 import './platform.css';
 
 type Page = 'connections' | 'runs';
-type ReadState = { snapshot: PlatformSnapshot | null; failed: boolean };
+type ReadState = { snapshot: PlatformSnapshot | null; failed: boolean; announcement: string };
 
 // The caller keys this boundary by authenticated principal/project. No credentials or
 // principal are inferred from URLs. No live adapter is shipped by this module.
@@ -18,7 +19,7 @@ export function PlatformModule({ role, page, port }: { role: ViewerRole; page: P
 }
 
 function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; port: PlatformReadPort }) {
-  const [state, setState] = useState<ReadState>({ snapshot: null, failed: false });
+  const [state, setState] = useState<ReadState>({ snapshot: null, failed: false, announcement: '' });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     let disposed = false;
@@ -31,7 +32,13 @@ function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; p
       try {
         const snapshot = await port.read(current.signal);
         if (!disposed) {
-          setState({ snapshot, failed: false });
+          setState((previous) => {
+            const priorStatuses = new Map(previous.snapshot?.runs.map((run) => [run.id, run.status]));
+            const changes = snapshot.runs.filter((run) => priorStatuses.has(run.id) && priorStatuses.get(run.id) !== run.status)
+              .map((run) => `${run.id}: ${statusCopy[run.status].label}${run.status === 'args_mismatch' ? ' (args mismatch)' : ''}.`);
+            // Keep the live text stable on identical polls, including refreshed timestamps.
+            return { snapshot, failed: false, announcement: changes.join(' ') || previous.announcement };
+          });
           setNow(Date.now());
         }
       } catch {
@@ -66,6 +73,7 @@ function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; p
       {failed ? <p>Could not refresh. Check the connection and try again.</p> : !snapshot && <p>Loading Platform records…</p>}
       {snapshot && <p className={stale ? 'freshness warn' : 'freshness'}>{stale ? 'Stale data · ' : ''}Record observed {snapshot.observedAt} (UTC). Refreshes every 30 seconds while visible.</p>}
     </div>
+    {page === 'runs' && <p className="sr" role="status" aria-label="Run status updates" aria-live="polite" aria-atomic="true">{state.announcement}</p>}
     {snapshot && <>
       {snapshot.paidStepsPaused && <p className="notice danger">Paid steps paused · Out of credits (402). labelloop won't retry on its own.</p>}
       {page === 'connections' ? <ConnectionsView role={role} snapshot={snapshot} now={now} /> : <PlatformRunsView role={role} snapshot={snapshot} />}

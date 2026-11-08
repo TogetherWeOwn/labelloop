@@ -103,6 +103,7 @@ try {
             await page.getByRole('button', { name: 'Cancel', exact: true }).focus();
             await page.keyboard.press('Enter');
             assert.equal(await page.getByRole('heading', { name: 'Start run on Ultralytics Platform' }).count(), 0);
+            assert.equal(await page.getByRole('button', { name: 'Start a run', exact: true }).evaluate((button) => button === document.activeElement), true, `Cancel restores opener focus at ${width}`);
             if (!state) {
               await page.getByRole('button', { name: 'run-28', exact: true }).focus();
               await page.keyboard.press('Enter');
@@ -132,6 +133,25 @@ try {
     assert.equal(await page.locator('.freshness.warn').count(), 0);
     await page.clock.fastForward(90_000);
     await page.locator('.freshness.warn').filter({ hasText: 'Stale data' }).waitFor();
+    // Successive reads of one run announce transitions, not initial/identical reads.
+    await page.goto('http://127.0.0.1:4174/platform-fixture.html?page=runs&state=status_transitions');
+    const announcements = page.getByRole('status', { name: 'Run status updates' });
+    await page.locator('.freshness').filter({ hasText: '2026-11-07T01:52:00.000Z' }).waitFor();
+    assert.equal(await announcements.textContent(), '');
+    await announcements.evaluate((element) => {
+      window.platformAnnouncements = [];
+      new MutationObserver(() => window.platformAnnouncements.push(element.textContent))
+        .observe(element, { childList: true, characterData: true, subtree: true });
+    });
+    const expectedAnnouncements = [];
+    const statuses = ['Queued', 'Running', 'Running', 'Completed', 'Completed', 'Failed', 'Failed'];
+    for (const [index, status] of statuses.entries()) {
+      await page.clock.fastForward(30_000);
+      const observedAt = new Date(Date.parse('2026-11-07T01:52:00Z') + (index + 1) * 30_000).toISOString();
+      await page.locator('.freshness').filter({ hasText: observedAt }).waitFor();
+      if (index === 1 || index === 3 || index === 5) expectedAnnouncements.push(`run-31: ${status}.`);
+      assert.deepEqual(await page.evaluate(() => window.platformAnnouncements), expectedAnnouncements, `Once per transition at ${width}, read ${index + 2}`);
+    }
     assert.deepEqual(mutations, [], 'Fixture must not make mutation requests');
     await page.close();
   }

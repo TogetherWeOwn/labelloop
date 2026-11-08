@@ -48,6 +48,22 @@ describe('Platform fixture modules', () => {
     }
   });
 
+  it('claims provider checkpoint selection only when a candidate is recorded', () => {
+    for (const run of platformFixture.runs) {
+      const html = renderToStaticMarkup(<PlatformRunsView role="reviewer" snapshot={{ ...platformFixture, runs: [run] }} />);
+      if (run.checkpointSha256) {
+        expect(html).toContain('Selected under provider rect validation');
+        expect(html).toContain('best.pt');
+      } else {
+        expect(html).toContain('Selection unconfirmed');
+        expect(html).not.toContain('Selected under provider rect validation');
+      }
+    }
+    const completed = platformFixture.runs.find((run) => run.status === 'completed')!;
+    expect(renderToStaticMarkup(<PlatformRunsView role="reviewer" snapshot={{ ...platformFixture,
+      runs: [{ ...completed, checkpointSha256: null }] }} />)).toContain('Selection unconfirmed');
+  });
+
   it('names every exceeded limit including invalid cost data', () => {
     const draft = platformFixture.dryRun!;
     expect(exceededLimits(draft)).toEqual([]);

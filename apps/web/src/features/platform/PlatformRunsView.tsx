@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { exceededLimits, microUsd, shortHash, statusCopy, usd } from './contracts.ts';
 import type { DryRun, PlatformRun, PlatformSnapshot, ViewerRole } from './contracts.ts';
 
@@ -47,14 +47,18 @@ function DryRunPanel({ draft, paused, close }: { draft: DryRun; paused: boolean;
 
 export function PlatformRunsView({ role, snapshot }: { role: ViewerRole; snapshot: PlatformSnapshot }) {
   const [showDraft, setShowDraft] = useState(false);
+  const startButton = useRef<HTMLButtonElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = snapshot.runs.find((run) => run.id === selectedId) ?? snapshot.runs[0];
   return <>
     <div className="phead"><div><h1>Training runs. <span className="g">One per recipe.</span></h1>
       {role !== 'admin' && <p className="lede">Read only. Only an admin can start or cancel runs.</p>}</div>
-      {role === 'admin' && <button className="pill ghost" disabled={!snapshot.dryRun} aria-expanded={showDraft} aria-controls="platform-start" onClick={() => setShowDraft(!showDraft)}>Start a run</button>}
+      {role === 'admin' && <button ref={startButton} className="pill ghost" disabled={!snapshot.dryRun} aria-expanded={showDraft} aria-controls="platform-start" onClick={() => setShowDraft(!showDraft)}>Start a run</button>}
     </div>
-    {role === 'admin' && showDraft && snapshot.dryRun && <DryRunPanel draft={snapshot.dryRun} paused={snapshot.paidStepsPaused} close={() => setShowDraft(false)} />}
+    {role === 'admin' && showDraft && snapshot.dryRun && <DryRunPanel draft={snapshot.dryRun} paused={snapshot.paidStepsPaused} close={() => {
+      setShowDraft(false);
+      startButton.current?.focus();
+    }} />}
     {snapshot.runs.length === 0 ? <p className="notice">No Platform runs yet. An admin can inspect a dry-run summary before starting a run after integration.</p> : <>
       <div className="tablewrap" tabIndex={0} role="region" aria-label="Training runs, scrolls sideways"><table><caption className="sr">Platform training runs</caption>
         <thead><tr>{['Run', 'Recipe', 'Release', 'Backend', 'Status', 'Progress', 'Cost'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
@@ -70,7 +74,7 @@ export function PlatformRunsView({ role, snapshot }: { role: ViewerRole; snapsho
         <p className="small t2">Status is read from the operation record, never inferred from a click. This is a deterministic fixture record, not a live server operation.</p>
         <dl className="facts"><dt>Operation</dt><dd>{selected.operationId}</dd><dt>Updated (UTC)</dt><dd><time dateTime={selected.updatedAt}>{selected.updatedAt}</time></dd>
           <dt>Checkpoint</dt><dd>{selected.checkpointSha256 ? <>best.pt · sha256 <code>{shortHash(selected.checkpointSha256)}</code></> : 'Not downloaded'}</dd>
-          <dt>Selection</dt><dd>Selected under provider rect validation</dd><dt>Targets kept</dt><dd>{selected.targets ? `${selected.targets.kept} of ${selected.targets.total}` : 'Not reported; retention unconfirmed'}</dd>
+          <dt>Selection</dt><dd>{selected.checkpointSha256 ? 'Selected under provider rect validation' : 'Selection unconfirmed'}</dd><dt>Targets kept</dt><dd>{selected.targets ? `${selected.targets.kept} of ${selected.targets.total}` : 'Not reported; retention unconfirmed'}</dd>
         </dl>
         {selected.mismatches.length > 0 && <div className="tablewrap" tabIndex={0} role="region" aria-label="Settings mismatch, scrolls sideways"><table><caption>Settings check · mismatch fails the run</caption>
           <thead><tr><th scope="col">Setting</th><th scope="col">Asked for</th><th scope="col">Platform used</th></tr></thead><tbody>{selected.mismatches.map((mismatch) => <tr key={mismatch.key}>
