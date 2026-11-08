@@ -6,7 +6,7 @@ reconcile external intent. The controller never creates another queue or registr
 """
 
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Protocol
 
 from .audit import AuditVerdict
 from .domain import CanonicalDatasetRelease
@@ -16,11 +16,9 @@ from .registry import ModelRelease, RegistryState
 from .review import CorrectionLoop, ReviewPatch
 from .training import TrainingRequest, TrainingResult
 
-T = TypeVar("T")
-
 
 @dataclass(frozen=True, slots=True)
-class PortResult(Generic[T]):
+class PortResult[T]:
     receipt: StageReceipt
     value: T
 

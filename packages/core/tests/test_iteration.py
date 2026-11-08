@@ -138,7 +138,7 @@ def test_manifest_pins_complete_inputs_and_order() -> None:
     for field in fields(m):
         current = getattr(m, field.name)
         if isinstance(current, EvidenceRef):
-            changed = replace(m, **{field.name: ref("changed-" + field.name)})
+            changed = replace(m, **{field.name: ref("changed-" + field.name)})  # type: ignore[arg-type]
             assert changed.digest != m.digest
     with pytest.raises(ValueError, match="unique and sorted"):
         replace(m, recipes=tuple(reversed(m.recipes)))
@@ -375,7 +375,7 @@ def test_paid_ports_fail_closed_without_matching_durable_budget(stage: str) -> N
     state = IterationState("iteration-1", m)
     key = StageKey("review")
     for s in ("freeze", "propose_discover"):
-        state = complete(state, StageKey(s))  # type: ignore[arg-type]
+        state = complete(state, StageKey(s))
     if stage != "review":
         state = begin_stage(state, key, budget=budget_for(state, key))
         state = finish_stage(state, key, receipt_for(state, key))
@@ -452,7 +452,7 @@ def test_stale_wrong_duplicate_and_conflicting_receipts_are_rejected() -> None:
     state = finish_stage(state, key, receipt)
     with pytest.raises(ValueError, match="conflicting stage"):
         finish_stage(state, key, replace(receipt, artifact=ref("wrong")))
-    with pytest.raises(ValueError, match="duplicate stage"):
+    with pytest.raises(ValueError, match="operation identities cannot repeat"):
         replace(state, records=(*state.records, state.records[0]))
     with pytest.raises(ValueError, match="disabled"):
         real_iteration_ports()

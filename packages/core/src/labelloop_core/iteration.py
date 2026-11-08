@@ -304,7 +304,9 @@ class IterationState:
                     {
                         "manifest": self.manifest.digest,
                         "stage": asdict(key),
-                        "retain_after_failure": [asdict(r.receipt) for r in failures],
+                        "retain_after_failure": [
+                            asdict(r.receipt) for r in failures if r.receipt is not None
+                        ],
                     }
                 )
         parents = []
