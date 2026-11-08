@@ -6,12 +6,12 @@ A clean later audit never clears earlier adverse evidence. Until authenticated
 correction/re-tracing exists, all later revisions of a vetoed asset remain held.
 """
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, fields
 
 import sqlalchemy as sa
 
 from labelloop_api import model_schema, qualification_schema
-from labelloop_api.audit_sample_store import load_audit_sample
+from labelloop_api.audit_sample_store import FrozenAuditSample, load_audit_sample
 from labelloop_api.qualification_store import lock_project as lock_project
 from labelloop_api.qualification_store import release_membership as release_membership
 from labelloop_api.schema import (
@@ -21,8 +21,105 @@ from labelloop_api.schema import (
     source_asset,
     yolo_dataset_variant,
 )
-from labelloop_core.audit import AuditObservation, assess_audit
-from labelloop_core.qualification_data import require_name
+from labelloop_core.audit import AuditObservation, AuditVerdict, assess_audit
+from labelloop_core.qualification_data import canonical_record, require_name
+
+
+@dataclass(frozen=True)
+class StoredAnnotationAudit:
+    frozen: FrozenAuditSample
+    observations: tuple[AuditObservation, ...]
+    verdict: AuditVerdict
+
+
+def load_annotation_audit(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    release_key: str,
+    audit_key: str,
+    require_current_groups: bool = True,
+) -> StoredAnnotationAudit:
+    """Reload one immutable result, never request-supplied sample or verdict fields.
+
+    Qualification consumers must use the default current-group check in the same
+    short transaction as their decision. Historical inspection may disable it to
+    retain adverse evidence after a grouping conflict. Partial results stay partial;
+    no merging, latest-clean selection, independent truth or quality is inferred.
+    Unsampled observations remain veto-only and cannot supply this bound port.
+    """
+    require_name(audit_key)
+    project_id = lock_project(connection, project_key)
+    release_id = connection.execute(
+        sa.select(canonical_dataset_release.c.id).where(
+            canonical_dataset_release.c.project_id == project_id,
+            canonical_dataset_release.c.release_key == release_key,
+            canonical_dataset_release.c.frozen,
+        )
+    ).scalar_one()
+    row = (
+        connection.execute(
+            sa.select(qualification_schema.annotation_audit).where(
+                qualification_schema.annotation_audit.c.project_id == project_id,
+                qualification_schema.annotation_audit.c.release_id == release_id,
+                qualification_schema.annotation_audit.c.audit_key == audit_key,
+            )
+        )
+        .mappings()
+        .one()
+    )
+    record = row["record"]
+    if not isinstance(record, dict) or set(record) != {"observations", "sample"}:
+        raise ValueError("qualification requires a sample-bound audit result")
+    binding = record["sample"]
+    if not isinstance(binding, dict) or set(binding) != {
+        "sample_key",
+        "population_sha256",
+        "group_ids",
+        "verdict",
+    }:
+        raise ValueError("invalid persisted audit sample binding")
+    require_name(binding["sample_key"])
+    frozen = load_audit_sample(
+        connection,
+        project_id=project_id,
+        release_id=release_id,
+        sample_key=binding["sample_key"],
+        require_current_groups=require_current_groups,
+    )
+    raw = record["observations"]
+    names = {field.name for field in fields(AuditObservation)}
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or any(not isinstance(item, dict) or set(item) != names for item in raw)
+    ):
+        raise ValueError("invalid persisted audit observations")
+    require_name(row["actor_id"])
+    observations = tuple(AuditObservation(**item) for item in raw)
+    for item in observations:
+        require_name(item.asset_id)
+        require_name(item.reviewer_id)
+        if item.reviewer_id != row["actor_id"]:
+            raise ValueError("persisted audit reviewer differs from authenticated principal")
+    verdict = assess_audit(frozen.sample, observations)
+    expected = {
+        "sample_key": frozen.sample.sample_id,
+        "population_sha256": frozen.population_sha256,
+        "group_ids": frozen.group_ids,
+        "verdict": asdict(verdict),
+    }
+    vetoes = {
+        item.asset_id: item.revision
+        for item in observations
+        if item.asset_id in verdict.blocking_asset_ids
+    }
+    if (
+        canonical_record(binding) != canonical_record(expected)
+        or release_membership(row["vetoed_revisions"]) != vetoes
+    ):
+        raise ValueError("persisted audit result does not match its frozen sample and observations")
+    return StoredAnnotationAudit(frozen, observations, verdict)
 
 
 def record_annotation_audit(

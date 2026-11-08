@@ -300,6 +300,39 @@ authoritative qualification loaders, authenticated consumers and expanded restor
 acceptance remain pending. Required Devin, fresh-context and native reviews remain
 gates; the PR stays draft. The fixed 2026-11-09T12:00:00Z checkpoint is unchanged.
 
+## Persisted audit-result consumer — new assertions pending Actions
+
+`annotation_audit_store.load_annotation_audit` loads one immutable result by exact
+project/release/audit identity, then reloads its committed canonical sample. By default
+it rechecks current groups for the entire frozen population under the project lock.
+It strictly decodes observations, checks the authenticated writer identity, and
+recomputes the pure membership verdict and adverse-revision set. Substituted group,
+fingerprint, verdict, malformed observation or unsampled result fails closed. Partial,
+adverse and truncated results remain non-passing; no clean-result selection or union
+of partial audits is inferred. Historical reads may explicitly omit the current-group
+check so adverse evidence remains inspectable after a new relationship conflict.
+
+This is an internal persistence consumer, not an authenticated endpoint, independent
+truth, representative error bound or full qualification loader. Source/condition,
+original pipeline, score/threshold/measurement and teacher provenance remain required,
+as do policy/canary assembly, HTTP/annotation/operational wiring and expanded restore.
+No table, migration, dependency or endpoint is added. New adapter substitution cases
+and PostgreSQL reconnect/foreign-scope/current-conflict/historical-adverse controls
+await exact-head Actions.
+
+The preceding corrected head `4716097038609251f00512cd3abf38174aafc55f` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42456573018) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42456572619).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42456573018/job/128656781929)
+reported **1105 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42456573018/job/128656781995)
+reported **19 passed**, plus **24 passed** in the separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42456573018/job/128656781976)
+reported **39 passed**. Migration cycles, dev-stack, lint/types/import-contract,
+gitleaks and standards passed; web-build was path-skipped. This verifies the earlier
+current-group checks with the repaired locked-assignment fixture, not this new loader
+or milestone acceptance. Required reviews remain gates and the PR stays draft.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

@@ -7,7 +7,11 @@ import pytest
 import sqlalchemy as sa
 
 from labelloop_api import qualification_schema
-from labelloop_api.annotation_audit_store import lock_project, record_annotation_audit
+from labelloop_api.annotation_audit_store import (
+    load_annotation_audit,
+    lock_project,
+    record_annotation_audit,
+)
 from labelloop_api.audit_sample_store import freeze_audit_sample, load_audit_sample
 from labelloop_api.schema import (
     annotation_revision,
@@ -272,6 +276,40 @@ def exercise_audit_sampling(engine, request):
         assert binding["group_ids"] == frozen.group_ids
         assert binding["verdict"]["passed"]
         assert not binding["verdict"]["pending_asset_ids"]
+        partial_result = load_annotation_audit(
+            connection,
+            project_key=request.project_id,
+            release_key=request.dataset_release_id,
+            audit_key="sample-partial",
+        )
+        assert not partial_result.verdict.passed
+        assert partial_result.verdict.pending_asset_ids == (observations[1].asset_id,)
+        complete_result = load_annotation_audit(
+            connection,
+            project_key=request.project_id,
+            release_key=request.dataset_release_id,
+            audit_key="sample-complete",
+        )
+        assert complete_result.frozen == frozen
+        assert complete_result.observations == observations
+        assert complete_result.verdict.passed
+        for changes in (
+            {"project_key": "foreign-project"},
+            {"release_key": other_release},
+            {"audit_key": "missing-audit"},
+        ):
+            with pytest.raises(sa.exc.NoResultFound):
+                load_annotation_audit(
+                    connection,
+                    **(
+                        dict(
+                            project_key=request.project_id,
+                            release_key=request.dataset_release_id,
+                            audit_key="sample-complete",
+                        )
+                        | changes
+                    ),
+                )
 
     def race_audit():
         try:
@@ -320,6 +358,7 @@ def exercise_audit_sampling(engine, request):
         "observations_bound_to_sample_and_release": True,
         "partial_observations_remain_pending": True,
         "bound_result_restart_race_and_failure_checked": True,
+        "result_loader_recomputes_verdict_and_rechecks_current_groups": True,
         "sample_id": frozen.sample.sample_id,
         "population_sha256": frozen.population_sha256,
         "group_ids": frozen.group_ids,
@@ -457,6 +496,24 @@ def exercise_current_groups(engine, request, arguments, project_id, frozen, obse
                     == "adverse-after-new-relation"
                 )
             ).scalar_one() == {observations[0].asset_id: observations[0].revision}
+            result_args = dict(
+                project_key=request.project_id,
+                release_key=request.dataset_release_id,
+                audit_key="adverse-after-new-relation",
+            )
+            with pytest.raises(ValueError, match="cross pinned splits"):
+                load_annotation_audit(connection, **result_args)
+            historical = load_annotation_audit(
+                connection, **result_args, require_current_groups=False
+            )
+            assert not historical.verdict.passed
+            assert historical.verdict.blocking_asset_ids == (observations[0].asset_id,)
+            assert historical.verdict.pending_asset_ids == (observations[1].asset_id,)
+            # The clean result also cannot bypass a now-conflicting grouping.
+            with pytest.raises(ValueError, match="cross pinned splits"):
+                load_annotation_audit(
+                    connection, **(result_args | {"audit_key": "sample-complete"})
+                )
             transaction.rollback()
 
     # A raw edge writer that does not take the project lock cannot race a current
