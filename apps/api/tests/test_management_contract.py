@@ -72,7 +72,14 @@ REFERENCE_ACCEPT = {
     "reason": "Verified source provenance and class identity",
 }
 ASSET = {"expected_revision": 1, "original_base64": "aW1hZ2U=", "source_group": "session-a"}
+SETUP_APPROVAL = {
+    "expected_revision": 2,
+    "step": "scope",
+    "draft_sha256": "a" * 64,
+    "reason": "Reviewed scope intent",
+}
 MUTATIONS = [
+    ("/projects/p/setup/approvals", "approve_setup_step", SETUP_APPROVAL, 200),
     ("/projects/p/references", "enroll_reference", REFERENCE, 201),
     ("/projects/p/references/accept", "accept_reference", REFERENCE_ACCEPT, 200),
     ("/projects", "create_project", PROJECT, 201),
@@ -167,6 +174,32 @@ MUTATIONS = [
         200,
     ),
 ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("step", "publish"),
+        ("step", "classes"),
+        ("step", "evidence"),
+        ("step", "sources"),
+        ("draft_sha256", "invalid"),
+        ("reason", ""),
+        ("expected_revision", True),
+        ("approved", True),
+        ("actor_id", "forged"),
+        ("auto_accept_qualification", {"qualified": True}),
+    ],
+)
+def test_setup_approval_refuses_unimplemented_gates_and_privileged_fields(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/setup/approvals",
+        json={**SETUP_APPROVAL, field: value},
+        headers={"Idempotency-Key": "approval"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
 
 
 @pytest.mark.parametrize(
@@ -688,8 +721,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 24
-    assert sum(len(methods) for methods in spec["paths"].values()) == 25
+    assert len(spec["paths"]) == 25
+    assert sum(len(methods) for methods in spec["paths"].values()) == 26
+    assert (
+        spec["paths"]["/projects/{project_id}/setup/approvals"]["post"]["operationId"]
+        == "approveSetupStep"
+    )
+    assert "export type SetupStepApprove =" in client
     assert (
         spec["paths"]["/projects/{project_id}/references/accept"]["post"]["operationId"]
         == "acceptReference"

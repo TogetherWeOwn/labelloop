@@ -22,6 +22,7 @@ from .management_details import (
     SourcePolicyRead,
 )
 from .management_references import read_references
+from .management_setup import draft_sha256, read_setup_approvals
 from .schema import (
     borderline_review,
     canonical_event,
@@ -141,7 +142,7 @@ def scope_draft(connection: Connection, project_row, workspace_id) -> ScopeDraft
         or project_row.scope != draft.scope
         or project_row.domain != draft.domain
         or project_row.access_policy["source_permitted_use"] != draft.source_permitted_use
-        or project_row.access_policy.get("management_setup_approvals") != {}
+        or project_row.access_policy.get("management_setup_approvals") is None
     ):
         refuse("missing_evidence")
     return draft
@@ -169,7 +170,7 @@ def guide_draft(connection: Connection, project_row, workspace_id) -> GuideDraft
     if (
         stored != evidence
         or project_row.access_policy["annotation_guide"] != draft.annotation_guide
-        or project_row.access_policy.get("management_setup_approvals") != {}
+        or project_row.access_policy.get("management_setup_approvals") is None
     ):
         refuse("missing_evidence")
     return draft
@@ -201,7 +202,7 @@ def class_catalog_draft(
     if (
         stored != evidence
         or draft.base_ontology_id != ontology_key
-        or project_row.access_policy.get("management_setup_approvals") != {}
+        or project_row.access_policy.get("management_setup_approvals") is None
     ):
         refuse("missing_evidence")
     return ClassCatalogRead.model_validate(draft.model_dump(exclude={"expected_revision"}))
@@ -230,7 +231,7 @@ def source_policy_draft(
     draft = SourcePolicyDraft.model_validate(
         {**evidence, "expected_revision": receipt.expected_revision}
     )
-    if stored != evidence or project_row.access_policy.get("management_setup_approvals") != {}:
+    if stored != evidence or project_row.access_policy.get("management_setup_approvals") is None:
         refuse("missing_evidence")
     return SourcePolicyRead.model_validate(draft.model_dump(exclude={"expected_revision"}))
 
@@ -318,7 +319,14 @@ def project_detail(
         else None,
         sources=sources,
         source_policy_draft=source_policy,
-        approved_steps=[] if draft or guide or catalog or source_policy or references else None,
+        setup_draft_sha256={
+            step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
+            for step, value in (("scope", draft), ("guide", guide))
+            if value is not None
+        },
+        approved_steps=read_setup_approvals(connection, project_row, workspace_id)
+        if draft or guide or catalog or source_policy or references
+        else None,
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

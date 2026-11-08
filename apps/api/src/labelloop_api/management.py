@@ -28,6 +28,7 @@ from .management_contracts import (
     ResourceKind,
     ResourcePage,
     ScopeDraft,
+    SetupStepApprove,
     SourcePolicyDraft,
     TrainingStart,
     VariantCompile,
@@ -207,6 +208,23 @@ def management_router(
             actor, idempotency_key, "save_source_policy_draft", project_id, payload
         )
         return invoke(lambda: service.save_source_policy_draft(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/setup/approvals",
+        response_model=Resource,
+        operation_id="approveSetupStep",
+    )
+    def approve_setup_step(
+        project_id: Identifier,
+        payload: SetupStepApprove,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "approve_setup_step", project_id, payload
+        )
+        return invoke(lambda: service.approve_setup_step(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/references",

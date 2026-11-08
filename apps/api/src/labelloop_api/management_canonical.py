@@ -27,6 +27,7 @@ from .management_contracts import (
     ReleaseFreeze,
     Resource,
     ScopeDraft,
+    SetupStepApprove,
     SourcePolicyDraft,
 )
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
@@ -34,6 +35,7 @@ from .management_references import accept_reference as approve_reference
 from .management_references import enroll_reference as create_reference
 from .management_references import reference_context_sha256
 from .management_release import freeze_candidate
+from .management_setup import draft_sha256, read_setup_approvals
 from .repository import ingest_canonical_asset
 from .schema import canonical_dataset_release, canonical_event, ontology_release, project
 
@@ -431,6 +433,58 @@ class CanonicalManagementMutations:
                         "publish",
                     ],
                 },
+            )
+            return result
+
+    def approve_setup_step(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SetupStepApprove
+    ) -> Resource:
+        # Import at the composition edge: the read projections share this module's
+        # fail-closed error helper, and verify draft rows against their receipts.
+        from .management_project_reads import guide_draft, scope_draft
+
+        self.authorize(actor, context, "approve_setup_step", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            read_setup_approvals(connection, owned, self.workspace_id)
+            loader = scope_draft if payload.step == "scope" else guide_draft
+            draft = loader(connection, owned, self.workspace_id)
+            if draft is None:
+                refuse("missing_evidence")
+            digest = draft_sha256(draft.model_dump(mode="json", exclude={"expected_revision"}))
+            if digest != payload.draft_sha256:
+                refuse("revision_conflict")
+            policy = dict(owned.access_policy)
+            approvals = dict(policy.get("management_setup_approvals", {}))
+            if payload.step in approvals:
+                refuse("revision_conflict")
+            approvals[payload.step] = {
+                "draft_sha256": digest,
+                "receipt_revision": payload.expected_revision + 1,
+            }
+            policy["management_setup_approvals"] = approvals
+            policy.pop("auto_accept_qualification", None)
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {"step": payload.step, "draft_sha256": digest, "reason": payload.reason},
             )
             return result
 

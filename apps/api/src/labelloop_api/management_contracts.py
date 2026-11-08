@@ -125,6 +125,13 @@ class SourcePolicyDraft(Mutation):
         return self
 
 
+class SetupStepApprove(Mutation):
+    # Only draft-intent steps are implemented here, never publication or pilot gates.
+    step: Literal["scope", "guide"]
+    draft_sha256: Digest
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class ReferenceEnroll(Mutation):
     base_ontology_id: Identifier
     assignment_version: Identifier

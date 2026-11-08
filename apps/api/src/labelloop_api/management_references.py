@@ -10,6 +10,7 @@ from .management_contracts import ManagementError, ReferenceAccept, ReferenceEnr
 from .management_details import ReferenceRead
 from .management_grouping import load_grouping
 from .management_ports import ManagementFailure
+from .management_setup import read_setup_approvals
 from .schema import (
     canonical_event,
     ontology_release,
@@ -217,6 +218,7 @@ def accept_reference(
 def read_references(
     connection: Connection, project_row, workspace_id
 ) -> list[ReferenceRead] | None:
+    read_setup_approvals(connection, project_row, workspace_id)
     rows = connection.execute(
         select(reference_example, source_asset.c.asset_key)
         .join(source_asset)
@@ -231,7 +233,7 @@ def read_references(
     if (
         len(rows) > 1000
         or len(rows) != len(receipts)
-        or project_row.access_policy.get("management_setup_approvals") != {}
+        or project_row.access_policy.get("management_setup_approvals") is None
     ):
         reject("missing_evidence")
     by_id = {receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in receipts}

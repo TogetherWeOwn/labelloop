@@ -332,6 +332,35 @@ The endpoint remains unmounted. Disposable Actions cases cover SELECT-only roles
 historical reviews, denied/foreign IDs, missing evidence, exclusions and class
 count/revision deltas. New cases are commissioned, not a test-pass claim.
 
+## Receipt-bound scope and guide approval
+
+`POST /projects/{project_id}/setup/approvals` (`approveSetupStep`) accepts only
+`scope` or `guide`, an expected project revision, a server-projected
+`setup_draft_sha256[step]` and a reason. The digest covers the validated saved
+draft, excluding its transport revision. The browser echoes the digest; it does
+not determine what content is approved. The adapter uses the existing admin,
+workspace, project/retry locks and append-only event transaction. Replays return
+the original receipt; stale revisions, changed digests, absent drafts and second
+approvals under a new key fail closed.
+
+Project reads report these two approved intent steps only after checking the
+stored digest/revision against the attributed approval event and current draft.
+A later scope, guide, class, source-policy or reference mutation clears all setup
+approvals. Even restoring identical old approval bytes after such a mutation
+cannot resurrect approval: the read checks the latest invalidating event.
+Approving one intent step preserves another current intent approval, removes
+any automatic-acceptance qualification and leaves the project in `draft`.
+
+This is **not** class acceptance, evidence-pack acceptance, source-group
+qualification, pilot acceptance or project publication. Those steps cannot be
+selected by this command. New freezes still refuse unpublished draft policies;
+no bulk-job release, completeness, recipe, retrieval, promotion or spend authority
+is enabled. There is no new table, migration, runtime grant or approval store.
+The facade remains unmounted; the combined auth/CSRF composition is still pending.
+Disposable Actions cases cover digest/revision/retry pins, races, attribution,
+grant rollback, malformed/privileged inputs and invalidation. Commissioned cases
+are not a pass claim until exact-head Actions completes.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

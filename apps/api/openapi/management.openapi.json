@@ -1720,6 +1720,20 @@
             "title": "Scope",
             "type": "string"
           },
+          "setup_draft_sha256": {
+            "additionalProperties": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "scope",
+                "guide"
+              ]
+            },
+            "title": "Setup Draft Sha256",
+            "type": "object"
+          },
           "source_permitted_use": {
             "maxLength": 16384,
             "title": "Source Permitted Use",
@@ -3063,6 +3077,43 @@
           "source_permitted_use"
         ],
         "title": "ScopeDraft",
+        "type": "object"
+      },
+      "SetupStepApprove": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Draft Sha256",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "step": {
+            "enum": [
+              "scope",
+              "guide"
+            ],
+            "title": "Step",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "step",
+          "draft_sha256",
+          "reason"
+        ],
+        "title": "SetupStepApprove",
         "type": "object"
       },
       "SourceGroupsRead": {
@@ -5511,6 +5562,123 @@
           }
         },
         "summary": "List Resources",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/setup/approvals": {
+      "post": {
+        "operationId": "approveSetupStep",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupStepApprove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Approve Setup Step",
         "tags": [
           "management"
         ]
