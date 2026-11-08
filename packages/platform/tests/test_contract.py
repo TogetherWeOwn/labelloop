@@ -79,6 +79,23 @@ def test_sdk_snapshot_provenance_and_generated_client_do_not_drift() -> None:
     assert ROOT.joinpath("operations.json").read_text() == GENERATOR["render"]()
 
 
+def test_scan_fingerprints_cover_only_upstream_placeholder_examples() -> None:
+    ignore = PACKAGE.parents[1] / ".gitleaksignore"
+    fingerprints = [
+        line for line in ignore.read_text().splitlines() if line and not line.startswith("#")
+    ]
+    expected_path = "packages/platform/src/labelloop_platform/contract/openapi.json"
+    lines = ROOT.joinpath("openapi.json").read_text().splitlines()
+    assert len(fingerprints) == 2
+    for fingerprint, line_number in zip(fingerprints, (22480, 22704), strict=True):
+        assert fingerprint == (
+            f"0ff72807746152c3dc7327d69891a1285f34a18c:{expected_path}:private-key:{line_number}"
+        )
+        example = json.loads("{" + lines[line_number - 1].strip() + "}")["example"]
+        assert example.splitlines()[1] == "YOUR_GCP_PRIVATE_KEY"
+        assert len(example.splitlines()) == 3
+
+
 def test_snapshot_corruption_fails_regeneration(tmp_path) -> None:
     contract = Path(str(ROOT))
     shutil.copytree(contract, tmp_path / "contract")
