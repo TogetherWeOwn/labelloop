@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from qualification_fixture import qualification_context
 
 from labelloop_core.evaluation import (
     DerivedPredictions,
@@ -30,7 +31,7 @@ def model(side: int, release_id: str = "model-1") -> ModelRelease:
         export_sha256="d" * 64,
         export_format="onnx",
         static_input_signature=(1, 3, side, side),
-        evaluation_run_ids=(f"evaluation-{release_id}",),
+        evaluation_run_ids=(f"evaluation-{release_id}", f"development-{release_id}"),
     )
 
 
@@ -41,13 +42,13 @@ def report(
     box = Box(10, 10, 30, 30)
     mapped = transform.apply(box)
     assert mapped is not None
-    return EvaluationRunner(release.class_ids, release.policy).evaluate(
+    result = EvaluationRunner(release.class_ids, release.policy).evaluate(
         run_id=release.evaluation_run_ids[0],
         dataset_release_id="eval-data-1",
         recipe_id=release.recipe_id,
         weights_sha256=release.weights_sha256,
         class_map_sha256=release.class_map_sha256,
-        role="development",
+        role="locked_final_test",
         images=(
             EvaluationImage(
                 "source",
@@ -66,6 +67,7 @@ def report(
             ),
         ),
     )
+    return replace(result, slices=result.slices | {"fixture_critical": result.overall})
 
 
 def test_recipe_promotion_and_rollback_preserve_the_whole_release_independently() -> None:
@@ -73,11 +75,28 @@ def test_recipe_promotion_and_rollback_preserve_the_whole_release_independently(
     small, large = model(320), model(640)
     state320 = RegistryState("project-1", small.recipe_id)
     state640 = RegistryState("project-1", large.recipe_id)
-    promoted320 = state320.promote(small, report(small), policy, expected_revision=0)
-    promoted640 = state640.promote(large, report(large), policy, expected_revision=0)
+    promoted320 = state320.promote(
+        small,
+        report(small),
+        policy,
+        expected_revision=0,
+        qualification=qualification_context(small, report(small), policy),
+    )
+    promoted640 = state640.promote(
+        large,
+        report(large),
+        policy,
+        expected_revision=0,
+        qualification=qualification_context(large, report(large), policy),
+    )
     next320 = model(320, "model-2")
     replaced320 = promoted320.promote(
-        next320, report(next320), policy, expected_revision=1, incumbent_report=report(small)
+        next320,
+        report(next320),
+        policy,
+        expected_revision=1,
+        incumbent_report=report(small),
+        qualification=qualification_context(next320, report(next320), policy),
     )
     assert replaced320.champion == next320
     assert replaced320.rollback == small
@@ -131,7 +150,11 @@ def test_incumbent_comparison_is_required_and_uses_the_same_frozen_dataset() -> 
     first, second = model(320), model(320, "second")
     policy = PromotionPolicy(1, 0)
     champion = RegistryState("project-1", first.recipe_id).promote(
-        first, report(first), policy, expected_revision=0
+        first,
+        report(first),
+        policy,
+        expected_revision=0,
+        qualification=qualification_context(first, report(first), policy),
     )
     with pytest.raises(ValueError, match="comparison evidence"):
         champion.promote(second, report(second), policy, expected_revision=1)
@@ -173,8 +196,14 @@ def test_better_candidate_can_replace_incumbent_below_current_absolute_gates(
     state = RegistryState("project-1", first.recipe_id, 1, first)
     with pytest.raises(ValueError):
         gate.qualify(first, incumbent)
+    evidence = replace(evidence, slices=evidence.slices | {"fixture_critical": evidence.overall})
     promoted = state.promote(
-        second, evidence, gate, expected_revision=1, incumbent_report=incumbent
+        second,
+        evidence,
+        gate,
+        expected_revision=1,
+        incumbent_report=incumbent,
+        qualification=qualification_context(second, evidence, gate),
     )
     assert promoted.champion == second and promoted.rollback == first
     with pytest.raises(ValueError, match="atomic model release"):
