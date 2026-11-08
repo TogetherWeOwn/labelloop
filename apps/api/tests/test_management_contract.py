@@ -64,13 +64,14 @@ REFERENCE = {
     "validity_scope": "Wildlife fixture",
     "confused_with": [],
 }
+ASSET = {"expected_revision": 1, "original_base64": "aW1hZ2U=", "source_group": "session-a"}
 MUTATIONS = [
     ("/projects/p/references", "enroll_reference", REFERENCE, 201),
     ("/projects", "create_project", PROJECT, 201),
     (
         "/projects/p/assets",
         "ingest_asset",
-        {"expected_revision": 1, "original_base64": "aW1hZ2U=", "source_group": "session-a"},
+        ASSET,
         201,
     ),
     (
@@ -344,7 +345,7 @@ def test_scope_draft_rejects_invalid_or_authority_fields(patch):
 
 def test_asset_json_text_is_decoded_for_the_port_without_relaxing_revisions():
     client, service = client_for(Actor())
-    payload = MUTATIONS[1][2]
+    payload = ASSET
     response = client.post(
         "/projects/p/assets", json=payload, headers={"Idempotency-Key": "asset-1"}
     )
@@ -372,7 +373,7 @@ def test_asset_encoding_and_revision_refusals_do_not_reach_port(patch):
     client, service = client_for(Actor())
     response = client.post(
         "/projects/p/assets",
-        json={**MUTATIONS[1][2], **patch},
+        json={**ASSET, **patch},
         headers={"Idempotency-Key": "asset-1"},
     )
     assert response.status_code == 422
