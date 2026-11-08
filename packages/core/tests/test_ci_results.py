@@ -30,11 +30,19 @@ def test_ci_results_requires_every_job() -> None:
         ({"python": True, "web": False, "docs": False}, {"web-build"}),
         (
             {"python": False, "web": True, "docs": False},
-            {"types", "unit", "import-contract", "ml-smoke"},
+            {"types", "unit", "import-contract", "ml-smoke", "recovery-drill"},
         ),
         (
             {"python": False, "web": False, "docs": True},
-            {"types", "unit", "import-contract", "ml-smoke", "web-build", "dev-stack"},
+            {
+                "types",
+                "unit",
+                "import-contract",
+                "ml-smoke",
+                "recovery-drill",
+                "web-build",
+                "dev-stack",
+            },
         ),
     ],
 )
