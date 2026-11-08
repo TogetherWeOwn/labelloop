@@ -78,6 +78,75 @@ try {
       await page.close();
     }
   }
+  for (const width of [1280, 390]) {
+    for (const role of ['admin', 'reviewer']) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.goto(`${entry}?screen=new-project&role=${role}&state=dispatch-unknown-setup`);
+      await page.getByText('Setup evidence is unavailable.', { exact: false }).waitFor();
+      const catalog = page.getByRole('table', { name: 'Classes in this draft', exact: true });
+      assert.equal(await catalog.getByRole('cell', { name: 'Unknown', exact: true }).count(), 16, 'support, exclusions, mirror safety and approval stay unknown');
+      assert.equal(await catalog.getByText('Unknown', { exact: true }).count(), 16, 'approval is unknown, not Proposed or approved');
+      assert.equal(await catalog.getByText('add more', { exact: true }).count(), 0, 'unknown support is not zero');
+      assert.equal(await page.getByRole('button', { name: /^Accept / }).count(), 0);
+      for (const step of ['Scope', 'Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish']) {
+        await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: new RegExp(step) }).focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('heading', { level: 2, name: new RegExp(step) }).waitFor();
+        const content = page.locator('.setup-content');
+        for (const button of await content.getByRole('button').all()) {
+          if (!/^Compare /.test(await button.innerText())) assert.equal(await button.isDisabled(), true, `unknown ${step} must not dispatch`);
+        }
+        if (step === 'Scope') {
+          assert.match(await content.innerText(), /Project name: Unknown/);
+          assert.equal(await page.getByLabel('Project name', { exact: true }).count(), 0, 'unknown name is not an empty field');
+        }
+        if (step === 'Evidence') {
+          await page.getByText('Reference evidence is unknown.', { exact: false }).waitFor();
+          assert.equal(await page.getByRole('table', { name: 'Reference evidence', exact: true }).count(), 0);
+        }
+        if (step === 'Labelling guide') {
+          await page.getByText('Structured labelling policy is unknown.', { exact: false }).waitFor();
+          await page.getByText('Use visible extents for plant milk cartons and shelf price tags.', { exact: true }).waitFor();
+          assert.equal(await page.getByLabel('Exhaustive for scope', { exact: true }).count(), 0, 'free text never becomes structured completeness');
+          assert.equal(await page.getByLabel('Minimum target size in pixels', { exact: true }).count(), 0);
+        }
+        if (step === 'Sources and groups') {
+          assert.match(await content.innerText(), /1326 \/ Unknown/);
+          assert.match(await content.innerText(), /Declared metadata keys \(session, sequence, subject\): Unknown/);
+          assert.match(await content.innerText(), /1 near-duplicate pairs/);
+          assert.match(await content.innerText(), /descriptive, not a readiness pass/);
+        }
+        assert.equal(await page.evaluate(() => document.documentElement.dataset.lastCommand ?? null), null);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+        await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+        const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })));
+        assert.deepEqual(violations, [], `unknown ${step}: ${JSON.stringify(violations)}`);
+        results.push({ key: `setup-unknown-${step}-${role}-${width}`, pass: true, axe: 0, keyboard: 'step-enter', realCommands: false });
+      }
+      assert.deepEqual(errors, []);
+      await page.screenshot({ path: `${evidence}/setup-unknown-${role}-${width}.png`, fullPage: true });
+      if (role === 'admin') {
+        await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
+        await page.getByRole('button', { name: 'Edit Almond milk 1 L', exact: true }).click();
+        await page.getByLabel('Class name', { exact: true }).fill('Retained unknown-evidence edit');
+        await page.getByRole('button', { name: 'Return unknown setup evidence', exact: true }).click();
+        await page.getByText('Setup evidence is unavailable.', { exact: false }).waitFor();
+        assert.equal(await page.getByLabel('Class name', { exact: true }).inputValue(), 'Retained unknown-evidence edit');
+        assert.equal(await page.getByLabel('Class name', { exact: true }).getAttribute('readonly'), '');
+        assert.equal(await page.getByRole('button', { name: 'Save class changes', exact: true }).isDisabled(), true);
+        assert.equal(await page.getByRole('button', { name: 'Approve classes and continue', exact: true }).isDisabled(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.dataset.lastCommand ?? null), null);
+        await page.getByRole('button', { name: 'Discard class edits', exact: true }).click();
+        await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Labelling guide/ }).click();
+        await page.getByText('Structured labelling policy is unknown.', { exact: false }).waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.dataset.lastCommand ?? null), null);
+        results.push({ key: `setup-evidence-lost-during-edit-${width}`, pass: true, retained: true, realCommands: false });
+      }
+      await page.close();
+    }
+  }
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   // The command harness only captures payloads. It has no API, auth or training capability.
   const open = (screen) => page.goto(`${entry}?screen=${screen}&state=command-contract`);

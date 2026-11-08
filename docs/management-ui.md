@@ -202,9 +202,9 @@ pair pixels are still unavailable, so relationship decisions remain disabled.
 Transport, supported formats/limits, ownership/licensing, safe image normalization,
 immutable original storage, hashes, transitive grouping, cross-split quarantine,
 revision locking and approval invalidation remain with the producer. Selection
-metadata must not be wired to an importer as-is. Its new keyboard/axe, failure,
-revision, deferred-response, read-only and no-file-read/no-upload cases are pending
-on Actions. No new tokens, upload adapter, client, shell or persistent store is added.
+metadata must not be wired to an importer as-is. Its keyboard/axe, failure,
+revision, deferred-response, read-only and no-file-read/no-upload cases passed
+on Actions at `bbc1d40`. No new tokens, upload adapter, client, shell or persistent store is added.
 
 Reference file selection reuses the existing Evidence form and A11/A1/A14 fields
 and controls. The upload mode requires a class in the inspected draft, a non-empty
@@ -224,7 +224,7 @@ licensing, authenticated ownership, holdout exclusion, safe normalization,
 proposal validation, revision locking, approval invalidation and persistence
 remain producer responsibilities. Do not connect this metadata capture to an
 importer as-is. Its browser failure/conflict/deferred-response, separate-acceptance,
-read-only, keyboard/axe/overflow and no-read/no-upload cases are pending on Actions.
+read-only, keyboard/axe/overflow and no-read/no-upload cases passed on Actions at `bbc1d40`.
 No new tokens, components or second client/store/shell are introduced.
 
 At `c38b6ad`, no Actions runs registered: the PR was conflicted after the Platform
@@ -235,6 +235,35 @@ needed. Neither module is mounted as a second production shell. Main's separatel
 reviewed scanner changes are inherited unchanged; this conflict resolution adds
 no scanner ignore, waiver or gate reduction. No source-selection pass is inferred
 from this repair; all changed behavior requires new exact-head Actions evidence.
+
+## Unknown setup evidence alignment
+
+The producer's `9cbc85100b7cbe87c09f3ecee434c50b07313799` management-only generated
+contract makes absent bootstrap evidence explicit. The fixture projection now
+preserves nullable scope name/representation/intended use/specificity, class
+reference support/exclusions/mirror safety/approval, reference bank, structured
+guide, approved steps and source group/metadata-key/split summary evidence. Null
+is displayed as **Unknown**, never an empty bank, zero support, false mirror safety,
+Proposed provenance or an approved step. Known empty/false/zero remain distinct.
+
+`annotation_guide` is required stored free text, displayed separately from nullable
+structured policy. The browser never parses it into extent, target-size,
+completeness or approval defaults. Source counts and pending pairs remain visible
+as descriptive facts, not a readiness pass or evidence of a complete locked split.
+The fixture port conservatively disables setup commands while this required
+evidence is unknown, retaining navigation and inspection. Existing pending edits
+remain visible and discardable if a refresh loses evidence; they cannot save or
+approve over that refresh. This introduces no wire adapter or typed setup-write
+implementation. Do not fabricate these fields when mounting the generated client.
+
+New unit cases cover each independently missing field and distinguish known empty,
+false and zero. New browser cases exercise all six steps at 1280/390 for both roles,
+keyboard, axe, overflow and no dispatch, plus loss of evidence during an open edit.
+These new cases are pending Actions verification. The real `read_project` adapter
+remains unmounted; auth, typed setup writes, approval invalidation, publication,
+queue and qualification composition still belong to their existing producers.
+No raw asset URI/object key, provider policy, data parser, network client, tokens,
+components, shell or persistence store is added here.
 
 ## Remaining acceptance and final wiring obligations
 
@@ -255,6 +284,15 @@ These remain open; merging fixture components does not discharge them:
   Platform run extension and the operational canary/drift extension. Do not mount
   their standalone fixture screens as competing application screens.
 - Complete exact-head Actions evidence and native UX, QA and Security stages.
+  At `bbc1d40`, [CI/ci-ok](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426869),
+  [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426763) and
+  [required gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426741)
+  passed. The [web job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426869/job/128620278082)
+  passed lint/types, 46 web unit cases (31 management, 11 Platform, four health),
+  all three builds, both modules' browser checks, **174 management browser cases**
+  and the six-box compiler cross-check. [Management artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426869/artifacts/13602308575),
+  [Platform artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426869/artifacts/13602493276).
+  Source/reference selection is now verified; unknown-setup alignment is not yet.
   At `a6f51ea`, [Actions run `42441797093`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441797093),
   [web job `128612421496`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441797093/job/128612421496)
   passed lint, types, 35 web unit cases, both builds, all **166 browser cases**

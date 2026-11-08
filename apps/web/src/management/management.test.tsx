@@ -74,6 +74,49 @@ describe('screen contracts and role rendering', () => {
       expect(html).not.toContain('Import rows to fix');
     }
   });
+  it.each(['admin', 'reviewer'] as const)('preserves unknown class and approval evidence for %s', (role) => {
+    const data = structuredClone(fixtureSnapshot);
+    data.draft.classes = data.draft.classes.map((row) => ({ ...row, examples: null, exclusions: null, mirror_safe: null, provenance: null }));
+    data.draft.approved_steps = null;
+    const html = render(NewProjectView, data, role);
+    expect(html).toContain('Unknown values are not approvals');
+    expect(html).not.toContain('>Approved by an admin<');
+    expect(html).not.toContain('>Proposed<');
+    expect(html).not.toContain('>Done<');
+    expect(html).not.toContain('>No<');
+    expect(html).not.toContain('>add more<');
+    expect(html).not.toContain('>Accept Almond milk 1 L<');
+    expect(html).toContain('<td>Unknown</td>');
+    expect(data.draft.classes[0].mirror_safe).toBeNull();
+    expect(data.draft.classes[0].examples).toBeNull();
+  });
+  const missingEvidence: readonly [string, (data: ManagementSnapshot) => void][] = [
+    ...(['name', 'representation', 'intended_use', 'specificity'] as const).map((field): [string, (data: ManagementSnapshot) => void] => [field, (data) => { data.draft.scope[field] = null; }]),
+    ...(['examples', 'exclusions', 'mirror_safe', 'provenance'] as const).map((field): [string, (data: ManagementSnapshot) => void] => [field, (data) => { data.draft.classes[0][field] = null; }]),
+    ['references', (data) => { data.draft.references = null; }],
+    ['guide', (data) => { data.draft.guide = null; }],
+    ['approved_steps', (data) => { data.draft.approved_steps = null; }],
+    ...(['groups', 'metadata_keys', 'split_summary'] as const).map((field): [string, (data: ManagementSnapshot) => void] => [field, (data) => { data.draft.sources[field] = null; }]),
+  ];
+  it.each(missingEvidence)('fails closed when only %s is unknown', (_name, makeUnknown) => {
+    const data = structuredClone(fixtureSnapshot);
+    makeUnknown(data);
+    const html = render(NewProjectView, data);
+    expect(html).toContain('Setup evidence is unavailable.');
+    expect(html.match(/<button\b[^>]*>Edit Oat milk 1 L<\/button>/)?.[0]).toContain('disabled');
+    expect(html.match(/<button\b[^>]*>Approve classes and continue<\/button>/)?.[0]).toContain('disabled');
+  });
+  it('distinguishes known empty, false and zero values from unknown evidence', () => {
+    const data = structuredClone(fixtureSnapshot);
+    data.draft.classes = data.draft.classes.map((row) => ({ ...row, examples: 0, exclusions: '', mirror_safe: false }));
+    data.draft.references = []; data.draft.approved_steps = [];
+    data.draft.sources = { ...data.draft.sources, groups: 0, metadata_keys: '', split_summary: 'No source assignments' };
+    const html = render(NewProjectView, data);
+    expect(html).not.toContain('Setup evidence is unavailable.');
+    expect(html).toContain('>No</td>');
+    expect(html).toContain('>add more</span>');
+    expect(html.match(/<button\b[^>]*>Edit Oat milk 1 L<\/button>/)?.[0]).not.toContain('disabled');
+  });
   it('never offers edits to a frozen canonical release', () => {
     const data = structuredClone(fixtureSnapshot);
     data.release!.state = 'Frozen';

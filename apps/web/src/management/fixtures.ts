@@ -77,6 +77,7 @@ export const fixtureSnapshot: ManagementSnapshot = {
       { id: 'source-0042', width: 1920, height: 1080, sha256: digest('2'), source_group: 'session-fixture-2', split: null, assignment_revision: null },
     ],
     references: [{ id: 'ref-1', class_id: 'almond', source: 'Invented fixture scene', permitted_use: 'CC0 fixture', view: 'Front', lighting: 'Store', scale: 'Native', confused_with: 'soy', provenance: 'Proposed' }],
+    annotation_guide: 'Use visible extents for plant milk cartons and shelf price tags.',
     guide: { extent: 'visible', truncation: 'Retain visible extent', occlusion: 'Do not estimate hidden extent', reflections: 'Out of scope', min_target_px: 4, exhaustive: true, background: 'Other packaging' },
     sources: { images: 1326, groups: 240, metadata_keys: 'session, sequence, subject', pending_pairs: [{ id: 'pair-1', left: 'source-0041', right: 'source-0042' }], split_summary: '192 train / 24 val / 24 test groups; derivatives inherit the source split' },
     approved_steps: ['Scope'], versions: { ontology: 'v1', guide: 'v1', references: 'v1', splits: 'v3', recipes: 'full-letterbox-640-v1, full-letterbox-320-v1', policy: 'P-2' },

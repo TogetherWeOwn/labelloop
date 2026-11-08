@@ -27,6 +27,12 @@ if (scenario === 'empty') {
   snapshot.draft.sources = { images: 0, groups: 0, metadata_keys: '', pending_pairs: [], split_summary: 'No source assignments' };
 }
 if (scenario === 'source-details-missing') snapshot.draft.source_assets = null;
+if (scenario === 'dispatch-unknown-setup') {
+  snapshot.draft.scope = { ...snapshot.draft.scope, name: null, representation: null, intended_use: null, specificity: null };
+  snapshot.draft.classes = snapshot.draft.classes.map((row) => ({ ...row, examples: null, exclusions: null, mirror_safe: null, provenance: null }));
+  snapshot.draft.references = null; snapshot.draft.guide = null; snapshot.draft.approved_steps = null;
+  snapshot.draft.sources = { ...snapshot.draft.sources, groups: null, metadata_keys: null, split_summary: null };
+}
 if (scenario === 'dispatch-published') snapshot.draft.published = true;
 if (scenario === 'dispatch-unapproved-scope') snapshot.draft.approved_steps = [];
 if (scenario === 'dispatch-paid-paused') snapshot.paid_paused = true;

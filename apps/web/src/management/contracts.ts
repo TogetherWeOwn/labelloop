@@ -7,8 +7,8 @@ export type SetupStep = 'Scope' | 'Classes' | 'Evidence' | 'Labelling guide' | '
 export type JobState = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Cancelled' | 'Paused';
 export type Fact = readonly [string, ReactNode];
 export interface ClassRow {
-  id: string; name: string; aliases: string; parent: string; examples: number;
-  exclusions: string; mirror_safe: boolean; provenance: 'Proposed' | 'Approved by an admin';
+  id: string; name: string; aliases: string; parent: string; examples: number | null;
+  exclusions: string | null; mirror_safe: boolean | null; provenance: 'Proposed' | 'Approved by an admin' | null;
 }
 export interface ReferenceRow {
   id: string; class_id: string; source: string; permitted_use: string; view: string;
@@ -28,13 +28,14 @@ export interface SourceAssetFact {
 }
 export interface ProjectDraft {
   id: string; revision: number; saved_at: string;
-  scope: { name: string; detect: string; representation: string; intended_use: string; specificity: string; permitted_use: string; external_providers: string };
-  classes: readonly ClassRow[]; references: readonly ReferenceRow[];
+  scope: { name: string | null; detect: string; representation: string | null; intended_use: string | null; specificity: string | null; permitted_use: string; external_providers: string };
+  classes: readonly ClassRow[]; references: readonly ReferenceRow[] | null;
   dataset_import?: DatasetImportReport | null;
   source_assets?: readonly SourceAssetFact[] | null;
-  guide: { extent: string; truncation: string; occlusion: string; reflections: string; min_target_px: number; exhaustive: boolean; background: string };
-  sources: { images: number; groups: number; metadata_keys: string; pending_pairs: readonly { id: string; left: string; right: string }[]; split_summary: string };
-  approved_steps: readonly SetupStep[];
+  annotation_guide: string;
+  guide: { extent: string; truncation: string; occlusion: string; reflections: string; min_target_px: number; exhaustive: boolean; background: string } | null;
+  sources: { images: number; groups: number | null; metadata_keys: string | null; pending_pairs: readonly { id: string; left: string; right: string }[]; split_summary: string | null };
+  approved_steps: readonly SetupStep[] | null;
   versions: Readonly<Record<string, string>>; published: boolean;
 }
 export interface ReleaseRecord {
@@ -115,7 +116,7 @@ export type ManagementCommand =
   | { kind: 'request_dataset_import'; draft_id: string; expected_revision: number; file: { name: string; size: number } }
   | { kind: 'request_source_upload'; draft_id: string; expected_revision: number; files: readonly { name: string; size: number }[] }
   | { kind: 'request_reference_upload'; draft_id: string; expected_revision: number; file: { name: string; size: number }; values: ReferenceInput }
-  | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: Pick<ClassRow, 'name' | 'aliases' | 'parent' | 'exclusions' | 'mirror_safe'> }
+  | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: { name: string; aliases: string; parent: string; exclusions: string; mirror_safe: boolean } }
   | { kind: 'add_reference'; draft_id: string; expected_revision: number; values: ReferenceInput }
   | { kind: 'resolve_pair'; draft_id: string; expected_revision: number; pair_id: string; same_group: boolean }
   | { kind: 'publish_project'; draft_id: string; expected_revision: number }

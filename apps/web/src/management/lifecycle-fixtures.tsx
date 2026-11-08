@@ -59,13 +59,13 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
             if (command.kind === 'save_setup' && command.step === 'Sources and groups' && typeof command.values.metadata_keys === 'string') snapshot.draft.sources.metadata_keys = command.values.metadata_keys;
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
-            if (command.kind === 'add_reference' || command.kind === 'request_reference_upload') snapshot.draft.references = [...snapshot.draft.references, { id: command.kind === 'add_reference' ? 'ref-linked' : 'ref-uploaded', ...command.values, provenance: 'Proposed' }];
+            if (command.kind === 'add_reference' || command.kind === 'request_reference_upload') snapshot.draft.references = [...(snapshot.draft.references ?? []), { id: command.kind === 'add_reference' ? 'ref-linked' : 'ref-uploaded', ...command.values, provenance: 'Proposed' }];
             if (command.kind === 'draft_assistant_classes') snapshot.draft.classes = [...snapshot.draft.classes, { id: 'assistant-oat', name: 'Oat milk 1 L', aliases: '', parent: '', exclusions: 'Soy milk', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
             if (command.kind === 'request_dataset_import') {
               snapshot.draft.dataset_import = { id: 'import-returned', source_name: command.file.name, rows: importRejected ? 14 : 1, state: importRejected ? 'Rejected' : 'Proposed', errors: importRejected ? [{ row: 14, field: 'name', message: 'Class name is empty' }] : [] };
               if (!importRejected) {
                 snapshot.draft.classes = [...snapshot.draft.classes, { id: 'imported-yoghurt', name: 'Imported yoghurt', aliases: '', parent: '', exclusions: 'Milk cartons', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
-                snapshot.draft.approved_steps = snapshot.draft.approved_steps.filter((step) => step === 'Scope');
+                snapshot.draft.approved_steps = snapshot.draft.approved_steps?.filter((step) => step === 'Scope') ?? null;
               }
             }
             resolve({ message: 'Captured save only' });
@@ -83,6 +83,12 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
         snapshot.evaluations = structuredClone(fixtureSnapshot.evaluations);
         document.dispatchEvent(new Event('visibilitychange'));
       },
+      forgetSetupEvidence: () => {
+        snapshot.draft.revision += 1;
+        snapshot.draft.guide = null; snapshot.draft.references = null; snapshot.draft.approved_steps = null;
+        snapshot.draft.sources.groups = null;
+        document.dispatchEvent(new Event('visibilitychange'));
+      },
       finish: () => { finishSave?.(); },
       pausePaid: () => { snapshot.paid_paused = true; document.dispatchEvent(new Event('visibilitychange')); },
     };
@@ -91,6 +97,7 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
     <p>Refresh lifecycle fixture. Revisions and save responses are simulated; no server is connected.</p>
     <button onClick={() => rig.refresh()}>Refresh external records</button>
     <button onClick={() => rig.finish()}>Finish pending save</button>
+    <button onClick={() => rig.forgetSetupEvidence()}>Return unknown setup evidence</button>
     <button onClick={() => rig.pausePaid()}>Pause paid steps</button>
     <ManagementModule screen={screen} role="admin" port={rig.port} />
   </>;
