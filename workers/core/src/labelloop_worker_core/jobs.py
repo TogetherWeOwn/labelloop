@@ -13,6 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from labelloop_core.json_records import canonical_json
+
 
 class LeaseLost(Exception):
     """Expired, cancelled or superseded worker; its transaction must roll back."""
@@ -23,9 +25,7 @@ class ReplayConflict(ValueError):
 
 
 def canonical(value: dict) -> bytes:
-    # Normalize tuple values and object keys before sorting; JSON scalar types stay distinct.
-    normalized = json.loads(json.dumps(value, allow_nan=False))
-    result = json.dumps(normalized, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    result = canonical_json(value)
     if len(result) > 2_000_000:
         raise ValueError("stage record exceeds bounded inline artifact size")
     return result

@@ -2,7 +2,6 @@
 
 import hashlib
 import io
-import json
 import math
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -13,15 +12,13 @@ from typing import Protocol
 from labelloop_core.domain import Recipe, ReferenceExample, SourceAsset
 from labelloop_core.evaluation import DerivedPredictions, Detection, merge_detections
 from labelloop_core.geometry import Box, full_frame_transform
+from labelloop_core.json_records import canonical_json
 from labelloop_core.registry import ModelRelease, RegistryState
 from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy, require_digest
 
 
 def record_digest(value: dict) -> str:
-    normalized = json.loads(json.dumps(value, allow_nan=False))
-    return hashlib.sha256(
-        json.dumps(normalized, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    ).hexdigest()
+    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -361,9 +358,8 @@ class ControlledPredictor:
         import numpy as np
         import torch
         import ultralytics
-        from PIL import Image
+        from PIL import Image, features
 
-        from labelloop_compiler.ingest import imaging_toolchain
         from labelloop_worker_ml.training import file_digest, predict_samples
 
         weights = self.checkpoint_path(champion.weights_sha256)
@@ -428,7 +424,6 @@ class ControlledPredictor:
                 shapes,
                 confidence=request.candidate_conf,
             )
-        toolchain = imaging_toolchain()
         return PredictionBatch(
             predictions,
             tuple(shapes),
@@ -436,8 +431,8 @@ class ControlledPredictor:
                 ("ultralytics", ultralytics.__version__),
                 ("torch", str(torch.__version__)),
                 ("opencv", cv2.__version__),
-                ("pillow", str(toolchain["pillow"])),
-                ("libjpeg_turbo", str(toolchain["libjpeg_turbo"])),
-                ("jpeg_compatibility", str(toolchain["jpeg_compatibility"])),
+                ("pillow", Image.__version__),
+                ("libjpeg_turbo", features.version("libjpeg_turbo") or "unknown"),
+                ("jpeg_compatibility", features.version_codec("jpg") or "unknown"),
             ),
         )

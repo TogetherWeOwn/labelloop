@@ -85,6 +85,31 @@ def test_enqueue_preserves_nested_json_scalar_types(store, first, second):
     store.cancel(project, job_id)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_queue_rejects_colliding_json_keys_without_persisting_data(store, reverse):
+    pairs = [(1, "original"), ("1", "replacement")]
+    payload = {"nested": [{"values": dict(reversed(pairs) if reverse else pairs)}]}
+    project = str(uuid4())
+    with pytest.raises(ValueError, match="colliding JSON object keys"):
+        store.enqueue(project, "operation", "proposals", payload)
+    with store.connect() as conn:
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM worker_job WHERE project_key=%s", (project,)
+            ).fetchone()[0]
+            == 0
+        )
+    job_id = store.enqueue(project, "operation", "proposals", {"accepted": True})
+    lease = store.claim("proposals", "worker", job_id=job_id)
+    with pytest.raises(ValueError, match="colliding JSON object keys"):
+        store.save_stage(lease, "stage", payload)
+    assert store.artifacts(lease) == {}
+    with pytest.raises(ValueError, match="colliding JSON object keys"):
+        store.enqueue(project, "operation", "proposals", payload)
+    assert store.save_stage(lease, "stage", {"accepted": True}) == {"accepted": True}
+    store.cancel(project, job_id)
+
+
 def test_stage_hash_matches_normalized_readback_and_rejects_changes(store):
     from labelloop_worker_core.jobs import digest
 

@@ -21,6 +21,17 @@ from labelloop_worker_ml.proposals import (
 )
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_record_digest_rejects_colliding_json_keys(reverse):
+    pairs = [(1, "original"), ("1", "replacement")]
+    payload = {"nested": ({"values": dict(reversed(pairs) if reverse else pairs)},)}
+    with pytest.raises(ValueError, match="colliding JSON object keys"):
+        record_digest(payload)
+    assert record_digest({"values": {2: "two", 10: "ten"}}) == record_digest(
+        {"values": {"2": "two", "10": "ten"}}
+    )
+
+
 def inputs(side=320):
     original = b"licence-clean source stand-in; real raster tested in ML smoke"
     sha256 = hashlib.sha256(original).hexdigest()

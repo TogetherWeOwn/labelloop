@@ -1,5 +1,6 @@
 """Actual offline controlled inference tensor evidence; Actions CPU environment only."""
 
+import builtins
 import hashlib
 import io
 import json
@@ -14,12 +15,21 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("side", [320, 640])
-def test_controlled_proposals_keep_tensor_checkpoint_and_source_lineage(tmp_path, side):
+def test_controlled_proposals_keep_tensor_checkpoint_and_source_lineage(
+    tmp_path, monkeypatch, side
+):
+    original_import = builtins.__import__
+
+    def isolated_import(name, *args, **kwargs):
+        if name == "labelloop_compiler" or name.startswith("labelloop_compiler."):
+            raise ModuleNotFoundError("compiler is not installed in the ML image")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", isolated_import)
     import torch
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, features
     from ultralytics import YOLO
 
-    from labelloop_compiler.ingest import imaging_toolchain
     from labelloop_core.domain import Recipe, SourceAsset
     from labelloop_core.registry import ModelRelease, RegistryState
     from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy
@@ -92,7 +102,11 @@ def test_controlled_proposals_keep_tensor_checkpoint_and_source_lineage(tmp_path
     evidence_path = tmp_path / "proposal-evidence.json"
     evidence_path.write_text(json.dumps(record, sort_keys=True, indent=2))
     persisted = json.loads(evidence_path.read_text())
-    toolchain = imaging_toolchain()
+    toolchain = {
+        "pillow": Image.__version__,
+        "libjpeg_turbo": features.version("libjpeg_turbo") or "unknown",
+        "jpeg_compatibility": features.version_codec("jpg") or "unknown",
+    }
     for name in ("pillow", "libjpeg_turbo", "jpeg_compatibility"):
         assert persisted["runtime"][name] == toolchain[name]
         assert persisted["runtime"][name] != "unknown"
