@@ -36,6 +36,8 @@ def load_canonical_release(connection: sa.Connection, release_key: str) -> Canon
         .mappings()
         .one()
     )
+    if ontology["project_id"] != release["project_id"]:
+        raise ValueError("restored ontology belongs to another project")
     splits = (
         connection.execute(
             sa.select(db.source_split_assignment, db.source_asset.c.asset_key)
@@ -71,6 +73,8 @@ def load_canonical_release(connection: sa.Connection, release_key: str) -> Canon
             .mappings()
             .one()
         )
+        if asset["project_id"] != release["project_id"]:
+            raise ValueError("restored source belongs to another project")
         revision = (
             connection.execute(
                 sa.select(db.annotation_revision).where(

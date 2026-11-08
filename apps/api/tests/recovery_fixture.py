@@ -11,6 +11,7 @@ from labelloop_api.model_store import (
     change_registry,
     json_record,
     record_digest,
+    save_evaluation,
     save_model,
     save_training,
 )
@@ -28,7 +29,13 @@ from labelloop_core.training import Checkpoint, InferencePolicy, TrainingRequest
 
 
 def seed(connection, store, fixture, output: Path):
-    release = fixture.release
+    release = replace(
+        fixture.release,
+        samples=tuple(
+            replace(sample, revision=replace(sample.revision, revision=2, parent_revision=1))
+            for sample in fixture.release.samples
+        ),
+    )
 
     def insert(table, **values):
         return connection.execute(sa.insert(table).values(**values)).inserted_primary_key[0]
@@ -69,12 +76,12 @@ def seed(connection, store, fixture, output: Path):
             db.annotation_revision,
             asset_id=asset_id,
             actor_id="fixture-policy",
-            **json_record(sample.revision),
+            **json_record(replace(sample.revision, revision=1, parent_revision=None)),
         )
         insert(
             db.completeness_assessment,
             asset_id=asset_id,
-            revision=1,
+            revision=2,
             ontology_hash=release.ontology_hash(),
             scope_completeness="exhaustive_for_scope",
             actor_kind="system",
@@ -88,9 +95,15 @@ def seed(connection, store, fixture, output: Path):
             actor_kind="system",
             actor_id="fixture-policy",
             decision="fixture-accepted",
-            expected_revision=0,
+            expected_revision=1,
             correction=None,
             reason="recorded fixture acceptance, not operational gold",
+        )
+        insert(
+            db.annotation_revision,
+            asset_id=asset_id,
+            actor_id="fixture-policy",
+            **json_record(sample.revision),
         )
         insert(
             db.source_split_assignment,
@@ -280,4 +293,11 @@ def seed(connection, store, fixture, output: Path):
                 incumbent_evaluation_key=report.run_id if revision else None,
                 policy=PromotionPolicy(1, 0.0),
             )
+            if revision == 0:
+                save_evaluation(
+                    connection,
+                    model_key=model.release_id,
+                    variant_id=variant_id,
+                    report=replace(report, run_id=report.run_id + "-appended"),
+                )
     return manifests

@@ -32,7 +32,9 @@ The snapshot includes:
 - Canonical/review/promotion audit events and annotation history, with row counts,
   canonical table hashes and snapshot-time hash-chain seals. Annotation revisions
   and registry event revisions must be contiguous; registry before/after records
-  and head pointers must agree. Existing M1/M2 events have no persisted cryptographic
+  and head pointers must agree. Append-only evaluation enrichment is allowed between
+  registry events; immutable model payloads and existing evidence cannot change.
+  Every event scope must retain its registry head. Existing M1/M2 events have no persisted cryptographic
   append-chain, so seals establish snapshot integrity, **not proof against omission
   before capture**. Keep the approved root digest outside the snapshot. A digest
   supplied only by an untrusted snapshot is not an authentication mechanism.
@@ -83,7 +85,8 @@ retains those checks.
    `recovery-<uuid>` buckets on the job's fixed loopback fixture services. Migrates
    each DB through Alembic without dropping/replacing any existing schema.
 2. Seeds every registered table with the CC0 interface fixture, canonical evidence,
-   synthetic model/evaluation lineage and two successive promotions per recipe.
+   two annotation revisions with interleaved review events, synthetic model/evaluation
+   lineage, appended evaluation evidence and two successive promotions per recipe.
 3. Captures one fixture snapshot; removes the source bucket before restoring.
 4. Rejects missing/corrupt objects, wrong manifest roots, stale schema versions and
    truncated registry audit chains, before writing accepted restore state.
@@ -91,6 +94,8 @@ retains those checks.
    non-empty target or non-disposable/non-loopback target is refused. Writes use
    ordinary INSERTs and existing database constraints/triggers, never disabled
    guards, upserts, source overwrites or external endpoints selected by a manifest.
+   Annotation revisions replay in order with each review inserted while its expected
+   revision is current; foreign-key table order alone is not sufficient.
 6. Rehydrates compiler inputs from restored PostgreSQL/object storage, compiles 320
    and 640, and compares **every file byte hash**, including sidecars/manifests.
    Recovers model and evaluation lineage, then rolls back 320 with its full payload

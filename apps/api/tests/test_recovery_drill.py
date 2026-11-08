@@ -116,7 +116,7 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
         restore_start = time.monotonic()
         with fresh_fixture_bucket(client, endpoint="127.0.0.1:59000") as restored_objects:
             with target.begin() as connection:
-                # Missing/corrupt object, stale schema, wrong root and truncated event chain fail visibly.
+                # Missing/corrupt objects, stale schemas and incomplete audits fail visibly.
                 key = next(iter(snapshot.objects))
                 cases = [
                     replace(
