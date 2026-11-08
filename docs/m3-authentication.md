@@ -77,11 +77,17 @@ these authentication tables, so all existing sessions and audit history are lost
 back up before an authorized rollback. There is no startup auto-migration.
 
 `auth_budget_0001` is a no-DDL merge of `0003_authentication` and the independently
-landed `budget_0002` head. It preserves both historical migration chains, giving
-`alembic upgrade head` one unambiguous target. Alembic metadata includes canonical,
+landed `budget_0002` head. After the proposal-job sibling landed, this alone left two
+heads on main. New no-DDL `auth_jobs_0001` joins exactly `auth_budget_0001` and
+`0006_proposal_jobs`, restoring one unambiguous `alembic upgrade head` target without
+rewriting either historical migration chain. Alembic metadata includes canonical,
 model, authentication and budget tables. Actions exercises clean upgrade, downgrade
-to base and re-upgrade against PostgreSQL; the graph regression checks that both
-histories remain reachable. No live/shared database is migrated by this change.
+to base and re-upgrade against disposable PostgreSQL, plus an upgrade from each
+merge parent. Graph regressions retain the original auth/budget ancestry and check
+the new join, proposal ancestry and no-op upgrade/downgrade bodies. Downgrading to
+base still executes the historical destructive downgrades; the no-DDL join does not
+make that a safe operational rollback. No live/shared database is migrated by this
+change.
 
 Login successes/failures, logout and authenticated permission/CSRF refusals record
 the resolved principal (or null for unknown logins). Events never contain supplied
