@@ -1,5 +1,6 @@
 """Real session/HTTP/registry transactions on Actions' disposable PostgreSQL only."""
 
+import json
 import secrets
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -13,8 +14,10 @@ from labelloop_api import auth, model_schema, qualification_schema, registry_api
 from labelloop_api.acceptance_store import load_acceptance, pause_acceptance
 from labelloop_api.auth_schema import principal, service_token
 from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
+from labelloop_api.final_test_store import load_final_test
 from labelloop_api.main import app
 from labelloop_api.model_store import json_record, load_registry
+from labelloop_core.qualification_wire import dumps
 
 ORIGIN = "https://testserver"
 PASSWORD = "fixture-password-only"
@@ -111,6 +114,120 @@ def assert_operations_read(client, engine, expected):
     with engine.begin() as connection:
         assert load_acceptance(connection, **scope) == acceptance
     return acceptance
+
+
+def exercise_http_final_invalidation(engine, project_key, dataset_key, action, reason, revision):
+    path = f"/projects/{project_key}/dataset-releases/{dataset_key}/final-test-events"
+    scope = {"project_key": project_key, "dataset_key": dataset_key}
+    payload = {"action": action, "reason": reason, "expected_revision": revision}
+
+    def journal_rows():
+        with engine.connect() as connection:
+            return tuple(
+                tuple(
+                    dict(row)
+                    for row in connection.execute(sa.select(table).order_by(table.c.id)).mappings()
+                )
+                for table in (
+                    qualification_schema.final_test_event,
+                    qualification_schema.acceptance_event,
+                )
+            )
+
+    with engine.begin() as connection:
+        original = load_final_test(connection, **scope)
+    before = journal_rows()
+    registry_before = snapshot(engine, project_key)
+    transition = original.record_adaptation if action == "adapt" else original.quarantine
+    expected = transition(reason, expected_revision=revision)
+    with authenticated_client(engine) as (client, identities, workers):
+        assert client.post(path, json=payload).status_code == 401
+        reviewer = login(client, identities["reviewer"][1])
+        assert client.post(path, headers=reviewer, json=payload).status_code == 403
+        client.cookies.clear()
+        for token in workers.values():
+            assert (
+                client.post(
+                    path, headers={"authorization": "Bearer " + token}, json=payload
+                ).status_code
+                == 403
+            )
+        headers = login(client, identities["admin"][1])
+        for denied in (
+            {},
+            headers | {"origin": "https://untrusted.invalid"},
+            headers | {"x-csrf-token": "wrong"},
+        ):
+            assert client.post(path, headers=denied, json=payload).status_code == 403
+        for extra in (
+            {"actor_id": "forged"},
+            {"dataset": {}},
+            {"role": "locked_final_test"},
+            {"action": "reset"},
+            {"group_ids": ["invented"]},
+        ):
+            response = client.post(path, headers=headers, json=payload | extra)
+            assert response.status_code == 422
+            assert response.json() == {"detail": "invalid_request"}
+        for target, change in (
+            (path, {"expected_revision": revision - 1}),
+            (
+                f"/projects/missing-http-project/dataset-releases/{dataset_key}/final-test-events",
+                {},
+            ),
+            (f"/projects/{project_key}/dataset-releases/missing-http-final/final-test-events", {}),
+        ):
+            response = client.post(target, headers=headers, json=payload | change)
+            assert response.status_code == (409 if change else 404)
+        assert journal_rows() == before
+        assert snapshot(engine, project_key) == registry_before
+
+        injected = []
+
+        def fail_after_insert(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.startswith("INSERT INTO qualification_final_test_event"):
+                injected.append(True)
+                raise sa.exc.SQLAlchemyError("private fixture invalidation failure")
+
+        sa.event.listen(engine, "after_cursor_execute", fail_after_insert)
+        try:
+            response = client.post(path, headers=headers, json=payload)
+        finally:
+            sa.event.remove(engine, "after_cursor_execute", fail_after_insert)
+        assert injected == [True]
+        assert response.status_code == 503
+        assert response.json() == {"detail": "final_test_unavailable"}
+        assert journal_rows() == before
+        with engine.begin() as connection:
+            assert load_final_test(connection, **scope) == original
+
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json() == {
+            "release_key": dataset_key,
+            "revision": expected.revision,
+            "effective_role": expected.effective_role,
+            "quarantined": bool(expected.quarantine_reasons),
+        }
+        with engine.begin() as connection:
+            assert load_final_test(connection, **scope) == expected
+        after = journal_rows()
+        assert after[1] == before[1]
+        assert len(after[0]) == len(before[0]) + 1
+        added = [row for row in after[0] if row["id"] not in {old["id"] for old in before[0]}]
+        assert len(added) == 1
+        assert added[0]["actor_id"] == identities["admin"][0]
+        assert added[0]["action"] == action
+        assert added[0]["record"] == json.loads(dumps(expected))
+        assert expected.dataset == original.dataset
+        assert expected.assessments == original.assessments
+        for change in ({}, {"expected_revision": expected.revision}):
+            # Neither a stale retry nor a duplicate reason can append another event.
+            assert client.post(path, headers=headers, json=payload | change).status_code == 409
+            assert journal_rows() == after
+        assert snapshot(engine, project_key) == registry_before
+    return expected
 
 
 def exercise_http_rollback(engine, request):

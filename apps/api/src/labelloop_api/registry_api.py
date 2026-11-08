@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 
-from labelloop_api import acceptance_store, annotation_audit_store, model_store
+from labelloop_api import acceptance_store, annotation_audit_store, final_test_store, model_store
 from labelloop_api.auth import auth_store, require_admin, require_reviewer
 from labelloop_api.auth_store import Principal
 from labelloop_core.audit import AuditObservation
@@ -20,6 +20,49 @@ class RollbackRequest(BaseModel):
     action: Literal["rollback"]
     recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
     expected_revision: int = Field(ge=0)
+
+
+class FinalTestInvalidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["adapt", "quarantine"]
+    reason: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    expected_revision: int = Field(ge=0)
+
+
+@router.post("/projects/{project_key}/dataset-releases/{release_key}/final-test-events")
+def invalidate_final_test(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: FinalTestInvalidationRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # Invalidation spends or quarantines the whole persisted test. No request can
+    # register/reset its membership, expose scores, restore independence or qualify.
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = final_test_store.invalidate_final_test(
+                connection,
+                project_key=project_key,
+                dataset_key=release_key,
+                action=payload.action,
+                reason=payload.reason,
+                expected_revision=payload.expected_revision,
+                actor_id=actor.id,
+            )
+            record = {
+                "release_key": release_key,
+                "revision": changed.revision,
+                "effective_role": changed.effective_role,
+                "quarantined": bool(changed.quarantine_reasons),
+            }
+    except NoResultFound:
+        raise HTTPException(404, detail="final_test_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="final_test_change_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="final_test_unavailable") from None
+    return record
 
 
 class AuditObservationRequest(BaseModel):

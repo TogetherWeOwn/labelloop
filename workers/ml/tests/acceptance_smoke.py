@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from qualification_context_smoke import exercise_context_assembly
 from qualification_fixture import qualification_context, synthetic_final
 from qualification_policy_smoke import exercise_policy, fixture_policy
+from registry_http_smoke import exercise_http_final_invalidation
 
 from labelloop_api import model_schema, qualification_schema
 from labelloop_api.acceptance_store import (
@@ -19,7 +20,6 @@ from labelloop_api.acceptance_store import (
 )
 from labelloop_api.final_test_store import (
     expose_final_test,
-    invalidate_final_test,
     record_candidate_selection,
     register_final_test,
 )
@@ -317,15 +317,14 @@ def exercise_acceptance(
             qualification=fresh_context,
             scope=affected,
         )
-        invalidate_final_test(
-            connection,
-            project_key=release.project_id,
-            dataset_key=fresh_final.dataset_release_id,
-            action="adapt",
-            reason="final result guided later change",
-            expected_revision=1,
-            actor_id=actor,
-        )
+    exercise_http_final_invalidation(
+        engine,
+        release.project_id,
+        fresh_final.dataset_release_id,
+        "adapt",
+        "final result guided later change",
+        1,
+    )
     with engine.begin() as connection:
         with pytest.raises(ValueError, match="stale or mismatched"):
             require_automatic_acceptance(
@@ -382,18 +381,18 @@ def exercise_acceptance(
                 == events
             )
         if action == "adapt":
-            with engine.begin() as connection:
-                invalidate_final_test(
-                    connection,
-                    project_key=release.project_id,
-                    dataset_key=fresh_final.dataset_release_id,
-                    action="quarantine",
-                    reason="later grouping integrity finding",
-                    expected_revision=2,
-                    actor_id=actor,
-                )
+            exercise_http_final_invalidation(
+                engine,
+                release.project_id,
+                fresh_final.dataset_release_id,
+                "quarantine",
+                "later grouping integrity finding",
+                2,
+            )
     return {
-        "scope": "synthetic scoped drift persistence, not domain quality or HTTP authorization",
+        "scope": "synthetic drift persistence and HTTP final-test invalidation, not domain quality",
+        "authenticated_final_invalidation_recovered": True,
+        "http_invalidation_denials_and_failures_unchanged": True,
         "current_policy_journal": policy_evidence,
         "persisted_context_assembly": assembly_evidence,
         "registry_reloaded_final_after_adaptation_and_quarantine": True,

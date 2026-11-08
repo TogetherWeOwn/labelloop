@@ -6,7 +6,44 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated sample-bound audit writes — pending Actions
+## Authenticated whole-test invalidation — pending Actions
+
+`POST /projects/{project_key}/dataset-releases/{release_key}/final-test-events`
+permits only human admins, using the existing session, same-origin and CSRF boundary.
+The strict body accepts only `adapt` or `quarantine`, a bounded nonblank reason and
+an expected journal revision. The existing store reloads the scoped persisted test
+under the project lock, applies its whole-release transition and appends the session
+actor in one transaction. No membership, role, principal, selection, qualification,
+reset or independence-restoration input is accepted. The response contains only
+release/revision/effective-role/quarantine metadata, never final scores or assessments.
+Missing scope returns 404; rejected transitions return 409; storage failures return a
+redacted 503 and roll back. This is invalidation, not exposure or qualification.
+
+Thirty-one adapter cases cover both actions, attribution, authentication, CSRF,
+strict inputs and outer-transaction rollback/redaction. The existing both-recipe
+PostgreSQL drift smoke now obtains its adaptation and quarantine through real admin
+HTTP. Denial/stale/foreign/duplicate controls, post-insert injected failure rollback,
+reconnect recovery and exact session-actor events precede retained actual registry
+and automatic-acceptance replay rejection. Frozen membership and prior assessments
+must remain identical; complete registry heads/events and acceptance history must not
+change. New assertions await exact-head Actions; no local tests ran.
+
+No new state machine, store, migration, dependency or UI design. Authenticated
+promotion/automatic-annotation/operational consumers, trusted original execution and
+measurement provenance, service-owned selectors and expanded restore/UI acceptance
+remain unfinished. REA angle: mount the existing append-only final-test invalidator
+behind sessions and retain its actual consuming transaction checks.
+
+## Authenticated sample-bound audit writes — verified baseline
+
+Exact `153d2e79e6f77398467809010bb536e3d39cbccd`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42510132085) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42510132085/job/128821218010),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42510132085/job/128821217996),
+queue PostgreSQL, migration cycles/all four parent upgrades, web-build/dev-stack,
+lint/types/import-contract, CodeQL and gitleaks. This verifies the adapter and
+persisted audit-write/veto controls below, not the new final-test invalidation route
+or complete milestone acceptance.
 
 `POST /projects/{project_key}/dataset-releases/{release_key}/audits` accepts bounded,
 strict human observations against an existing persisted sample. Admins and reviewers
@@ -27,7 +64,7 @@ It checks denial and stale/foreign/duplicate observations without writes, inject
 post-insert failure rollback, persisted actor/sample recovery and replay rejection.
 The existing clean-replacement, actual promotion/rollback and descendant veto
 assertions then consume those HTTP-written records with unchanged heads/events.
-These new assertions await exact-head Actions; there is no local test result.
+These audit assertions passed exact-head Actions at `153d2e7`; no local tests ran.
 
 No new store, migration, dependency, independent measurement producer or qualification
 engine. The service cannot sample arbitrary request-supplied candidates, clear old
