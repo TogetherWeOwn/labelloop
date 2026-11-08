@@ -247,15 +247,11 @@ class PlatformTrainingBackend:
                 run = CloudRun(request, self.plan.configuration_sha256, spend, self.plan)
                 session.save(run)
             self._observe_estimate(run)
-            # Ledger attribution is independent of the mutable model endpoint.
-            if run.provider_run_id and (
-                run.provider_state in _TERMINAL_PROVIDER
-                or self.budget.settled_charge(run.spend) is not None
-            ):
+            # A bound job can have a final charge before model readback reports
+            # completion (or while that endpoint is down). Reconcile it once here.
+            if run.provider_run_id:
                 run = self._settle(session, run, grant)
             if run.phase == "terminal":
-                if run.state == "identity_mismatch" and run.provider_run_id:
-                    run = self._settle(session, run, grant)
                 self._release_undispatched(run)
                 if run.state == "insufficient_credits":
                     self.budget.pause_insufficient_credits(run.spend)
@@ -468,12 +464,12 @@ class PlatformTrainingBackend:
         except Exception:
             return self._save(session, run, error_code="reconcile_unavailable")
         if not self._identity(model, run):
-            run = self._save(session, run, phase="terminal", state="identity_mismatch")
-            # Quarantine replacement artifacts, but still bill only the original
-            # bound job. Its charge endpoint is independent of model readback.
-            return self._settle(session, run, grant) if run.provider_run_id else run
+            # Original-job billing was reconciled before this read. Quarantine
+            # replacement artifacts without querying that charge a second time.
+            return self._save(session, run, phase="terminal", state="identity_mismatch")
         if model.state == "untrained":
             return run  # Including a 409 cancelled-before-start: NEVER repeat start.
+        newly_bound = run.provider_run_id is None and model.provider_run_id is not None
         run = self._save(
             session,
             run,
@@ -523,10 +519,11 @@ class PlatformTrainingBackend:
                 model.dataset_content_hash if valid_dataset else run.dataset_content_hash
             ),
         )
-        if model.state in _TERMINAL_PROVIDER:
+        # Only the first validated job binding has not been reconciled on entry.
+        if newly_bound:
             run = self._settle(session, run, grant)
-            if model.state == "completed" and not mismatch and run.checkpoint is None:
-                run = self._checkpoint(session, run, grant)
+        if model.state == "completed" and not mismatch and run.checkpoint is None:
+            run = self._checkpoint(session, run, grant)
         return run
 
     def _settle(self, session: RunSession, run: CloudRun, grant: ConnectionGrant) -> CloudRun:

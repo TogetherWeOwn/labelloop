@@ -342,6 +342,57 @@ def test_second_gpu_refusal_remains_recoverable_without_another_create():
     assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
 
 
+def test_active_job_billing_recovers_during_model_outage():
+    r = rig()
+    advance(r)
+    r.transport.progress("running")
+    assert advance(r).state == "active"
+    r.transport.charge_queries.clear()
+    r.transport.charge_value = replace(Charge(**FIXTURE["charge"]), actual_microusd=1_000_000)
+
+    def unavailable(grant, model_id, p):
+        raise TransportError(503)
+
+    r.transport.read_model = unavailable
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    for _ in range(2):
+        result = advance(r)
+        assert result.state == "active" and result.provider_state == "running"
+        assert result.error_code == "reconcile_unavailable"
+        assert result.charge == r.transport.charge_value
+        assert result.provider_run_id == "fixture-job"
+        assert r.ledger.gate.entry(r.plan.request.run_id).actual == 1_000_000
+        assert r.ledger.gate.monthly_exposure("2026-11") == 1_000_000
+        assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.transport.charge_queries == [("fixture-model", "fixture-job")]
+    assert result.checkpoint is None and "download" not in r.transport.calls
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("quarantined", [False, True])
+def test_one_charge_query_per_advance_with_late_original_job_billing(quarantined):
+    r = rig()
+    advance(r)
+    r.transport.progress("completed")
+    assert advance(r).state == "completed"
+    if quarantined:
+        r.transport.model = replace(r.transport.model, provider_run_id="replacement-job")
+    r.transport.charge_queries.clear()
+    for expected_count in (1, 2):
+        result = advance(r)
+        assert result.state == ("identity_mismatch" if quarantined else "completed")
+        assert result.charge is None
+        assert r.ledger.gate.monthly_exposure("2026-11") == 172_500
+        assert len(r.transport.charge_queries) == expected_count
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    assert advance(r).charge == r.transport.charge_value
+    assert len(r.transport.charge_queries) == 3
+    assert advance(r).charge == r.transport.charge_value
+    assert len(r.transport.charge_queries) == 3
+    assert set(r.transport.charge_queries) == {("fixture-model", "fixture-job")}
+    assert r.transport.calls.count("start") == 1
+
+
 def test_original_job_billing_survives_remote_restart_and_late_charge():
     r = rig()
     advance(r)
