@@ -343,11 +343,57 @@ restricted grants: precommit invisibility, both recipes, worker claim/replay,
 queue/audit/caller rollback, concurrent retries/unique pairs, revision/key/actor
 and ownership refusals, missing freeze evidence and independent recipe intents.
 New cases are not verified until exact-head Actions completes. This is a producer
-binding only: the `compile_variant` worker handler, fenced canonical variant
-publication, progress/detail reads and final shared-session app composition are
-still required before live mounting. There is no new table, migration, dependency,
-scheduler or production grant; no compiler execution or project-to-export pass is
-claimed by enqueue/claim tests.
+binding only; enqueue/claim tests do not prove compiler execution. Progress/detail
+reads and final shared-session app composition remain required before live mounting.
+There is no new table, migration, dependency, scheduler or production grant.
+
+### Canonical compiler handler and fenced publication (partial, unmounted)
+
+`CanonicalCompilationWorker` supplies a trusted `compile` stage and `publish` sink
+for the existing `JobRunner`, not another runner or scheduler. Trusted server
+composition binds kind `compile_variant`, `Stage("compilation", worker.compile)`
+and `worker.publish`; there is no default worker registration or application mount.
+The adapter uses structural queue/lease ports and adds no package dependency.
+
+Before reading objects, the stage checks workspace/project ownership, the actual
+job input, the human-attributed producer receipt and canonical freeze receipt.
+It rehydrates the exact historical ontology, annotation revisions and locked
+assignments for selected and excluded sources, bounded to 10,000 members, then
+recomputes the complete canonical snapshot and ontology hashes. Later labels,
+ontologies or ingests do not silently replace frozen evidence. Recipe policy is
+resolved and compared against the delivered code-owned 320/640 definitions.
+
+The delivered compiler reads each normalized original by its pinned object key,
+checks its source hash and produces all files in a worker-owned temporary directory.
+The adapter uploads each verified file plus the complete manifest under its byte-
+derived content key. The existing queue's 2 MB inline-artifact bound is checked
+before uploads. Temporary files are cleaned on success and failure. There is no
+request-provided output path, endpoint, backend, provider or spend. Objects are
+not transactional: failures may leave immutable unreferenced bytes, never a
+successful canonical variant. Storage durability/retention is deployment-owned.
+
+`JobStore.complete` owns the sink transaction and checks the current lease before
+and after it. The sink rechecks job/receipt/snapshot/recipe authority and manifest
+lineage, then inserts the immutable recipe (or verifies an identical existing
+one), validated variant, derived source transforms/content hashes and one system-
+attributed completion event with requester, job and generation pins. Existing
+release/recipe uniqueness and queue application fencing remain authoritative.
+The sink commits nothing and performs no object or filesystem operation; failure,
+cancellation, expiration or a superseding generation rolls publication back.
+Saved stage artifacts resume through the existing runner without recompiling.
+
+Disposable test worker roles add SELECT/INSERT on `preprocessing_recipe`,
+`yolo_dataset_variant`, `derived_sample`, `worker_stage_artifact` and
+`worker_application`, plus UPDATE on `worker_job`, to the canonical/producer test
+grants. Canonical event UPDATE/DELETE/TRUNCATE authority is refused at publication.
+No production role is created or widened. Actions cases cover real 320/640
+compilation, positive and negative labels, content hashes and source transforms,
+historical pins, precommit invisibility, missing-grant/caller/deadline rollback,
+expired/cancelled/superseded leases, artifact resume, storage retry, corrupt source
+bytes, unattributed jobs and forged input/stage lineage. New cases are commissioned,
+not verified until exact-head Actions completes. Training/evaluation/export,
+operational grants, final mounts and actual project-to-export acceptance remain
+incomplete; neither this handler nor its fixture claims model qualification.
 
 ## Canonical summary reads (partial, unmounted)
 

@@ -117,6 +117,506 @@ def compilation(database):
     return CanonicalManagementCompilation(service, JobStore.enqueue_in_transaction)
 
 
+@pytest.fixture
+def compiler_worker(database, compilation):
+    from types import SimpleNamespace
+
+    import psycopg
+
+    from labelloop_api.management_compile_worker import CanonicalCompilationWorker
+    from labelloop_worker_core.jobs import JobStore
+
+    service, owner, role = database
+    with owner.begin() as connection:
+        connection.execute(
+            text(
+                f"GRANT SELECT, INSERT ON worker_stage_artifact, worker_application, "
+                f'preprocessing_recipe, yolo_dataset_variant, derived_sample TO "{role}"'
+            )
+        )
+        connection.execute(text(f'GRANT UPDATE ON worker_job TO "{role}"'))
+    store = JobStore(
+        lambda: psycopg.connect(
+            os.environ["DATABASE_URL"].replace("+psycopg", ""),
+            options=f"-c role={role} -c statement_timeout=15000 -c lock_timeout=10000",
+        )
+    )
+    objects = SimpleNamespace(
+        read=lambda key: service.store.root.joinpath(*key.split("/")).read_bytes(),
+        put=service.store.put,
+    )
+    return CanonicalCompilationWorker(store, objects, service.workspace_id)
+
+
+def prepared_compilation(database, compilation, worker):
+    from labelloop_worker_core.jobs import StageContext
+
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    lease = worker.store.claim("compile_variant", "fixture-compiler", job_id=accepted.job_id)
+    assert lease is not None
+    record = worker.compile(StageContext(worker.store, lease, {}))
+    record = worker.store.save_stage(lease, "compilation", record)
+    return created, asset, release, accepted, lease, record
+
+
+def publication_state(owner, accepted):
+    with owner.connect() as connection:
+        variant = connection.execute(
+            text("SELECT file_manifest FROM yolo_dataset_variant WHERE id=:id"),
+            {"id": accepted.resource.id},
+        ).scalar_one_or_none()
+        application = connection.execute(
+            text("SELECT count(*) FROM worker_application WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        ).scalar_one()
+        events = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.variant_compiled",
+                canonical_event.c.aggregate_id == accepted.resource.id,
+            )
+        ).all()
+        job = connection.execute(
+            text("SELECT status,generation FROM worker_job WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        ).one()
+    return variant, application, events, job
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_compiler_runner_publishes_real_manifest_lineage_and_audit_atomically(
+    database, compilation, compiler_worker, recipe
+):
+    import hashlib
+    import json
+
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    worker = compiler_worker
+    created, asset, source, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+
+    def sink(connection, lease, artifacts):
+        worker.publish(connection, lease, artifacts)
+        # Variant, lineage, audit and application stay invisible until complete commits.
+        assert publication_state(owner, accepted)[:3] == (None, 0, [])
+        assert connection.execute("SELECT current_user").fetchone()[0] == database[2]
+
+    runner = JobRunner(
+        worker.store,
+        "compile_variant",
+        (Stage("compilation", worker.compile),),
+        sink,
+        job_id=accepted.job_id,
+    )
+    assert runner.run_once("fixture-compiler")
+    manifest, applications, events, job = publication_state(owner, accepted)
+    assert job.status == "succeeded" and applications == 1 and len(events) == 1
+    assert not runner.run_once("fixture-compiler")
+    assert compile_request(compilation, release.id, recipe=recipe) == accepted
+    assert manifest["recipe"]["output_size"] == (320 if "320" in recipe else 640)
+    assert manifest["samples"][0]["revision"] == 2
+    assert manifest["samples"][0]["asset_id"] == asset.id
+    assert manifest["samples"][0]["verified_negative"] is True
+    evidence = events[0].payload
+    assert events[0].actor_kind == "system" and events[0].actor_id == "fixture-compiler"
+    assert evidence["requested_by"] == Actor().id and evidence["generation"] == job.generation
+    data = worker.objects.read(evidence["manifest_key"])
+    assert hashlib.sha256(data).hexdigest() == evidence["manifest_sha256"]
+    assert json.loads(data) == manifest
+    for sha256 in manifest["file_hashes"].values():
+        assert hashlib.sha256(worker.objects.read(content_key(sha256))).hexdigest() == sha256
+    with owner.connect() as connection:
+        derived = connection.execute(
+            text("SELECT * FROM derived_sample WHERE variant_id=:id"), {"id": accepted.resource.id}
+        ).one()
+        assert derived.source_id == source.id
+        assert derived.transform == manifest["samples"][0]["transform"]
+        assert derived.image_key == content_key(manifest["samples"][0]["image_sha256"])
+        assert derived.crop == derived.transform["crop"]
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read(Actor(), "project", created.id)
+        .revision
+        == 3
+    )
+
+
+def test_compiler_uses_frozen_labels_ontology_and_membership_after_later_changes(
+    database, compilation, compiler_worker
+):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="rejected",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=[],
+            training_eligible=False,
+        )
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).one()
+        connection.execute(
+            insert(ontology_release).values(
+                project_id=created.id,
+                ontology_key="later-" + uuid4().hex,
+                version=2,
+                classes=ontology.classes,
+                class_map=ontology.class_map,
+            )
+        )
+    ingest(service, created.id, image_payload(revision=3), key="later-image")
+    worker = compiler_worker
+    JobRunner(
+        worker.store,
+        "compile_variant",
+        (Stage("compilation", worker.compile),),
+        worker.publish,
+        job_id=accepted.job_id,
+    ).run_once("fixture-compiler")
+    manifest, applications, _, job = publication_state(owner, accepted)
+    assert job.status == "succeeded" and applications == 1
+    assert manifest["ontology_version"] == 1
+    assert manifest["release_membership"] == {asset.id: "compiled"}
+    assert manifest["samples"][0]["revision"] == 2
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        "INSERT ON preprocessing_recipe",
+        "INSERT ON yolo_dataset_variant",
+        "INSERT ON derived_sample",
+        "INSERT ON canonical_event",
+    ],
+)
+def test_compiler_publication_missing_grant_rolls_back_all_canonical_effects(
+    database, compilation, compiler_worker, grant
+):
+    import psycopg
+
+    _, owner, role = database
+    _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{role}"'))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{role}"'))
+    compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    assert publication_state(owner, accepted)[3].status == "succeeded"
+
+
+@pytest.mark.parametrize("terminal", ["expired", "cancelled", "superseded"])
+def test_compiler_stale_or_cancelled_lease_cannot_publish(
+    database, compilation, compiler_worker, terminal
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    _, owner, _ = database
+    _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    if terminal == "cancelled":
+        assert compiler_worker.store.cancel(lease.project_key, lease.job_id)
+    else:
+        with owner.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                    "WHERE job_id=:id"
+                ),
+                {"id": lease.job_id},
+            )
+        if terminal == "superseded":
+            assert compiler_worker.store.claim(
+                "compile_variant", "replacement", job_id=lease.job_id
+            )
+    with pytest.raises(LeaseLost):
+        compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+
+
+def test_compiler_expired_worker_resumes_saved_artifact_without_recompilation(
+    database, compilation, compiler_worker, monkeypatch
+):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    _, owner, _ = database
+    _, _, _, accepted, lease, record = prepared_compilation(database, compilation, compiler_worker)
+    with owner.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("saved compilation must not recompile or upload")
+
+    monkeypatch.setattr("labelloop_api.management_compile_worker.compile_dataset", forbidden)
+    JobRunner(
+        compiler_worker.store,
+        "compile_variant",
+        (Stage("compilation", forbidden),),
+        compiler_worker.publish,
+        job_id=lease.job_id,
+    ).run_once("replacement")
+    manifest, applications, events, job = publication_state(owner, accepted)
+    assert job.status == "succeeded" and applications == 1 and len(events) == 1
+    assert job.generation == 2 and events[0].payload["generation"] == 2
+    assert manifest == record["manifest"]
+
+
+@pytest.mark.parametrize("failure", ["caller", "deadline"])
+def test_compiler_late_sink_failure_rolls_back_variant_audit_and_application(
+    database, compilation, compiler_worker, failure
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    _, owner, _ = database
+    _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+
+    def sink(connection, current, artifacts):
+        compiler_worker.publish(connection, current, artifacts)
+        if failure == "caller":
+            raise RuntimeError("fixture sink failure")
+        connection.execute(
+            "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+            "WHERE job_id=%s",
+            (current.job_id,),
+        )
+
+    with pytest.raises(RuntimeError if failure == "caller" else LeaseLost):
+        compiler_worker.store.complete(lease, ("compilation",), sink)
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+
+
+@pytest.mark.parametrize(
+    "field", ["workspace_id", "project_id", "release_id", "recipe", "variant_id"]
+)
+def test_compiler_refuses_forged_lease_inputs_before_reading_objects(
+    database, compilation, compiler_worker, field
+):
+    import copy
+
+    from labelloop_worker_core.jobs import StageContext
+
+    _, _, _, _, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    inputs = copy.deepcopy(lease.input)
+    if field == "recipe":
+        inputs["recipe"]["output_size"] = 640
+    else:
+        inputs[field] = str(uuid4())
+    with pytest.raises(ValueError):
+        compiler_worker.compile(
+            StageContext(compiler_worker.store, replace(lease, input=inputs), {})
+        )
+
+
+@pytest.mark.parametrize(
+    "field", ["recipe", "revision", "source_sha256", "split", "manifest_sha256"]
+)
+def test_compiler_publication_refuses_mismatched_stage_lineage(
+    database, compilation, compiler_worker, field
+):
+    import copy
+    import hashlib
+
+    from labelloop_compiler.compiler import json_bytes
+
+    _, owner, _ = database
+    _, _, _, accepted, lease, record = prepared_compilation(database, compilation, compiler_worker)
+    changed = copy.deepcopy(record)
+    if field == "recipe":
+        changed["manifest"]["recipe"]["output_size"] = 640
+    elif field == "manifest_sha256":
+        changed["manifest_sha256"] = "0" * 64
+    else:
+        changed["manifest"]["samples"][0][field] = {
+            "revision": 999,
+            "source_sha256": "0" * 64,
+            "split": "train",
+        }[field]
+    if field != "manifest_sha256":
+        changed["manifest_sha256"] = hashlib.sha256(json_bytes(changed["manifest"])).hexdigest()
+
+    def sink(connection, current, artifacts):
+        compiler_worker.publish(connection, current, {"compilation": changed})
+
+    with pytest.raises(ValueError):
+        compiler_worker.store.complete(lease, ("compilation",), sink)
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+
+
+def test_compiler_storage_failure_does_not_publish_and_retries_real_compiler(
+    database, compilation, compiler_worker
+):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    worker = compiler_worker
+    original = worker.objects.put
+
+    def failing(key, data):
+        # An immutable orphan is safe; no successful canonical reference exists.
+        original(key, data)
+        raise OSError("fixture object-store unavailable")
+
+    worker.objects.put = failing
+    runner = JobRunner(
+        worker.store,
+        "compile_variant",
+        (Stage("compilation", worker.compile),),
+        worker.publish,
+        job_id=accepted.job_id,
+    )
+    assert runner.run_once("fixture-compiler")
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+    assert publication_state(owner, accepted)[3].status == "queued"
+    worker.objects.put = original
+    with owner.begin() as connection:
+        connection.execute(
+            text("UPDATE worker_job SET available_at=clock_timestamp() WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        )
+    assert runner.run_once("fixture-compiler")
+    assert publication_state(owner, accepted)[3].status == "succeeded"
+
+
+def test_compiler_publication_refuses_broad_audit_runtime(database, compilation, compiler_worker):
+    _, owner, role = database
+    _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{role}"'))
+    with pytest.raises(ValueError, match="must not rewrite"):
+        compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_compiler_publication_preserves_positive_original_frame_geometry(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, asset, source, payload = release_inputs(service, owner)
+    objects = [{"object_id": "box-1", "class_id": "package", "box": [1, 1, 11, 9]}]
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="draft",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=objects,
+        )
+        assessment = connection.execute(
+            select(completeness_assessment).where(
+                completeness_assessment.c.asset_id == source.id,
+                completeness_assessment.c.revision == 2,
+            )
+        ).one()
+        connection.execute(
+            insert(completeness_assessment).values(
+                asset_id=source.id,
+                revision=3,
+                ontology_hash=assessment.ontology_hash,
+                scope_completeness="exhaustive_for_scope",
+                actor_kind="human",
+                actor_id=Actor().id,
+                output_truncated=False,
+                unresolved_regions=[],
+            )
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=3,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            training_eligible=True,
+            objects=objects,
+        )
+    payload = payload.model_copy(update={"annotation_revisions": {asset.id: 4}})
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+    worker = compiler_worker
+    JobRunner(
+        worker.store,
+        "compile_variant",
+        (Stage("compilation", worker.compile),),
+        worker.publish,
+        job_id=accepted.job_id,
+    ).run_once("fixture-compiler")
+    manifest, _, _, job = publication_state(owner, accepted)
+    assert job.status == "succeeded"
+    sample = manifest["samples"][0]
+    assert sample["objects"][0]["source_box"] == [1, 1, 11, 9]
+    assert sample["verified_negative"] is False and sample["revision"] == 4
+    assert manifest["class_support"]["package"]["val"] == 1
+    labels = worker.objects.read(content_key(sample["label_sha256"])).decode()
+    assert labels == sample["objects"][0]["yolo_row"] + "\n"
+    raster = Image.open(io.BytesIO(worker.objects.read(content_key(sample["image_sha256"]))))
+    assert raster.size == (manifest["recipe"]["output_size"],) * 2
+
+
+def test_compiler_rejects_source_bytes_that_differ_from_frozen_hash(
+    database, compilation, compiler_worker
+):
+    from labelloop_compiler.compiler import CompilerFailure
+    from labelloop_worker_core.jobs import StageContext
+
+    _, owner, _ = database
+    _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    compiler_worker.objects.read = lambda key: b"not-the-source"
+    with pytest.raises(CompilerFailure, match="source bytes"):
+        compiler_worker.compile(StageContext(compiler_worker.store, lease, {}))
+    assert publication_state(owner, accepted)[:3] == (None, 0, [])
+
+
+def test_compiler_refuses_unattributed_queue_job_for_an_owned_release(
+    database, compilation, compiler_worker
+):
+    from labelloop_worker_core.jobs import StageContext
+
+    _, _, _, _, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    other = compiler_worker.store.enqueue(
+        lease.project_key, "unattributed-" + uuid4().hex, "compile_variant", lease.input
+    )
+    forged = compiler_worker.store.claim("compile_variant", "fixture-compiler", job_id=other)
+    with pytest.raises(ValueError, match="authorized receipt"):
+        compiler_worker.compile(StageContext(compiler_worker.store, forged, {}))
+
+
 def compile_request(
     compilation,
     release_id,
