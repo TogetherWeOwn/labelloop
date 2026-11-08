@@ -32,10 +32,12 @@ def resolve(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def validate_shape(value: Json, schema: dict[str, Any], depth: int = 0) -> None:
+def validate_shape(value: Json, schema: dict[str, Any] | bool, depth: int = 0) -> None:
     """Validate the snapshot's structural subset; business invariants remain in consumers."""
-    if depth > 64:
+    if depth > 64 or schema is False:
         raise WireError()
+    if schema is True:
+        return
     schema = resolve(schema)
     if "not" in schema:
         try:
@@ -85,11 +87,17 @@ def validate_shape(value: Json, schema: dict[str, Any], depth: int = 0) -> None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if not schema.get("minimum", -math.inf) <= value <= schema.get("maximum", math.inf):
             raise WireError()
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            raise WireError()
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            raise WireError()
     if isinstance(value, list):
         if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", math.inf):
             raise WireError()
-        for item in value:
-            validate_shape(item, schema.get("items", {}), depth + 1)
+        prefix = schema.get("prefixItems", [])
+        for index, item in enumerate(value):
+            item_schema = prefix[index] if index < len(prefix) else schema.get("items", {})
+            validate_shape(item, item_schema, depth + 1)
     if isinstance(value, dict):
         if not set(schema.get("required", [])).issubset(value):
             raise WireError()

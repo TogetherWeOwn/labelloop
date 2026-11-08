@@ -8,7 +8,61 @@ from pathlib import Path
 import pytest
 
 from labelloop_platform import Operation, PlatformRequest
-from labelloop_platform.contract import DOCUMENT, ROOT, ROUTES, SNAPSHOT_SHA256, WireError, prepare
+from labelloop_platform.contract import (
+    DOCUMENT,
+    ROOT,
+    ROUTES,
+    SNAPSHOT_SHA256,
+    WireError,
+    prepare,
+    validate_shape,
+)
+
+
+def test_valid_bbox_tuple_and_boolean_remainder_schema() -> None:
+    request = PlatformRequest(
+        Operation.REPLACE_LABELS,
+        "replace-1",
+        path={"imageId": "fixture-image"},
+        body={"labels": [{"classId": 0, "bbox": [0.5, 0.5, 0.2, 0.2]}]},
+    )
+    assert prepare(request)[1] == "/api/images/fixture-image"
+    tuple_schema = {"type": "array", "prefixItems": [{"type": "number"}], "items": False}
+    validate_shape([0.5], tuple_schema)
+    for invalid in ([0.5, 0.2], ["not-a-number"]):
+        with pytest.raises(WireError):
+            validate_shape(invalid, tuple_schema)
+    validate_shape([0.5, "anything"], {**tuple_schema, "items": True})
+
+
+@pytest.mark.parametrize("size", [0, -1])
+def test_signed_upload_requires_exclusive_positive_size(size) -> None:
+    with pytest.raises(WireError):
+        prepare(
+            PlatformRequest(
+                Operation.SIGNED_UPLOAD,
+                "upload-1",
+                body={
+                    "assetId": "fixture-dataset",
+                    "assetType": "datasets",
+                    "filename": "dataset.zip",
+                    "contentType": "application/zip",
+                    "totalBytes": size,
+                },
+            )
+        )
+
+
+def test_export_response_exclusive_version_bound() -> None:
+    schema = DOCUMENT["components"]["schemas"]["DatasetExportResponse"]
+    validate_shape({"downloadUrl": "https://fixture-storage.example/export", "version": 1}, schema)
+    with pytest.raises(WireError):
+        validate_shape(
+            {"downloadUrl": "https://fixture-storage.example/export", "version": 0}, schema
+        )
+    with pytest.raises(WireError):
+        validate_shape(1, {"type": "number", "exclusiveMaximum": 1})
+
 
 PACKAGE = Path(__file__).resolve().parents[1]
 GENERATOR = runpy.run_path(str(PACKAGE / "generate_contract.py"))

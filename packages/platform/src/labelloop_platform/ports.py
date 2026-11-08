@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
-
 type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 
 

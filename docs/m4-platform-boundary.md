@@ -77,9 +77,11 @@ serializes its SDK capture state and write latch; independent clients may procee
 
 ## Backoff, uncertain writes and durable integration
 
-`Throttle` uses sliding 60-second windows, keyed by credential SHA-256 and category, with
-limits default 100, training/upload 10, predict/export 20 and download 30. Clients share the
-process default throttle; explicit instances support fixture clocks. 429 returns `rate_limited`
+`Throttle` uses sliding 60-second windows, keyed by a process-salted scrypt credential
+identifier and category, with limits default 100, training/upload 10, predict/export 20 and
+download 30. The identifier is derived once per client (N=16384, r=8, p=1); it is not a stored
+authentication verifier and is never logged. Clients share the process default throttle;
+explicit instances support fixture clocks. 429 returns `rate_limited`
 and a monotonic `retry_at`, honors numeric and HTTP-date `Retry-After` without shortening it,
 and blocks that key/category until then. Nothing sleeps or automatically repeats, including
 POST. Invalid headers use one second. Consumers schedule future work, not tight polling.

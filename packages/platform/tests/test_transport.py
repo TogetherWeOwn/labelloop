@@ -36,8 +36,11 @@ class Replay:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        # Simulates dependency debug logs, including response headers and exceptions.
-        logging.getLogger("httpcore.http11").debug("wire header %s", SECRET)
+        # Public synthetic marker, never a credential source. It matches the
+        # fixture key to prove dependency wire diagnostics are suppressed.
+        logging.getLogger("httpcore.http11").debug(
+            "wire header fixture-platform-bearer-not-a-credential"
+        )
         exchange = self.exchanges.pop(0)
         if isinstance(exchange, Exception):
             raise exchange
@@ -179,6 +182,64 @@ def test_mutations_never_blindly_repeat_and_never_log_raw_errors(exchange, outco
     # Contextual filtering must not suppress unrelated application's dependency logs.
     logging.getLogger("httpcore.http11").debug("unrelated-wire-diagnostic")
     assert "unrelated-wire-diagnostic" in caplog.text
+
+
+class BrokenBody(httpx.SyncByteStream):
+    def __iter__(self):
+        raise httpx.ReadTimeout(SECRET)
+        yield b""  # pragma: no cover
+
+
+@pytest.mark.parametrize("status", [402, 429])
+@pytest.mark.parametrize("mutation", [False, True])
+def test_known_rejection_status_survives_failed_body_read(status, mutation, caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    calls = []
+
+    def broken(request):
+        calls.append(request)
+        return httpx.Response(status, headers={"Retry-After": "120"}, stream=BrokenBody())
+
+    clock = Clock()
+    throttle = Throttle(clock)
+    client = PlatformAdapter(SECRET, transport=httpx.MockTransport(broken), throttle=throttle)
+    request = training() if mutation else PlatformRequest(Operation.GPU_AVAILABILITY)
+    result = client.execute(request)
+    assert result.status_code == status
+    assert result.outcome == (Outcome.PAID_PAUSED if status == 402 else Outcome.RATE_LIMITED)
+    if status == 429:
+        assert result.retry_at == 120
+        # A separate intent on the shared key/category cannot bypass the known backoff.
+        following = training("start-2") if mutation else request
+        assert client.execute(following).retry_at == 120
+        assert len(calls) == 1
+    assert SECRET not in caplog.text
+
+
+def test_mutation_replay_preserves_original_remote_identity() -> None:
+    replay = Replay("signed_upload")
+    client = adapter(replay)
+    request = PlatformRequest(
+        Operation.SIGNED_UPLOAD,
+        "upload-1",
+        body={
+            "assetId": "fixture-dataset",
+            "contentType": "application/zip",
+            "totalBytes": 42,
+            "assetType": "datasets",
+            "filename": "dataset.zip",
+        },
+    )
+    result = client.execute(request)
+    assert result.outcome == Outcome.SUCCEEDED
+    result.data.pop("sessionId")
+    result.data["headers"]["Content-Type"] = "tampered"
+    replayed = client.execute(request)
+    assert replayed.data["sessionId"] == "fixture-session"
+    assert replayed.data["headers"]["Content-Type"] == "application/zip"
+    replayed.data.clear()
+    assert client.execute(request).data["sessionId"] == "fixture-session"
+    assert len(replay.requests) == 1
 
 
 def test_429_obeys_retry_after_without_sdk_post_retry() -> None:

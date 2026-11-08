@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import threading
 import time
 from collections import deque
@@ -81,6 +82,8 @@ class Throttle:
 
 
 _DEFAULT_THROTTLE = Throttle()
+# Process-only namespace; never persisted, logged, or used as an authentication verifier.
+_THROTTLE_SALT = os.urandom(16)
 
 
 def retry_delay(value: str | None, wall_time: float) -> float:
@@ -177,7 +180,9 @@ class PlatformAdapter:
             raise RuntimeError("Unsupported Platform SDK version")
         if not api_key or any(ord(c) < 33 or ord(c) > 126 for c in api_key):
             raise ValueError("Invalid Platform credential")
-        self._key_id = hashlib.sha256(api_key.encode()).hexdigest()
+        self._key_id = hashlib.scrypt(
+            api_key.encode(), salt=_THROTTLE_SALT, n=16384, r=8, p=1, dklen=32
+        ).hex()
         self._guard = _OriginGuard(transport or httpx.HTTPTransport(retries=0, trust_env=False))
         self._http = _OwnedClient(self._guard)
         self._sdk = Platform(
@@ -226,7 +231,7 @@ class PlatformAdapter:
             prior_digest, result = self._writes[request.operation_id]
             if prior_digest != digest:
                 return PlatformResult(Outcome.REJECTED)
-            return result
+            return copy.deepcopy(result)
         category = route["category"]
         retry_at = self._throttle.reserve(self._key_id, category)
         if retry_at is not None:
@@ -253,27 +258,16 @@ class PlatformAdapter:
                 raise WireError()
             result = PlatformResult(Outcome.SUCCEEDED, status, data)
         except APIError as error:
-            status = error.status_code
-            if status == 402:
-                result = PlatformResult(Outcome.PAID_PAUSED, status)
-            elif status == 429:
-                retry_at = self._throttle.defer(
-                    self._key_id,
-                    category,
-                    retry_delay(self._http.retry_after, self._wall_clock()),
-                )
-                result = PlatformResult(Outcome.RATE_LIMITED, status, retry_at=retry_at)
-            elif status == 409 or (mutation and (status == 408 or status >= 500)):
-                result = PlatformResult(Outcome.RECONCILE_REQUIRED, status)
-            elif status == 503:
-                result = PlatformResult(Outcome.UNAVAILABLE, status)
-            else:
-                result = PlatformResult(Outcome.REJECTED, status)
+            result = self._error_status(error.status_code, mutation, category)
         except (APIConnectionError, httpx.HTTPError):
-            result = PlatformResult(
-                Outcome.RECONCILE_REQUIRED if mutation else Outcome.TRANSPORT_ERROR,
-                self._http.last_status,
-            )
+            status = self._http.last_status
+            if status is not None and status >= 400:
+                # Headers are authoritative even when the error body is unreadable.
+                result = self._error_status(status, mutation, category)
+            else:
+                result = PlatformResult(
+                    Outcome.RECONCILE_REQUIRED if mutation else Outcome.TRANSPORT_ERROR, status
+                )
         except (ValueError, TypeError, KeyError, RecursionError):
             result = PlatformResult(
                 Outcome.RECONCILE_REQUIRED if mutation else Outcome.MALFORMED,
@@ -282,8 +276,24 @@ class PlatformAdapter:
         finally:
             self._guard.expected = None
         if mutation and request.operation_id and result.outcome != Outcome.RATE_LIMITED:
-            self._writes[request.operation_id] = (digest, result)
+            self._writes[request.operation_id] = (digest, copy.deepcopy(result))
         return result
+
+    def _error_status(self, status: int, mutation: bool, category: str) -> PlatformResult:
+        if status == 402:
+            return PlatformResult(Outcome.PAID_PAUSED, status)
+        if status == 429:
+            retry_at = self._throttle.defer(
+                self._key_id,
+                category,
+                retry_delay(self._http.retry_after, self._wall_clock()),
+            )
+            return PlatformResult(Outcome.RATE_LIMITED, status, retry_at=retry_at)
+        if status == 409 or (mutation and (status == 408 or status >= 500)):
+            return PlatformResult(Outcome.RECONCILE_REQUIRED, status)
+        if status == 503:
+            return PlatformResult(Outcome.UNAVAILABLE, status)
+        return PlatformResult(Outcome.REJECTED, status)
 
     def close(self) -> None:
         self._sdk.close()
