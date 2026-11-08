@@ -10,10 +10,20 @@ import { RunsView } from './RunsView.tsx';
 import { Button, Notice, Utc } from './shared.tsx';
 import './management.css';
 
-export function ManagementModule({ screen, role, port, initialRecipe, platformRuns, modelExtensions }: {
+interface ManagementProps {
   screen: Screen; role: Role; port: ManagementPort; initialRecipe?: RecipeId;
   platformRuns?: ReactNode; modelExtensions?: ModelExtensions;
-}) {
+}
+
+export function ManagementModule(props: ManagementProps) {
+  const [session, setSession] = useState({ port: props.port, version: 0 });
+  // A new project/authenticated port owns a new read/command lifecycle.
+  // Reset the child before it can combine a previous snapshot with a new port.
+  if (session.port !== props.port) setSession({ port: props.port, version: session.version + 1 });
+  return <ManagementSession key={session.version} {...props} />;
+}
+
+function ManagementSession({ screen, role, port, initialRecipe, platformRuns, modelExtensions }: ManagementProps) {
   const [data, setData] = useState<ManagementSnapshot | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);

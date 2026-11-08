@@ -9,6 +9,7 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [stepIndex, setStepIndex] = useState(1);
   const [name, setName] = useState('');
   const [pairId, setPairId] = useState<string | null>(null);
+  const [unsavedFields, setUnsavedFields] = useState(false);
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -27,7 +28,7 @@ export function NewProjectView({ data, actions }: ScreenProps) {
     <ReadOnly role={actions.role} />
     <div className="grid2 setup-grid"><section className="card setup-content"><h2>{step} <span className="small">step {stepIndex + 1} of 6</span></h2>
       {draft.published && <Notice tone="ok">Project release 1 is published. These versions cannot change.</Notice>}
-      {step === 'Scope' && <DraftFields key={`${draft.revision}:scope`} draft={draft} actions={actions} step={step} values={draft.scope} readOnly={readOnly} labels={{ name: 'Project name', detect: 'What to detect', representation: 'Representation layers', intended_use: 'Intended use', specificity: 'Specificity', permitted_use: 'Permitted use of source images', external_providers: 'Approved external LLM providers (empty = local only)' }} />}
+      {step === 'Scope' && <DraftFields key={`${draft.id}:scope`} draft={draft} actions={actions} step={step} values={draft.scope} readOnly={readOnly} onDirtyChange={setUnsavedFields} labels={{ name: 'Project name', detect: 'What to detect', representation: 'Representation layers', intended_use: 'Intended use', specificity: 'Specificity', permitted_use: 'Permitted use of source images', external_providers: 'Approved external LLM providers (empty = local only)' }} />}
       {step === 'Classes' && <>
         <p>Each class gets a permanent id. Renaming keeps it. Merging or splitting classes later makes a new ontology version.</p>
         <Table caption="Classes in this draft" columns={['Class', 'Aliases', 'Parent', 'Examples', 'Not this', 'Mirror-safe', 'Provenance', 'Actions']}>
@@ -39,7 +40,7 @@ export function NewProjectView({ data, actions }: ScreenProps) {
       {step === 'Evidence' && <Table caption="Reference evidence" columns={['Class', 'Source and permitted use', 'View / lighting / scale', 'Often confused with', 'Provenance', 'Actions']}>
         {draft.references.map((reference) => <tr key={reference.id}><th scope="row">{reference.class_id}</th><td>{reference.source} · {reference.permitted_use}</td><td>{reference.view} / {reference.lighting} / {reference.scale}</td><td>{reference.confused_with}</td><td><span className="tag proposed">{reference.provenance}</span></td><td>{reference.provenance === 'Proposed' && <CommandButton actions={actions} onClick={() => { void actions.send({ kind: 'accept_reference', draft_id: draft.id, expected_revision: draft.revision, id: reference.id }); }}>Approve reference {reference.id}</CommandButton>}</td></tr>)}
       </Table>}
-      {step === 'Labelling guide' && <DraftFields key={`${draft.revision}:guide`} draft={draft} actions={actions} step={step} values={draft.guide} readOnly={readOnly} labels={{ extent: 'Visible or estimated extent (default visible)', truncation: 'Targets at image edges', occlusion: 'Occluded targets', reflections: 'Reflections', min_target_px: 'Minimum target size in pixels', exhaustive: 'Exhaustive for scope', background: 'Out-of-scope background' }} />}
+      {step === 'Labelling guide' && <DraftFields key={`${draft.id}:guide`} draft={draft} actions={actions} step={step} values={draft.guide} readOnly={readOnly} onDirtyChange={setUnsavedFields} labels={{ extent: 'Visible or estimated extent (default visible)', truncation: 'Targets at image edges', occlusion: 'Occluded targets', reflections: 'Reflections', min_target_px: 'Minimum target size in pixels', exhaustive: 'Exhaustive for scope', background: 'Out-of-scope background' }} />}
       {step === 'Sources and groups' && <>
         <Facts items={[[ 'Images / source groups', `${draft.sources.images} / ${draft.sources.groups}` ], ['Declared metadata keys', draft.sources.metadata_keys], ['Split preview', draft.sources.split_summary]]} />
         <Notice>{draft.sources.pending_pairs.length} near-duplicate pairs need a look. A new cross-split relationship quarantines the affected holdout; the browser never assigns a split.</Notice>
@@ -53,30 +54,36 @@ export function NewProjectView({ data, actions }: ScreenProps) {
         <CommandButton actions={actions} primary reason={!setupSteps.slice(0, -1).every((part) => draft.approved_steps.includes(part)) ? 'Approve all preceding steps before publishing.' : draft.published ? 'This release is already published.' : undefined} onClick={() => { void actions.send({ kind: 'publish_project', draft_id: draft.id, expected_revision: draft.revision }); }}>Publish project release 1</CommandButton>
       </>}
       <Notice tone="info">Changing classes re-opens Evidence and Guide. The server invalidates dependent approvals; an unapproved catalog cannot start bulk labelling.</Notice>
-      {stepIndex < setupSteps.length - 1 && !draft.published && <CommandButton actions={actions} primary reason={!earlierApproved ? 'Approve the earlier steps first.' : unresolved ? 'Decide all Proposed items or near-duplicate pairs first.' : undefined} onClick={() => { void approve(); }}>Approve {step.toLowerCase()} and continue</CommandButton>}
+      {stepIndex < setupSteps.length - 1 && !draft.published && <CommandButton actions={actions} primary reason={unsavedFields ? 'Save your changes before approving this step.' : !earlierApproved ? 'Approve the earlier steps first.' : unresolved ? 'Decide all Proposed items or near-duplicate pairs first.' : undefined} onClick={() => { void approve(); }}>Approve {step.toLowerCase()} and continue</CommandButton>}
     </section>
-    <aside className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></aside></div>
+    <aside className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={unsavedFields || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></aside></div>
   </>;
 }
 
-function DraftFields({ draft, actions, step, values, labels, readOnly }: { draft: ProjectDraft; actions: Actions; step: SetupStep; values: Readonly<Record<string, string | number | boolean>>; labels: Record<string, string>; readOnly: boolean }) {
+type SetupValues = Readonly<Record<string, string | number | boolean>>;
+
+function DraftFields({ draft, actions, step, values, labels, readOnly, onDirtyChange }: { draft: ProjectDraft; actions: Actions; step: SetupStep; values: SetupValues; labels: Record<string, string>; readOnly: boolean; onDirtyChange: (dirty: boolean) => void }) {
+  const [edits, setEdits] = useState<{ revision: number; values: SetupValues } | null>(null);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
-  async function save(form: HTMLFormElement) {
-    if (readOnly || saving) return;
-    const fields = new FormData(form);
-    const next = Object.fromEntries(Object.entries(values).map(([name, value]) => {
-      const field = fields.get(name);
-      const text = typeof field === 'string' ? field : '';
-      return [name, typeof value === 'boolean' ? fields.has(name) : typeof value === 'number' ? Number(text) : text];
-    }));
+  const conflict = edits !== null && edits.revision !== draft.revision;
+  const fields = edits?.values ?? values;
+  function change(name: string, value: string | number | boolean) {
+    setEdits({ revision: edits?.revision ?? draft.revision, values: { ...fields, [name]: value } });
+    onDirtyChange(true);
+  }
+  async function save() {
+    if (readOnly || saving || !edits || conflict) return;
     setSaving(true);
-    const saved = await actions.send({ kind: 'save_setup', draft_id: draft.id, expected_revision: draft.revision, step, values: next });
+    const saved = await actions.send({ kind: 'save_setup', draft_id: draft.id, expected_revision: edits.revision, step, values: edits.values });
+    if (saved) { setEdits(null); onDirtyChange(false); }
     setFailed(!saved); setSaving(false);
   }
-  return <form className="stack" onSubmit={(event) => { event.preventDefault(); void save(event.currentTarget); }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) void save(event.currentTarget); }}>
-    {Object.entries(values).map(([name, value]) => <div className="field" key={name}><label htmlFor={`setup-${name}`}>{labels[name]}</label>{typeof value === 'boolean' ? <input id={`setup-${name}`} name={name} type="checkbox" defaultChecked={value} disabled={readOnly || saving} /> : <input id={`setup-${name}`} name={name} type={typeof value === 'number' ? 'number' : 'text'} min={typeof value === 'number' ? 1 : undefined} defaultValue={value} readOnly={readOnly || saving} />}</div>)}
-    <p className="help">{saving ? 'Saving…' : !actions.connected ? 'Recorded draft. Editing and autosave need the authenticated management client.' : 'Changes save when you leave these fields.'}</p>
-    {failed && <Notice tone="danger">Your last change did not save. Try again.<Button type="submit">Try again</Button></Notice>}
+  return <form className="stack" onSubmit={(event) => { event.preventDefault(); void save(); }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) void save(); }}>
+    {Object.entries(fields).map(([name, value]) => <div className="field" key={name}><label htmlFor={`setup-${name}`}>{labels[name]}</label>{typeof value === 'boolean' ? <input id={`setup-${name}`} name={name} type="checkbox" checked={value} disabled={readOnly || saving} onChange={(event) => change(name, event.currentTarget.checked)} /> : <input id={`setup-${name}`} name={name} type={typeof value === 'number' ? 'number' : 'text'} min={typeof value === 'number' ? 1 : undefined} value={value} readOnly={readOnly || saving} onChange={(event) => change(name, typeof value === 'number' ? Number(event.currentTarget.value) : event.currentTarget.value)} />}</div>)}
+    <p className="help">{saving ? 'Saving…' : !actions.connected ? 'Recorded draft. Editing and autosave need the authenticated management client.' : edits ? 'Unsaved changes. Save before approving this step or leaving it.' : 'Changes save when you leave these fields.'}</p>
+    {conflict && <Notice tone="danger">The draft changed while you were editing. Your local fields are retained; no overwrite was sent. <Button onClick={() => { setEdits(null); setFailed(false); onDirtyChange(false); }}>Discard local changes and load current revision</Button></Notice>}
+    {edits && <CommandButton actions={actions} disabled={readOnly || saving} reason={conflict ? 'Resolve the changed revision before saving.' : undefined} onClick={() => { void save(); }}>Save changes</CommandButton>}
+    {failed && <Notice tone="danger">Your last change did not save. Try again.<Button type="submit" disabled={conflict}>Try again</Button></Notice>}
   </form>;
 }

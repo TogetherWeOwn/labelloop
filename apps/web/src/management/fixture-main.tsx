@@ -7,6 +7,7 @@ import { RecipesView } from './RecipesView.tsx';
 import { ReleasesView } from './ReleasesView.tsx';
 import { RunsView } from './RunsView.tsx';
 import { ManagementModule } from './ManagementModule.tsx';
+import { PortLifecycleFixture, RefreshLifecycleFixture } from './lifecycle-fixtures.tsx';
 import { createFixturePort, fixtureSnapshot } from './fixtures.ts';
 import './fixture.css';
 
@@ -43,7 +44,7 @@ if (dispatchContract) {
 }
 const fixturePort = createFixturePort(snapshot);
 const port: ManagementPort = dispatchContract ? {
-  read: fixturePort.read,
+  read: (signal) => fixturePort.read(signal),
   execute: (command) => {
     document.documentElement.dataset.lastCommand = JSON.stringify(command);
     if (scenario === 'dispatch-failed') return Promise.reject(new Error('Recorded uncertain command'));
@@ -69,6 +70,6 @@ const commandView = {
 createRoot(document.getElementById('root')!).render(<>
   <a className="fixture-skip" href="#main">Skip to content</a>
   <header className="fixture-header"><p>labelloop · isolated management fixture, not the application shell</p><nav aria-label="Fixture screens">{screens.map((item) => <a key={item} href={`?screen=${item}&role=${role}`} aria-current={screen === item ? 'page' : undefined}>{item.replaceAll('-', ' ')}</a>)}</nav></header>
-  <main id="main">{dispatchContract && <p>Dispatch-contract fixture: server provenance is simulated to exercise the module guard. No server connection or canonical mutation exists.</p>}{scenario === 'command-contract' ? <section className="management"><p>Command-contract fixture. Commands are captured for tests only; nothing is changed or sent to a server.</p>{commandView}</section> : <ManagementModule screen={screen} role={role} port={port} initialRecipe={initialRecipe ?? undefined} />}</main>
+  <main id="main">{dispatchContract && <p>Dispatch-contract fixture: server provenance is simulated to exercise the module guard. No server connection or canonical mutation exists.</p>}{scenario === 'port-lifecycle' ? <PortLifecycleFixture /> : scenario === 'refresh-lifecycle' ? <RefreshLifecycleFixture screen={screen} /> : scenario === 'command-contract' ? <section className="management"><p>Command-contract fixture. Commands are captured for tests only; nothing is changed or sent to a server.</p>{commandView}</section> : <ManagementModule screen={screen} role={role} port={port} initialRecipe={initialRecipe ?? undefined} />}</main>
   <footer>labelloop is free software under the AGPL-3.0. <a href="https://github.com/TogetherWeOwn/labelloop">Get the source code.</a></footer>
 </>);

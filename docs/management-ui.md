@@ -48,9 +48,13 @@ That mode has **no server connection and never claims to change a canonical
 record**. A separate dispatch-contract fixture exercises `ManagementModule`
 itself with explicitly simulated server provenance: successful capture, reviewer
 control hiding, fixture/stale refusal and an uncertain command that stays disabled
-until records refresh. No callback in either harness performs a real mutation.
-`management-evidence/results.json` records the exact PR head supplied
-by Actions. `recipe-dom.json` is checked against `full_frame_transform` by
+until records refresh. Lifecycle fixtures additionally cover port replacement
+before a read and during a command, a refreshed freeze confirmation, first-result
+arrival after an empty evaluation, retained conflicting form edits, and explicit
+save-before-approval sequencing. No callback in any harness performs a real
+mutation. `management-evidence/results.json` records the checked-out commit:
+Actions explicitly checks out the PR head and verifies it before setting the
+artifact identity, rather than labelling a synthetic merge tree as the head. `recipe-dom.json` is checked against `full_frame_transform` by
 `scripts/check_management_geometry.py`. No paid/provider calls occur.
 
 ## Fixture provenance and design fidelity

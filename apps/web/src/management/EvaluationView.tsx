@@ -5,15 +5,16 @@ import { Button, CommandButton, Delta, Download, Notice, PageHeading, ReadOnly, 
 export function EvaluationView({ data, actions, initialRecipe }: ScreenProps & { initialRecipe?: RecipeId }) {
   const [recipeId, setRecipeId] = useState(initialRecipe ?? data.evaluations[0]?.recipe_id);
   const [reopen, setReopen] = useState(false);
-  const record = data.evaluations.find((item) => item.recipe_id === recipeId);
+  const record = data.evaluations.find((item) => item.recipe_id === recipeId) ?? data.evaluations[0];
   if (!record) return <><PageHeading title="Evaluation." gloss="Original-frame evidence." /><ReadOnly role={actions.role} /><Notice tone="info">No evaluation yet. Complete a local run, then evaluate its checkpoint on a frozen set.</Notice></>;
+  const report = { ...record, classes: record.classes.map((entry) => entry.supported && entry.support >= entry.minimum ? entry : { name: entry.name, support: entry.support, minimum: entry.minimum, supported: false, reason: entry.supported ? `${entry.support} objects, gate needs ${entry.minimum}` : entry.reason }) };
   const setLabel = `${record.set_id} (${record.set_role === 'locked_final' ? 'locked final test' : 'development'}) · n=${record.frames} frames · ${record.objects} objects`;
   return <>
     <PageHeading title="Evaluation." gloss={`Candidate against current, ${record.recipe_id.includes('640') ? '640' : '320'}.`} meta={<>{record.id} · {setLabel}</>} lede="Scored on the original frames: predictions are inverse-mapped through the recorded recipe and merged before scoring. Provider val is diagnostic only.">
-      <Download name={`${record.id}-report.json`} value={record}>Download {data.provenance === 'fixture' ? 'fixture ' : ''}report</Download>
+      <Download name={`${record.id}-report.json`} value={report}>Download {data.provenance === 'fixture' ? 'fixture ' : ''}report</Download>
       {actions.role === 'admin' && <a className="pill primary" href={`?screen=models&recipe=${record.recipe_id}&candidate=${record.candidate_id}`}>Go to promotion</a>}
     </PageHeading><ReadOnly role={actions.role} />
-    <div className="seg" role="group" aria-label="Evaluation recipe">{data.evaluations.map((item) => <Button key={item.id} aria-pressed={recipeId === item.recipe_id} onClick={() => { setRecipeId(item.recipe_id); setReopen(false); }}>{item.recipe_id.includes('640') ? '640' : '320'}</Button>)}</div>
+    <div className="seg" role="group" aria-label="Evaluation recipe">{data.evaluations.map((item) => <Button key={item.id} aria-pressed={record.recipe_id === item.recipe_id} onClick={() => { setRecipeId(item.recipe_id); setReopen(false); }}>{item.recipe_id.includes('640') ? '640' : '320'}</Button>)}</div>
     {record.state === 'Running' ? <Notice tone="info">Running · {record.progress} of {record.frames} frames. Metrics are not ready.</Notice> : record.state !== 'Completed' ? <Notice tone="danger">{record.state}. No qualified evaluation is available.</Notice> : <>
       <p className="label">Every metric below: {setLabel} · confidence {record.conf}</p>
       <div className="tiles">{Object.entries(record.overall).map(([name, metric]) => <Tile key={name} value={metric.candidate} label={name === 'map50_95' ? 'mAP50–95' : name === 'precision' ? `Precision at conf ${record.conf}` : 'Recall'}><Delta {...metric} /></Tile>)}<Tile value={`${record.gates.filter((gate) => gate.passed).length} of ${record.gates.length}`} label="gates passed" /></div>

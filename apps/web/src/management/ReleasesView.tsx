@@ -3,7 +3,7 @@ import type { ScreenProps } from './contracts.ts';
 import { Button, CommandButton, Download, Facts, Notice, PageHeading, ReadOnly, Table, Tile, Utc } from './shared.tsx';
 
 export function ReleasesView({ data, actions }: ScreenProps) {
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<{ id: string; revision: number } | null>(null);
   const [details, setDetails] = useState(false);
   const release = data.release;
   if (!release) return <><PageHeading title="Dataset releases." gloss="Freeze the canonical record." /><ReadOnly role={actions.role} /><Notice tone="info">No release yet. Complete annotation review before building a release.</Notice></>;
@@ -13,9 +13,9 @@ export function ReleasesView({ data, actions }: ScreenProps) {
   return <>
     <PageHeading title={`Release ${release.id}.`} gloss={frozen ? 'Frozen. Nothing in it can change.' : `Draft, compared with ${release.previous_id}.`} lede="A release freezes exactly which images and label revisions go into training and evaluation." meta={<>Built from {release.images.toLocaleString()} images · compare with {release.previous_id}</>}>
       <Download name={`${release.id}-fixture-manifest.json`} value={release}>Download {data.provenance === 'fixture' ? 'fixture ' : ''}manifest</Download>
-      {!frozen && !confirm && <CommandButton actions={actions} primary reason={reason} onClick={() => setConfirm(true)}>Freeze {release.id}</CommandButton>}
+      {!frozen && !confirm && <CommandButton actions={actions} primary reason={reason} onClick={() => setConfirm({ id: release.id, revision: release.revision })}>Freeze {release.id}</CommandButton>}
     </PageHeading><ReadOnly role={actions.role} />
-    {confirm && !frozen && <section className="confirm"><h2>Freeze {release.id}?</h2><p>Nothing in it can change after this.</p><div className="acts"><CommandButton actions={actions} primary reason={reason} onClick={() => { void actions.send({ kind: 'freeze_release', release_id: release.id, expected_revision: release.revision }).then((ok) => { if (ok) setConfirm(false); }); }}>Freeze</CommandButton><Button onClick={() => setConfirm(false)}>Cancel</Button></div></section>}
+    {confirm && !frozen && <section className="confirm"><h2>Freeze {confirm.id}?</h2><p>Nothing in it can change after this.</p><div className="acts"><CommandButton actions={actions} primary reason={confirm.id !== release.id || confirm.revision !== release.revision ? 'The release changed. Cancel and inspect the current revision before confirming again.' : reason} onClick={() => { void actions.send({ kind: 'freeze_release', release_id: confirm.id, expected_revision: confirm.revision }).then((ok) => { if (ok) setConfirm(null); }); }}>Freeze</CommandButton><Button onClick={() => setConfirm(null)}>Cancel</Button></div></section>}
     {release.failed_checks.length > 0 && <Notice tone="danger"><p>Compiler checks failed. Freeze is unavailable.</p><ul>{release.failed_checks.map((check) => <li key={check}>{check}</li>)}</ul></Notice>}
     {release.quarantine && <Notice>{release.quarantine}</Notice>}
     {release.identical && <Notice tone="info">{release.id} would be identical to {release.previous_id}.</Notice>}

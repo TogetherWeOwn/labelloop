@@ -140,6 +140,58 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true }).count(), 0);
   assert.equal(await last(), null);
   results.push({ key: 'module-dispatch-guards', pass: true, realCommands: false });
+  for (const pendingCommand of [false, true]) {
+    await page.goto(`${entry}?state=port-lifecycle`);
+    const accept = page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true });
+    await accept.waitFor();
+    if (pendingCommand) {
+      await accept.click();
+      assert.equal((await last()).draft_id, 'draft-A');
+    }
+    await page.getByRole('button', { name: 'Replace port', exact: true }).click();
+    await page.getByText('Loading records…', { exact: true }).waitFor();
+    assert.equal(await accept.count(), 0, 'old snapshot must disappear before the replacement read');
+    await page.getByRole('button', { name: 'Finish replacement read', exact: true }).click();
+    await accept.waitFor();
+    assert.equal(await accept.isEnabled(), true, 'aborting the previous command must not leave the new port busy');
+    await accept.click();
+    await page.getByRole('status').filter({ hasText: 'Command completed' }).waitFor();
+    assert.equal((await last()).draft_id, 'draft-B');
+  }
+  await page.goto(`${entry}?screen=releases&state=refresh-lifecycle`);
+  await page.getByRole('button', { name: 'Freeze r0008', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
+  await page.getByText('The release changed.', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Freeze', exact: true }).isDisabled(), true);
+  assert.equal(await last(), null, 'refresh must not silently retarget the confirmation');
+  await page.goto(`${entry}?screen=evaluation&state=refresh-lifecycle`);
+  await page.getByText('No evaluation yet.', { exact: false }).waitFor();
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
+  await page.getByRole('group', { name: 'Evaluation recipe' }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '640', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
+  await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).click();
+  const name = page.getByLabel('Project name', { exact: true });
+  await name.fill('Unsaved local name');
+  assert.equal(await page.getByRole('button', { name: 'Approve scope and continue', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).evaluate((button) => button.click());
+  await page.getByText('The draft changed while you were editing.', { exact: false }).waitFor();
+  assert.equal(await name.inputValue(), 'Unsaved local name');
+  assert.equal(await last(), null, 'conflicted edits must not overwrite the newer revision');
+  await page.getByRole('button', { name: 'Discard local changes and load current revision', exact: true }).click();
+  assert.equal(await name.inputValue(), 'Changed in another session');
+  await name.fill('Saved local name');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  assert.equal((await last()).kind, 'save_setup');
+  assert.equal(await page.getByRole('button', { name: 'Approve scope and continue', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].find((button) => button.textContent === 'Approve scope and continue')?.disabled);
+  await page.getByRole('button', { name: 'Approve scope and continue', exact: true }).click();
+  await page.getByRole('heading', { level: 2, name: /Classes/ }).waitFor();
+  const commands = await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'));
+  assert.deepEqual(commands.map((command) => command.kind), ['save_setup', 'approve_step']);
+  assert.equal(commands[1].expected_revision, commands[0].expected_revision + 1);
+  results.push({ key: 'refresh-and-port-lifecycles', pass: true, realCommands: false });
   await page.close();
   const assets = await readdir('dist/management-fixture/assets');
   for (const asset of assets.filter((name) => /\.(js|css)$/.test(name))) {
