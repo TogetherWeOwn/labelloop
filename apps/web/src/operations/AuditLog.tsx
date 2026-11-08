@@ -76,7 +76,7 @@ export function AuditView({ state, role, query, onQuery, onMore, onExport, expor
         <td className="audit-extra">{event.kind}</td><td><span className={event.refused ? 'danger-text' : ''}>{event.sentence}</span><span className="audit-folded secondary">{event.kind} · <RecordLink record={event.record} /></span></td><td className="audit-extra"><RecordLink record={event.record} /></td>
       </tr>)}</tbody></table></TableRegion>}
       <p className="label">{page.events.length} of {page.total} events</p>
-      {page.next_cursor !== null && <button className="pill ghost" disabled={disabled} onClick={onMore}>Show 50 more</button>}
+      {page.next_cursor !== null && <button className="pill ghost audit-more" disabled={disabled} onClick={onMore}>Show 50 more</button>}
     </>}</ViewBoundary>
     <button className="linkbtn" disabled={disabled || exporting} onClick={onExport}>Export JSON lines</button><p role="status">{message}</p>
   </section>;

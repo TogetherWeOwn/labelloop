@@ -49,6 +49,15 @@ describe('recorded operational projections', () => {
       expect(html).toContain(expected);
     }
   });
+  it('exports the ledger approval label independently of approver presence', () => {
+    for (const state of ['refused', 'cancelled', 'reserved', 'dispatched', 'unconfirmed', 'insufficient_credits', 'settled'] as const) for (const approved_by of [null, 'Named approver']) {
+      const entry = { ...costsFixture.entries[0], state, approved_by, actual: state === 'settled' ? 1 : null };
+      const expected = state === 'refused' ? 'Refused' : approved_by ?? 'Approval unavailable';
+      expect(ledgerCsv([entry]).split('\r\n')[1].split(',')[5]).toBe(`"${expected}"`);
+      const html = renderToStaticMarkup(<CostsView readId={0} state={ready({ ...costsFixture, entries: [entry] })} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+      expect(html).toContain(expected);
+    }
+  });
   it('keeps complete source ground truth identical across recipes of the same evaluation set', () => {
     const evidence = recipesFixture.map((record) => record.qualification.evidence[0]);
     const sourceFacts = (item: typeof evidence[number]) => ({ set: item.set_version, role: item.set_role, groups: item.source_groups, images: item.images, objects: item.objects, support: item.classes.map(({ id, support }) => ({ id, support })) });
@@ -100,6 +109,14 @@ describe('operational screen states', () => {
       const html = renderToStaticMarkup(<CostsView readId={0} state={ready(record)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
       expect(html.includes('At or above the limit.')).toBe(exhausted);
       if (!exhausted) expect(html).not.toContain('100%');
+    }
+  });
+  it('formats budget percentages without floating-point noise or premature exhaustion', () => {
+    for (const [used, expected] of [[3_240_000, '8.1'], [33_640_000, '84.1'], [39_999_999, '99.9'], [40_000_000, '100']] as const) {
+      const record = { ...costsFixture, entries: [{ ...costsFixture.entries[0], state: 'reserved' as const, estimate: used }] };
+      const html = renderToStaticMarkup(<CostsView readId={0} state={ready(record)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+      expect(html).toContain(`aria-valuetext="${expected}% of limit;`);
+      if (used > 32_000_000 && used < 40_000_000) expect(html).toContain(`used ${expected}% of this limit.`);
     }
   });
   it('has loading, error, empty and stale states with no enabled spending command', () => {

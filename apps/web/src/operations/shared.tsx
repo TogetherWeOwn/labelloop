@@ -23,9 +23,9 @@ export function Facts({ items }: { items: readonly (readonly [string, ReactNode]
   return <dl className="facts">{items.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
 }
 
-export function PaidPause({ reason }: { reason: 'insufficient_credits' | 'estimate_overrun' | null }) {
+export function PaidPause({ reason, children }: { reason: 'insufficient_credits' | 'estimate_overrun' | null; children?: ReactNode }) {
   if (reason === null) return null;
   return <Notice tone="danger"><p>{reason === 'insufficient_credits'
     ? "Paid steps are paused: Ultralytics Platform said the account is out of credits (402). Top up the account, then resume. labelloop won't retry on its own."
-    : 'Paid steps are paused: actual billing exceeded the estimate. Reconcile billing and review limits before resuming.'}</p></Notice>;
+    : 'Paid steps are paused: actual billing exceeded the estimate. Reconcile billing and review limits before resuming.'}</p>{children && <div className="acts">{children}</div>}</Notice>;
 }

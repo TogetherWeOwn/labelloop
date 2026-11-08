@@ -45,7 +45,9 @@
 .operations .tag.ok { color: var(--two-color-state-ok); }
 .operations .notice { display: flex; gap: var(--two-space-3); align-items: flex-start; padding: var(--two-space-3) var(--two-space-4); border-radius: var(--two-radius-m); background: var(--two-color-state-warn-bg); font-size: var(--two-font-size-small); }
 .operations .notice > span { color: var(--two-color-state-warn); }
+.operations .notice .acts { display: flex; gap: var(--two-space-2); margin-top: var(--two-space-2); flex-wrap: wrap; }
 .operations .notice.danger { background: var(--two-color-state-danger-bg); }
+.operations .audit-more { margin-right: var(--two-space-3); }
 .operations .notice.danger > span { color: var(--two-color-state-danger); }
 .operations .facts { font-size: var(--two-font-size-small); }
 .operations .facts > div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); gap: var(--two-space-4); padding: var(--two-space-2) 0; border-top: 1px solid var(--two-color-line-hairline); }
@@ -56,10 +58,11 @@
 .operations caption { text-align: left; padding: var(--two-space-3); }
 .operations :is(th,td) { padding: var(--two-space-2) var(--two-space-3); border-top: 1px solid var(--two-color-line-hairline); text-align: left; vertical-align: middle; }
 .operations thead th { background: var(--two-color-bg-surface); font-family: var(--two-font-data); font-size: var(--two-font-size-label); font-weight: var(--two-font-weight-regular); text-transform: uppercase; color: var(--two-color-text-tertiary); }
-.operations .ledger :is(th,td) { white-space: nowrap; }
+.operations .ledger :is(th,td) { overflow-wrap: anywhere; }
+.operations .ledger :is(th,td):is(:nth-child(1),:nth-child(4),:nth-child(5)) { white-space: nowrap; overflow-wrap: normal; }
 .operations .chips { display: flex; flex-wrap: wrap; gap: var(--two-space-2); }
 .operations .chip { display: inline-flex; align-items: center; min-height: var(--two-size-control-sm); padding: 0 var(--two-space-inset-room); border-radius: var(--two-radius-pill); border: 0; background: none; box-shadow: inset 0 0 0 1px var(--two-color-line-hairline-strong); font-size: var(--two-font-size-small); color: var(--two-color-text-secondary); cursor: pointer; white-space: nowrap; }
-.operations .chip[aria-pressed="true"] { background: var(--two-color-bg-raised); color: var(--two-color-text-primary); }
+.operations .chip[aria-pressed="true"] { background: var(--two-color-bg-raised); color: var(--two-color-text-primary); box-shadow: inset 0 0 0 1px var(--two-color-line-control); }
 .operations .audit-filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--two-space-3); margin-bottom: var(--two-space-4); }
 .operations .field { display: flex; flex-direction: column; gap: var(--two-space-1); }
 .operations label { color: var(--two-color-text-secondary); font-size: var(--two-font-size-small); }

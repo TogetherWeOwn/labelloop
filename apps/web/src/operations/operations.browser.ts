@@ -25,6 +25,22 @@ for (const width of [1280, 390]) {
           const ledger = await page.locator('.ledger').boundingBox();
           expect(policy?.y).toBeLessThan(ledger?.y ?? 0);
         }
+        if (view === 'costs' && ['ready', 'stale', 'readonly'].includes(state)) {
+          const banner = page.locator('.notice.danger').filter({ hasText: 'Paid steps are paused:' });
+          await expect(banner).toBeVisible();
+          await expect(banner.getByRole('button', { name: 'Resume paid steps' })).toHaveCount(state === 'readonly' ? 0 : 1);
+          if (width === 1280) {
+            const ledger = page.getByRole('region', { name: 'Paid operation ledger' });
+            expect(await ledger.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+            const bounds = await ledger.boundingBox();
+            const headers = await ledger.getByRole('columnheader').all();
+            expect(headers).toHaveLength(6);
+            for (const header of headers) {
+              const cell = await header.boundingBox();
+              expect(cell!.x + cell!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
+            }
+          }
+        }
         await page.addScriptTag({ content: axe.source });
         const result = await page.evaluate(async () => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
         await testInfo.attach('axe.json', { body: JSON.stringify({ violations: result.violations, incomplete: result.incomplete }), contentType: 'application/json' });
@@ -67,6 +83,17 @@ for (const width of [1280, 390]) {
       await page.getByRole('button', { name: 'Export JSON lines' }).click();
       expect((await download).suggestedFilename()).toBe('audit.jsonl');
     });
+    test('resumes paid steps from the admin banner with the keyboard', async ({ page }, testInfo) => {
+      await page.goto('/operational-fixtures.html?view=costs&state=editable');
+      const banner = page.locator('.notice.danger').filter({ hasText: 'Paid steps are paused:' });
+      const resume = banner.getByRole('button', { name: 'Resume paid steps' });
+      await expect(resume).toBeEnabled();
+      await page.screenshot({ path: testInfo.outputPath(`costs-editable-${width}.png`), fullPage: true });
+      await resume.focus();
+      await page.keyboard.press('Enter');
+      await expect(banner).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Save limits' })).toBeEnabled();
+    });
     test('autonomous spending requires exact draft confirmation; stale and failure block commands', async ({ page }) => {
       await page.goto('/operational-fixtures.html?view=costs&state=editable');
       await page.getByRole('switch').focus();
@@ -84,6 +111,7 @@ for (const width of [1280, 390]) {
       await page.getByRole('button', { name: 'Save limits' }).click();
       await expect(page.getByRole('status')).toContainText('not confirmed');
       await expect(page.getByRole('button', { name: 'Save limits' })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Resume paid steps' })).toBeDisabled();
       await page.getByRole('button', { name: 'Refresh records' }).click();
       await expect(page.getByRole('button', { name: 'Save limits' })).toBeEnabled();
       await expect(page.getByLabel('Monthly limit (USD)')).toHaveValue('40');
