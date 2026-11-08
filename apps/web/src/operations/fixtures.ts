@@ -64,13 +64,13 @@ const release = (id: string, size: 320 | 640): ModelRelease => ({
 export const recipesFixture: readonly RecipeOperationsRecord[] = ([640, 320] as const).map((size) => ({
   project_id: 'shelf-demo', recipe_id: `full-letterbox-${size}-v1`, revision: 3,
   champion: release(size === 640 ? 'm-0007' : 'm-0006', size), candidate: release(size === 640 ? 'm-0009' : 'm-0008', size),
-  qualification: { state: size === 640 ? 'qualified' : 'unqualified', reason: size === 640 ? 'Passes the recorded fixture gates for this pipeline.' : 'Fails the small-target recall gate. Almond milk has no evaluation support.', evidence: [{
-    id: size === 640 ? 'eval-0044' : 'eval-0043', set_version: 'shelf-final-v2', set_role: 'locked_final_test', source_groups: 60, images: 120, objects: size === 640 ? 820 : 780,
+  qualification: { state: size === 640 ? 'qualified' : 'unqualified', reason: size === 640 ? 'Passes the recorded fixture gates for Oat milk, Whole milk and Price tag only. Almond milk is excluded from qualified scope: no evaluation support.' : 'Fails the small-target recall gate. Almond milk has no evaluation support.', evidence: [{
+    id: size === 640 ? 'eval-0044' : 'eval-0043', set_version: 'shelf-final-v2', set_role: 'locked_final_test', source_groups: 60, images: 120, objects: 780,
     protocol: 'Original-frame evaluation v1 · complete source ground truth', pipeline_id: `fixture-pipeline-${size}-v1`,
     classes: [{ id: 'Oat milk', support: 300, supported: true, result: 'Recorded gate passed' },
       { id: 'Whole milk', support: 280, supported: true, result: 'Recorded gate passed' },
       { id: 'Price tag', support: 200, supported: true, result: size === 640 ? 'Recorded gate passed' : 'Small-target recall gate failed' },
-      size === 640 ? { id: 'Almond milk', support: 40, supported: true, result: 'Recorded gate passed' } : { id: 'Almond milk', support: 0, supported: false, reason: 'Absent from this evaluation set; aggregate mAP cannot establish support.' }],
+      { id: 'Almond milk', support: 0, supported: false, reason: 'Absent from this evaluation set; aggregate mAP cannot establish support.' }],
   }] },
   canary: size === 640 ? { completed_fresh_groups: ['fresh-1', 'fresh-2', 'fresh-3'], planned_fresh_groups: Array.from({ length: 10 }, (_, i) => `fresh-${i + 1}`), excluded_training_groups: ['train-session-1', 'train-session-2'], evidence_id: 'canary-fixture-1' } : null,
   drift: size === 640 ? [{ scope: 'class', id: 'price-tag', label: 'Price tag', reason: 'audit errors rose to 4%.', audit_sample_id: 'audit-sample-18' }, { scope: 'source', id: 'store-9', label: 'Store 9', reason: 'changed camera/layout conditions.', audit_sample_id: 'audit-sample-19' }] : [],

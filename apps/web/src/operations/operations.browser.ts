@@ -80,14 +80,63 @@ for (const width of [1280, 390]) {
       await page.getByRole('button', { name: 'Turn on', exact: true }).click();
       await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
       await page.goto('/operational-fixtures.html?view=costs&state=command-error');
+      await page.getByLabel('Monthly limit (USD)').fill('99');
       await page.getByRole('button', { name: 'Save limits' }).click();
       await expect(page.getByRole('status')).toContainText('not confirmed');
       await expect(page.getByRole('button', { name: 'Save limits' })).toBeDisabled();
+      await page.getByRole('button', { name: 'Refresh records' }).click();
+      await expect(page.getByRole('button', { name: 'Save limits' })).toBeEnabled();
+      await expect(page.getByLabel('Monthly limit (USD)')).toHaveValue('40');
+      await page.getByRole('button', { name: 'Save limits' }).click();
+      await expect(page.getByRole('status')).toContainText('not confirmed');
       await page.goto('/operational-fixtures.html?view=costs&state=stale');
       await expect(page.getByRole('button', { name: 'Resume paid steps' })).toBeDisabled();
     });
   });
 }
+
+test('audit port replacement clears paginated rows and aborts the old export', async ({ page }) => {
+  const downloads: string[] = [];
+  page.on('download', (item) => downloads.push(item.suggestedFilename()));
+  await page.goto('/operational-fixtures.html?view=audit&state=scope-swap');
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Show 50 more' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Export JSON lines' }).click();
+  await expect(page.getByRole('status')).toContainText('Preparing');
+  await page.getByRole('button', { name: 'Replace authorized port' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await expect(page.locator('tbody')).toContainText('Replacement scope');
+  await expect(page.locator('tbody')).not.toContainText('Promoted');
+  await expect(page.getByRole('button', { name: 'Show 50 more' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Release previous export' }).click();
+  await expect(page.getByRole('button', { name: 'Release previous export' })).toBeDisabled();
+  expect(downloads).toEqual([]);
+  await expect(page.getByRole('button', { name: 'Export JSON lines' })).toBeEnabled();
+});
+
+test('stable audit port refresh restarts pagination before applying new freshness', async ({ page }) => {
+  await page.goto('/operational-fixtures.html?view=audit&state=freshness-refresh');
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Show 50 more' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Refresh audit evidence' }).click();
+  await expect(page.getByText('Loading the latest records…')).toBeVisible();
+  await expect(page.locator('tbody tr')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Complete refreshed query' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await expect(page.locator('tbody')).toContainText('Refreshed evidence');
+  await expect(page.getByRole('button', { name: 'Show 50 more' })).toBeVisible();
+  await page.getByRole('button', { name: 'Show 50 more' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Mark audit stale' }).click();
+  await expect(page.getByRole('button', { name: 'Show 50 more' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Refresh audit evidence' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Complete refreshed query' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Show 50 more' })).toBeEnabled();
+});
 
 test('fixture views never contact providers or API endpoints', async ({ page }) => {
   const unexpected: string[] = [];

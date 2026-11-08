@@ -22,5 +22,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check Platform example classification across new commit identities
+        run: python3 scripts/check-platform-secret-classification.py --image zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
       - name: Scan full history
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f detect --source /repo --redact --exit-code 1

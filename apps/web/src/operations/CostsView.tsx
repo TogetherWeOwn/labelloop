@@ -1,25 +1,27 @@
 import { useId, useState } from 'react';
 import type { BudgetPolicy, CostCommands, CostScope, CostsRecord, OperationKind, Role, ViewState } from './contracts.ts';
-import { download, ledgerCsv, parseLimit, policyComplete, scopedEntries, totals, usd } from './records.ts';
+import { actualCostLabel, download, ledgerCsv, parseLimit, policyComplete, scopedEntries, totals, usd } from './records.ts';
 import { Facts, Notice, PaidPause, TableRegion, Utc, ViewBoundary } from './shared.tsx';
 
 const kinds: readonly OperationKind[] = ['Training', 'LLM review', 'Auto-annotation', 'Predict'];
 
-export function CostsView({ state, role, scope, commands, onRefresh }: {
-  state: ViewState<CostsRecord>; role: Role; scope: CostScope; commands?: CostCommands; onRefresh: () => void;
+export function CostsView({ state, readId, role, scope, commands, onRefresh }: {
+  // Advance only after a successful authoritative read, even if revision is unchanged.
+  state: ViewState<CostsRecord>; readId: string | number; role: Role; scope: CostScope; commands?: CostCommands; onRefresh: () => void;
 }) {
   return <section className="operations"><header className="phead"><div><h1>Costs. <span>Nothing paid runs without an estimate.</span></h1>
     {role === 'reviewer' && <p>Read-only. Only an admin can manage spending policy.</p>}</div></header>
-    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={`${record.project_id}:${record.revision}`} record={record} role={role} scope={scope} stale={stale} commands={commands} onRefresh={onRefresh} />}</ViewBoundary>
+    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, readId])} record={record} role={role} scope={scope} stale={stale} commands={commands} onRefresh={onRefresh} />}</ViewBoundary>
   </section>;
 }
 
 function BudgetMeter({ label, used, limit }: { label: string; used: number; limit: number | null }) {
-  const percent = limit === null ? null : limit === 0 ? 100 : Math.ceil(used / limit * 100);
-  const tone = percent !== null && percent >= 100 ? 'danger' : percent !== null && percent > 80 ? 'warn' : '';
+  const exhausted = limit !== null && used >= limit;
+  const percent = limit === null ? null : limit === 0 ? 100 : used / limit * 100;
+  const tone = exhausted ? 'danger' : percent !== null && percent > 80 ? 'warn' : '';
   return <div className="tile"><span className="label">{label}</span><strong className="value">{usd(used)}{limit !== null && <> / {usd(limit)}</>}</strong>
     {percent !== null ? <><div className={`meter ${tone}`} role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(percent, 100)} aria-valuetext={`${percent}% of limit; ${usd(used)} against ${usd(limit ?? 0)}`}><span style={{ width: `${Math.min(percent, 100)}%` }} /></div>
-      {percent > 80 && <p>{percent >= 100 ? 'At or above the limit.' : `You've used ${percent}% of this limit.`}</p>}</> : <p>Limit not set · paid steps unavailable.</p>}</div>;
+      {percent > 80 && <p>{exhausted ? 'At or above the limit.' : `You've used ${percent}% of this limit.`}</p>}</> : <p>Limit not set · paid steps unavailable.</p>}</div>;
 }
 
 function CostsContent({ record, role, scope, stale, commands, onRefresh }: {
@@ -53,7 +55,7 @@ function CostsContent({ record, role, scope, stale, commands, onRefresh }: {
         {entries.length === 0 ? <p>{record.entries.length === 0 ? 'Nothing paid has run yet. Local training and review are free.' : 'No operations match this scope and filter.'}</p> : <TableRegion label="Paid operation ledger"><table><caption>Every paid operation, including refused ones · newest first</caption><thead><tr>{['When (UTC)', 'Operation', 'Approved by', 'Estimate', 'Actual', 'Result'].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.operation_id}>
           <td><Utc value={entry.at} /></td><th scope="row">{entry.kind} · {entry.object_id}{entry.recipe_id && <> · {entry.recipe_id}</>}<span className="secondary">{entry.operation_id} · {entry.iteration_id}</span></th>
           <td>{entry.state === 'refused' ? <span className="tag danger">Refused</span> : entry.approved_by ?? 'Approval unavailable'}</td>
-          <td>{usd(entry.estimate)} <span className="tag warn">Estimate</span></td><td>{entry.state === 'settled' && entry.actual !== null ? usd(entry.actual) : entry.state === 'refused' || entry.state === 'cancelled' ? 'Not billed' : 'Unconfirmed'}</td><td>{entry.result}</td>
+          <td>{usd(entry.estimate)} <span className="tag warn">Estimate</span></td><td>{actualCostLabel(entry)}</td><td>{entry.result}</td>
         </tr>)}</tbody></table></TableRegion>}
       </section>
     </div>

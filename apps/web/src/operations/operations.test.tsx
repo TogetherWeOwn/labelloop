@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { relative, resolve } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { AuditQuery, ViewState } from './contracts.ts';
 import { CostsView } from './CostsView.tsx';
@@ -37,6 +40,32 @@ describe('recorded operational projections', () => {
     expect(csv).toContain('"Unconfirmed"');
     expect(csv).toContain('line\nbreak, ""quoted""');
   });
+  it('exports the same actual-cost labels as the ledger for every billing state', () => {
+    for (const state of ['refused', 'cancelled', 'reserved', 'dispatched', 'unconfirmed', 'insufficient_credits', 'settled'] as const) {
+      const entry = { ...costsFixture.entries[0], state, actual: state === 'settled' ? 1 : null };
+      const expected = state === 'settled' ? '$0.000001' : state === 'refused' || state === 'cancelled' ? 'Not billed' : 'Unconfirmed';
+      expect(ledgerCsv([entry])).toContain(`"${expected}"`);
+      const html = renderToStaticMarkup(<CostsView readId={0} state={ready({ ...costsFixture, entries: [entry] })} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+      expect(html).toContain(expected);
+    }
+  });
+  it('keeps complete source ground truth identical across recipes of the same evaluation set', () => {
+    const evidence = recipesFixture.map((record) => record.qualification.evidence[0]);
+    const sourceFacts = (item: typeof evidence[number]) => ({ set: item.set_version, role: item.set_role, groups: item.source_groups, images: item.images, objects: item.objects, support: item.classes.map(({ id, support }) => ({ id, support })) });
+    expect(sourceFacts(evidence[0])).toEqual(sourceFacts(evidence[1]));
+    for (const item of evidence) expect(item.classes.reduce((sum, row) => sum + row.support, 0)).toBe(item.objects);
+    expect(evidence.every((item) => item.classes.some((row) => row.support === 0 && !row.supported))).toBe(true);
+  });
+  it('qualifies web changes for every consumed design-token import, even within docs', () => {
+    const root = fileURLToPath(new URL('../../../../', import.meta.url));
+    const cssPath = fileURLToPath(new URL('./operations.css', import.meta.url));
+    const css = readFileSync(cssPath, 'utf8');
+    const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
+    const areas = JSON.parse(workflow.match(/areas-json: '([^']+)'/)![1]) as { web: string[] };
+    const dependencies = [...css.matchAll(/@import ['"]([^'"]+)['"]/g)].map((match) => relative(root, fileURLToPath(new URL(match[1], new URL('./operations.css', import.meta.url)))));
+    expect(dependencies.length).toBeGreaterThan(0);
+    for (const dependency of dependencies) expect(areas.web).toContain(dependency);
+  });
   it('simulates authorization before query, pagination, counts and exports, not client hiding', async () => {
     const port = recordedAuditPort(auditFixture.filter((event) => event.kind === 'Review'));
     const controller = new AbortController();
@@ -57,7 +86,7 @@ describe('recorded operational projections', () => {
 
 describe('operational screen states', () => {
   it('shows read-only policy without fields and distinguishes actual from estimate', () => {
-    const html = renderToStaticMarkup(<CostsView state={ready(costsFixture)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+    const html = renderToStaticMarkup(<CostsView readId={0} state={ready(costsFixture)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
     expect(html).not.toContain('<input');
     expect(html).not.toContain('role="switch"');
     expect(html).toContain('Unconfirmed');
@@ -65,10 +94,18 @@ describe('operational screen states', () => {
     expect(html).toContain('not caps on actual billing');
     expect(html).toContain("won&#x27;t retry on its own");
   });
+  it('reports exhaustion using integer exposure, not rounded percentages', () => {
+    for (const [used, limit, exhausted] of [[99_010_000, 100_000_000, false], [100_000_000, 100_000_000, true], [100_000_001, 100_000_000, true], [0, 0, true], [1, 0, true]] as const) {
+      const record = { ...costsFixture, policy: { ...costsFixture.policy, monthly_limit: limit, iteration_limit: limit }, entries: [{ ...costsFixture.entries[0], state: 'reserved' as const, estimate: used }] };
+      const html = renderToStaticMarkup(<CostsView readId={0} state={ready(record)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+      expect(html.includes('At or above the limit.')).toBe(exhausted);
+      if (!exhausted) expect(html).not.toContain('100%');
+    }
+  });
   it('has loading, error, empty and stale states with no enabled spending command', () => {
     const states: ViewState<typeof costsFixture>[] = [{ status: 'loading' }, { status: 'error', retry: () => undefined }, ready({ ...costsFixture, entries: [] }), ready(costsFixture, true)];
     for (const [index, state] of states.entries()) {
-      const html = renderToStaticMarkup(<CostsView state={state} role="admin" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
+      const html = renderToStaticMarkup(<CostsView readId={0} state={state} role="admin" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
       expect(html).toContain(['Loading the latest', 'could not be loaded', 'Nothing paid has run', 'Stale data'][index]);
     }
   });
@@ -78,7 +115,7 @@ describe('operational screen states', () => {
     expect(html).toContain('store-9');
     expect(html).toContain('price-tag');
     expect(html).toContain('locked_final_test');
-    expect(html).toContain('60 source groups · 120 images · 820 objects');
+    expect(html).toContain('60 source groups · 120 images · 780 objects');
     expect(html).toContain('Unsupported · Absent from this evaluation set');
     expect(html).toContain('Complete rollback contract');
     expect(html).toContain('Confidence threshold');

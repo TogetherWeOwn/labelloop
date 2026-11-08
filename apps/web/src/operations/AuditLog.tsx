@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { AuditKind, AuditPage, AuditPort, AuditQuery, Role, ViewState } from './contracts.ts';
 import { download } from './records.ts';
 import { Notice, TableRegion, Utc, ViewBoundary } from './shared.tsx';
@@ -6,17 +6,28 @@ import { Notice, TableRegion, Utc, ViewBoundary } from './shared.tsx';
 const kinds: readonly AuditKind[] = ['Review', 'Promotion', 'Connection', 'Budget'];
 const initialQuery: AuditQuery = { kinds, principals: ['person', 'service'], search: '', from: '', through: '' };
 
-export function AuditLog({ port, role, updatedAt, stale = false }: { port: AuditPort; role: Role; updatedAt: string; stale?: boolean }) {
+type AuditLogProps = { port: AuditPort; role: Role; updatedAt: string; stale?: boolean };
+
+export function AuditLog({ port, role, updatedAt, stale = false }: AuditLogProps) {
   const [query, setQuery] = useState<AuditQuery>(initialQuery);
+  const [lifetime, setLifetime] = useState({ port, role, updatedAt, stale, generation: 0 });
+  // Invalidate before rendering: old rows must never acquire a new scope or timestamp.
+  if (lifetime.port !== port || lifetime.role !== role || lifetime.updatedAt !== updatedAt || lifetime.stale !== stale) {
+    setLifetime({ port, role, updatedAt, stale, generation: lifetime.generation + 1 });
+  }
+  return <AuditSession key={lifetime.generation} port={port} role={role} updatedAt={updatedAt} stale={stale} query={query} onQuery={setQuery} />;
+}
+
+function AuditSession({ port, role, updatedAt, stale = false, query, onQuery }: AuditLogProps & { query: AuditQuery; onQuery: (query: AuditQuery) => void }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ key: string; page: AuditPage } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [exporting, setExporting] = useState(false);
-  const [exportController] = useState(() => new AbortController());
+  const exportRequest = useRef<AbortController | null>(null);
   const key = JSON.stringify([query, cursor, attempt]);
-  useEffect(() => () => exportController.abort(), [exportController]);
+  useEffect(() => () => exportRequest.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
     void port.query(query, cursor, controller.signal).then((page) => {
@@ -28,11 +39,13 @@ export function AuditLog({ port, role, updatedAt, stale = false }: { port: Audit
   }, [port, query, cursor, key]);
   const state: ViewState<AuditPage> = failed === key ? { status: 'error', retry: () => setAttempt(attempt + 1) } : result?.key === key ? { status: 'ready', data: result.page, updatedAt, stale } : { status: 'loading' };
   return <AuditView state={state} query={query} role={role} message={message}
-    onQuery={(next) => { setCursor(null); setResult(null); setQuery(next); }}
+    onQuery={(next) => { setCursor(null); setResult(null); onQuery(next); }}
     onMore={() => { if (result?.page.next_cursor) setCursor(result.page.next_cursor); }}
     exporting={exporting}
     onExport={() => {
-      if (exporting || stale) return;
+      if (exporting || stale || state.status !== 'ready') return;
+      const exportController = new AbortController();
+      exportRequest.current = exportController;
       setExporting(true); setMessage('Preparing the authorized export…');
       void port.exportJsonLines(query, exportController.signal).then((blob) => {
         if (exportController.signal.aborted) return;

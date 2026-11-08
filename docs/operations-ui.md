@@ -33,6 +33,18 @@ A stale Costs record disables commands. Cost command failures, including uncerta
 writes, require a refresh rather than automatic retry. Policy writes carry the
 expected revision; autonomous spending requires an in-place confirmation of the
 exact draft limits. The server still checks every invariant and permission.
+`CostsView.readId` identifies a successful authoritative read, not a record revision:
+advance it after each successful read, including unchanged revisions. This resets
+failed-command recovery and drafts without remounting the whole view. Do not advance
+it on a failed read or merely to retry a command.
+
+Audit pagination/results and pending exports belong to one port, role and freshness
+lifetime. Replacing a port (including a project/session authorization change),
+advancing `updatedAt`, or changing stale status restarts that lifetime before old
+rows can render under new freshness. Keep the port stable within a scope; replace
+it whenever its authorization/project scope changes. Filters survive a lifetime
+change, but cursors, rows, export status and pending query/export work do not.
+The server must still reject revoked scopes/cursors independently.
 
 ## Not delivered: authenticated integration
 
@@ -73,6 +85,10 @@ Query options: `view=costs|audit|models`,
 credential or persistent configuration writes. Every page says it is a fixture.
 Fictional people, records, hashes and sample counts are licence-clean invented
 values adapted from the accepted mockups, not evidence of real qualification.
+Audit `state=scope-swap|freshness-refresh` supplies deterministic deferred ports for
+mounted lifecycle regressions, not new product controls. Both recipes evaluate the
+same complete source ground truth (780 objects); Almond milk is absent and unsupported
+in both. The 640 fixture's qualified claim explicitly excludes that class.
 
 Full verification runs on GitHub Actions only. The `web-build` job performs a
 clean frozen install, lint/types/Vitest, both builds, pinned gitleaks bundle scan,
