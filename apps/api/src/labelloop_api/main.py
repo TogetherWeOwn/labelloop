@@ -10,9 +10,15 @@ import psycopg
 import urllib3
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from minio import Minio
 
-app = FastAPI(title="Labelloop", version="0.0.0")
+from labelloop_api.auth import authentication_boundary, router, validation_error
+
+app = FastAPI(title="Labelloop", version="0.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+app.middleware("http")(authentication_boundary)
+app.add_exception_handler(RequestValidationError, validation_error)
+app.include_router(router)
 logger = logging.getLogger(__name__)
 
 

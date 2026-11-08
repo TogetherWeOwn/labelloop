@@ -3,11 +3,18 @@
 import importlib.util
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 
 import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine, insert, text
 
+from labelloop_api.auth_schema import auth_event, principal, session
+from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
 from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
@@ -278,15 +285,133 @@ def check_frozen_lineage(connection: sa.Connection) -> None:
             transaction.rollback()
 
 
+def check_authentication_schema(connection: sa.Connection) -> None:
+    path = Path(__file__).parent / "versions/0003_authentication.py"
+    spec = importlib.util.spec_from_file_location("auth_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with Operations.context(MigrationContext.configure(connection)):
+        migration.upgrade()
+        assert connection.execute(text("SELECT count(*) FROM auth_principal")).scalar_one() == 0
+        connection.execute(
+            text("""
+            INSERT INTO auth_principal
+                (id, name, kind, role, enabled, failed_attempts)
+            VALUES ('fixture-worker', 'fixture-worker', 'service', 'worker-ml', true, 0)
+        """)
+        )
+        connection.execute(
+            text("""
+            INSERT INTO auth_event (id, principal_id, action, occurred_at)
+            VALUES ('fixture-event', 'fixture-worker', 'permission_denied', now())
+        """)
+        )
+        for statement, message in (
+            ("UPDATE auth_principal SET role = 'admin'", "check constraint"),
+            ("DELETE FROM auth_event", "immutable"),
+            ("TRUNCATE auth_event", "immutable"),
+            ("UPDATE auth_event SET action = 'logout'", "immutable"),
+            ("INSERT INTO auth_session VALUES ('hash', 'absent', 'csrf', now())", "foreign key"),
+        ):
+            with connection.begin_nested() as transaction:
+                rejects(
+                    sa.exc.DatabaseError,
+                    message,
+                    lambda statement=statement: connection.execute(text(statement)),
+                )
+                transaction.rollback()
+        migration.downgrade()
+        migration.upgrade()
+        assert connection.execute(text("SELECT count(*) FROM auth_event")).scalar_one() == 0
+
+
+def check_authentication_concurrency() -> None:
+    # Separate PostgreSQL connections exercise real FOR UPDATE locks, not SQLite emulation.
+    engine = create_engine(
+        os.environ["DATABASE_URL"],
+        pool_size=6,
+        max_overflow=0,
+        connect_args={
+            "options": (
+                "-csearch_path=migration_smoke -cstatement_timeout=15000 -clock_timeout=10000"
+            )
+        },
+    )
+    now = datetime(2026, 11, 7, tzinfo=UTC)
+    password = "migration-fixture-only"
+    identity = "concurrent-fixture"
+    try:
+        store = AuthStore(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                insert(principal).values(
+                    id=identity,
+                    name=identity,
+                    kind="human",
+                    role="reviewer",
+                    password_hash=PASSWORDS.hash(password),
+                    enabled=True,
+                    failed_attempts=0,
+                )
+            )
+            connection.execute(
+                insert(session).values(
+                    token_hash=digest("expired-fixture"),
+                    principal_id=identity,
+                    csrf_hash=digest("csrf-fixture"),
+                    expires_at=now,
+                )
+            )
+        start = Barrier(6, timeout=10)
+
+        def failed_login(_: int) -> tuple[str, str] | None:
+            start.wait()
+            return store.login(identity, "wrong-fixture", now)
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(failed_login, index) for index in range(6)]
+            assert [future.result(timeout=30) for future in futures] == [None] * 6
+        with engine.connect() as connection:
+            row = connection.execute(sa.select(principal)).mappings().one()
+            assert row["failed_attempts"] == 5
+            assert row["locked_until"] == now + timedelta(minutes=15)
+            assert (
+                connection.execute(sa.select(auth_event.c.action)).scalars().all()
+                == ["login_failed"] * 6
+            )
+        assert store.login(identity, password, now + timedelta(minutes=14)) is None
+        with engine.connect() as connection:
+            assert connection.execute(sa.select(principal.c.locked_until)).scalar_one() == (
+                now + timedelta(minutes=15)
+            )
+        credentials = store.login(identity, password, now + timedelta(minutes=15))
+        assert credentials is not None
+        assert store.authenticate(credentials[0], service=False, now=now + timedelta(minutes=15))
+        with engine.connect() as connection:
+            row = connection.execute(sa.select(principal)).mappings().one()
+            assert row["failed_attempts"] == 0 and row["locked_until"] is None
+            # The successful login executes the cleanup SQL against the real migration schema.
+            assert connection.execute(sa.select(session.c.token_hash)).scalars().all() == [
+                digest(credentials[0])
+            ]
+            assert len(connection.execute(sa.select(auth_event)).all()) == 8
+        print("PostgreSQL concurrent lockout, fixed expiry and session cleanup checks passed.")
+    finally:
+        engine.dispose()
+
+
 def main() -> None:
     engine = create_engine(os.environ["DATABASE_URL"])
     try:
         with engine.begin() as connection:
             connection.execute(text("DROP SCHEMA IF EXISTS migration_smoke CASCADE"))
             install_isolated_guards(connection)
+            check_authentication_schema(connection)
             initial_state(connection)
             check_completeness_provenance(connection)
             check_frozen_lineage(connection)
+        check_authentication_concurrency()
         with engine.connect() as connection:
             connection.execute(text("SET search_path TO migration_smoke"))
             rejects(ValueError, "stale", lambda: append(connection, expected=2))

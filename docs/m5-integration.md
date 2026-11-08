@@ -6,6 +6,32 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Qualification/auth migration composition
+
+The independently delivered auth/jobs repair is merged in [PR #31](https://github.com/TogetherWeOwn/labelloop/pull/31),
+squash `ad0f525b5ea07d1c6b68639bd8cf3c4c04601ac1`. This integration consumes that
+repair and its auth dependency unchanged, then adds the no-DDL `m5_auth_0001`
+join of `qualification_0007` and `auth_jobs_0001`. Every historical parent and
+migration body remains unchanged. The delivered auth schema, sessions and guard
+implementation are reused, not independently reimplemented. This does not mount
+the pending promotion or operational consumers.
+
+Graph checks now require exactly the composed head while retaining both delivered
+subgraphs and all qualification ancestors. Both join revisions must have empty
+upgrade/downgrade bodies. Actions' disposable PostgreSQL parent-upgrade matrix
+retains both original auth/jobs parents and adds both new composition parents;
+the clean upgrade/downgrade/re-upgrade, queue and CPU registry exercises remain.
+New composition assertions await exact-head Actions, not local CI.
+
+At fixture-alignment head `bfe0a4e`, [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42476767969)
+failed: [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42476767969/job/128719790060)
+reported **2 failed, 1412 passed, 80 skipped**. All nine new fixture cases passed;
+only global migration-head assertions failed. ML smoke, queue and dev-stack all
+stopped at multiple-head migration setup, so PostgreSQL assertions did not run.
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42476767704), lint,
+types, import-contract, gitleaks and standards passed; web-build was path-skipped.
+No overall CI, PostgreSQL, HTTP/UI/restore or milestone PASS is inferred.
+
 ## Compiled training groups constrain context assembly
 
 The persisted context assembler reads compiled training inputs across the selected
