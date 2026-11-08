@@ -265,7 +265,9 @@ def test_opaque_ids_read_canonical_keys_unchanged(client, canonical, role, proje
             select(project.c.project_key).where(project.c.id == uuid5(NAMESPACE_URL, project_key))
         ).scalar_one()
         stored_asset_key = connection.execute(
-            select(source_asset.c.asset_key).where(source_asset.c.id == uuid5(NAMESPACE_URL, asset_key))
+            select(source_asset.c.asset_key).where(
+                source_asset.c.id == uuid5(NAMESPACE_URL, asset_key)
+            )
         ).scalar_one()
         assert stored_project_key == project_key
         assert stored_asset_key == asset_key
