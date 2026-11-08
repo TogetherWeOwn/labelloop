@@ -35,6 +35,13 @@ def setup(monkeypatch, side=320):
         ),
         "load_final_test": MagicMock(return_value=evidence.final_test),
         "require_development_uses": MagicMock(),
+        "load_evaluation_set": MagicMock(
+            side_effect=lambda _connection, *, project_key, dataset_key, role: {
+                "development": evidence.lineage.development,
+                "calibration": evidence.lineage.calibration,
+                "locked_final_test": evidence.final_test.dataset,
+            }[role]
+        ),
         "load_annotation_evidence": MagicMock(
             side_effect=[
                 StoredAnnotationEvidence(evidence.annotation_audit, None),
@@ -81,6 +88,16 @@ def test_assembly_uses_only_scoped_current_stored_inputs_and_real_quality_gates(
         development_set_key=selection.development_set_id,
         calibration_set_key=selection.calibration_set_id,
     )
+    groups = readers["load_evaluation_set"].call_args_list
+    assert [call.kwargs for call in groups] == [
+        dict(
+            project_key=args["project_key"],
+            dataset_key=selection.development_set_id,
+            role="development",
+        ),
+        dict(project_key=args["project_key"], dataset_key="final-set", role="locked_final_test"),
+    ]
+    assert all(call.args == (connection,) for call in groups)
     calls = readers["load_annotation_evidence"].call_args_list
     for call, reference, model in zip(
         calls, (args["annotation"], args["canary"]), (None, args["model_key"]), strict=True
@@ -125,6 +142,7 @@ def test_outcome_refs_reject_empty_identity(field):
         "stored_report",
         "load_final_test",
         "require_development_uses",
+        "load_evaluation_set",
         "load_annotation_evidence",
     ],
 )
@@ -136,6 +154,75 @@ def test_missing_or_conflicting_record_never_yields_a_context(monkeypatch, reade
     assert not any(
         getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
     )
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("role", ["development", "locked_final_test"])
+@pytest.mark.parametrize("field", ["group_ids", "release_id", "project_id", "role"])
+def test_canonical_evaluation_substitution_fails_before_outcome_reads(
+    monkeypatch, side, role, field
+):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    original = readers["load_evaluation_set"].side_effect
+
+    def substituted(*positional, **keywords):
+        dataset = original(*positional, **keywords)
+        if keywords["role"] == role:
+            value = ("hidden-real-group",) if field == "group_ids" else "foreign"
+            if field == "role":
+                value = "calibration"
+            return replace(dataset, **{field: value})
+        return dataset
+
+    readers["load_evaluation_set"].side_effect = substituted
+    with pytest.raises(ValueError, match="differ from current canonical membership"):
+        store.load_qualification_context(connection, **args)
+    readers["load_annotation_evidence"].assert_not_called()
+    assert args["lineage"] == expected.evidence.lineage
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("mutation", [None, "groups", "missing", "omitted"])
+def test_calibration_is_loaded_from_the_committed_selection(monkeypatch, side, mutation):
+    from labelloop_core.evaluation_lifecycle import EvaluationSet
+
+    connection, args, expected, readers = setup(monkeypatch, side)
+    calibration = EvaluationSet(
+        "calibration-set", args["project_key"], ("cal-group",), "calibration"
+    )
+    final = expected.evidence.final_test
+    assessment = final.assessments[0]
+    selection = replace(
+        assessment.selection, calibration_run_id="calibration", calibration_set_id="calibration-set"
+    )
+    final = replace(final, assessments=(replace(assessment, selection=selection),))
+    readers["load_final_test"].return_value = final
+    args["lineage"] = replace(args["lineage"], calibration=calibration)
+    original = readers["load_evaluation_set"].side_effect
+
+    def load(*positional, **keywords):
+        if keywords["role"] != "calibration":
+            return original(*positional, **keywords)
+        assert keywords["dataset_key"] == selection.calibration_set_id
+        if mutation == "missing":
+            raise ValueError("missing canonical calibration")
+        return (
+            replace(calibration, group_ids=("actual-cal-group",))
+            if mutation == "groups"
+            else calibration
+        )
+
+    readers["load_evaluation_set"].side_effect = load
+    if mutation == "omitted":
+        args["lineage"] = replace(args["lineage"], calibration=None)
+    if mutation is not None:
+        with pytest.raises(ValueError, match="canonical"):
+            store.load_qualification_context(connection, **args)
+        readers["load_annotation_evidence"].assert_not_called()
+    else:
+        loaded = store.load_qualification_context(connection, **args)
+        assert loaded.evidence.lineage.calibration == calibration
+        assert loaded.current_final_test == final
 
 
 @pytest.mark.parametrize("side", [320, 640])

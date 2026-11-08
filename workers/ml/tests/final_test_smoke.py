@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 import sqlalchemy as sa
 from acceptance_smoke import exercise_acceptance
+from evaluation_fixture import independent_evaluation_variant
 from qualification_fixture import qualification_context, synthetic_final
 
 from labelloop_api import model_schema, qualification_schema
@@ -25,26 +26,44 @@ from labelloop_core.registry import PromotionPolicy
 
 
 def exercise_final_test(engine, result, manifest, model, report, seed_variant):
-    # These are invented groups and copied scores, NEVER independent final accuracy.
+    # These are invented canonical populations and copied scores, NEVER model gold.
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+
     dataset_key = result.request.dataset_release_id + f"-synthetic-final-{model.policy.imgsz}"
     final = synthetic_final(
         report,
         run_id=result.request.run_id + "-journal-final",
         dataset_id=dataset_key,
     )
-    dataset = EvaluationSet(dataset_key, model.project_id, ("final-group",), "locked_final_test")
-    development = EvaluationSet(
-        report.dataset_release_id, model.project_id, ("dev-group",), "development"
-    )
     actor = "fixture-lifecycle-admin"
     scope = dict(project_key=model.project_id, dataset_key=dataset_key)
     with engine.begin() as connection:
-        variant_id = seed_variant(
-            connection,
-            replace(result.request, dataset_release_id=dataset_key),
-            manifest | {"release_id": dataset_key},
+        source_variant_id = connection.execute(
+            sa.select(model_schema.evaluation_run.c.variant_id).where(
+                model_schema.evaluation_run.c.run_key == report.run_id
+            )
+        ).scalar_one()
+        report = replace(
+            report,
+            run_id=report.run_id + "-journal-development",
+            dataset_release_id=dataset_key + "-development",
         )
+        development_variant_id = independent_evaluation_variant(
+            connection, source_variant_id, report.dataset_release_id
+        )
+        save_evaluation(
+            connection, model_key=model.release_id, variant_id=development_variant_id, report=report
+        )
+        variant_id = independent_evaluation_variant(connection, source_variant_id, dataset_key)
         save_evaluation(connection, model_key=model.release_id, variant_id=variant_id, report=final)
+        dataset = load_evaluation_set(connection, **scope, role="locked_final_test")
+        development = load_evaluation_set(
+            connection,
+            project_key=model.project_id,
+            dataset_key=report.dataset_release_id,
+            role="development",
+        )
+        assert not set(dataset.group_ids) & set(development.group_ids)
         register_final_test(connection, dataset=dataset, actor_id=actor)
         selection = record_candidate_selection(
             connection,

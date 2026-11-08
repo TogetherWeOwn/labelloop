@@ -619,6 +619,56 @@ def exercise_context_assembly(engine, release, final, context, actor):
         assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit
+        with pytest.raises(ValueError, match="differ from current canonical membership"):
+            load_qualification_context(
+                connection,
+                **(
+                    arguments
+                    | {
+                        "lineage": replace(
+                            arguments["lineage"],
+                            development=replace(
+                                arguments["lineage"].development, group_ids=("invented-dev-group",)
+                            ),
+                        )
+                    }
+                ),
+            )
+        from labelloop_api.schema import similarity_relation
+
+        for dataset_key in (
+            loaded.evidence.lineage.development.release_id,
+            loaded.current_final_test.dataset.release_id,
+        ):
+            with connection.begin_nested() as transaction:
+                keys = (dataset_key + "-positive", annotation.release_key + "-positive")
+                identities = {
+                    row.asset_key: row.id
+                    for row in connection.execute(
+                        sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                            source_asset.c.asset_key.in_(keys)
+                        )
+                    )
+                }
+                connection.execute(
+                    sa.insert(similarity_relation).values(
+                        left_asset_id=identities[keys[0]],
+                        right_asset_id=identities[keys[1]],
+                        reason="declared_metadata",
+                        evidence="synthetic context evaluation-group conflict",
+                        algorithm_version="synthetic-v1",
+                    )
+                )
+                with pytest.raises(ValueError, match="merge pinned groups"):
+                    load_qualification_context(connection, **arguments)
+                assert load_registry(connection, **scope) == before
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                    ).scalar_one()
+                    == count
+                )
+                transaction.rollback()
         require_automatic_acceptance(
             connection,
             **scope,
@@ -695,6 +745,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
         "scope": "synthetic canonical assembly/acceptance mechanics, never domain quality or HTTP",
         "reconnected_model_report_policy_final_and_both_measured_outcomes": True,
         "canonical_evaluation_groups_recover_and_reject_missing_or_conflicting_sources": True,
+        "assembly_rejects_declared_group_substitution_and_new_evaluation_relations": True,
         "complete_fresh_canary_passes_and_partial_outcome_fails": True,
         "prior_audit_group_reuse_rejected_with_registry_unchanged": True,
         "locked_development_identity_rejected_by_assembly_acceptance_and_registry": True,

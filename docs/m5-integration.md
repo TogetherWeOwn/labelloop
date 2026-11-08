@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Canonical evaluation-group producer — assertions pending Actions
+## Canonical evaluation-group consumer — new assertions pending Actions
+
+The persisted qualification assembler now requires the canonical evaluation-group
+producer for the committed selection's development and optional calibration release,
+and for the final report's dataset. Exact project/release/role/group identities must
+match the supplied lineage and current final journal. Missing canonical populations,
+incomplete membership, substituted groups and new transitive grouping conflicts
+cannot yield a context; the existing quality, support and freshness gates still run.
+This is not yet a mandatory check in direct registry/acceptance consumers or HTTP.
+Reference use and ancestor selection-use provenance remain unfinished.
+
+The journal/assembly smoke now prepares separate synthetic canonical development and
+final populations before selection/exposure, instead of declaring independent groups
+for copied training membership. Two correlated source records count as one group.
+Their labels remain machine-reviewed and not gold-eligible. Copied CPU scores,
+fixture variant flags and reused recipe/class metadata exercise persistence only:
+there is no new image compilation, independent measurement or domain-quality claim.
+The fixture variant does not retain the CPU manifest's source samples or image hashes.
+
+Twenty-five added adapter cases cover missing producer reads, both recipes,
+project/release/role/group substitution and selected calibration recovery, omission,
+missing membership and group mismatch. Both-recipe PostgreSQL controls reconnect and
+assemble canonical lineage, reject invented development groups and new development/
+final relations, and retain registry heads/event count. New assertions await Actions;
+changed-file Ruff/format and patch checks passed. No local tests or builds ran.
+No migration, dependency, endpoint or second qualification/grouping engine was added.
+
+At preceding exact head `9fba7232cd1d9b8c1014684310dc92c4ad28edd6`,
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42483648034) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42483647624) succeeded.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42483648034/job/128740758166)
+reported **1443 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42483648034/job/128740758132)
+reported **19 passed**, plus **24 passed** in its separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42483648034/job/128740758283)
+reported **39 passed**. Migration round trip and all four parent upgrades, dev-stack,
+web-build and lint/types/import-contract passed. This verifies the earlier producer,
+not the new consumer or HTTP/UI/restore/domain-quality acceptance. The PR stays draft;
+required Devin, fresh-context and native QA/Security reviews remain gates.
+
+## Canonical evaluation-group producer — historical preparation
 
 `evaluation_group_store.load_evaluation_set` derives sorted, distinct groups from
 all exact source revisions in a scoped frozen canonical release. It uses that

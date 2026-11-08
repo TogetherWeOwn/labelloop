@@ -1,9 +1,10 @@
 """Assemble current persisted qualification inputs, never HTTP/model claims.
 
-This read port does not establish original pipeline execution, measurement truth or
-canonical lineage. The authorized service must derive lineage and outcome selectors
-from trusted producers. No production route may treat caller-supplied lineage as
-that producer. The outer transaction and locks must survive through the decision.
+This read port validates compiled training and canonical evaluation groups, not
+original pipeline execution, measurement truth or complete reference/ancestor use.
+The authorized service must derive the remaining lineage and outcome selectors from
+trusted producers. No production route may treat caller-supplied lineage as that
+producer. The outer transaction and locks must survive through the decision.
 """
 
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ import sqlalchemy as sa
 
 from labelloop_api import model_schema
 from labelloop_api.annotation_evidence_store import load_annotation_evidence
+from labelloop_api.evaluation_group_store import load_evaluation_set
 from labelloop_api.final_test_store import load_final_test, require_development_uses
 from labelloop_api.model_store import load_release, stored_report
 from labelloop_api.qualification_policy_store import load_qualification_policy
@@ -100,6 +102,33 @@ def load_qualification_context(
         development_set_key=selections[0].development_set_id,
         calibration_set_key=selections[0].calibration_set_id,
     )
+
+    development = load_evaluation_set(
+        connection,
+        project_key=project_key,
+        dataset_key=selections[0].development_set_id,
+        role="development",
+    )
+    calibration_key = selections[0].calibration_set_id
+    calibration = (
+        load_evaluation_set(
+            connection, project_key=project_key, dataset_key=calibration_key, role="calibration"
+        )
+        if calibration_key is not None
+        else None
+    )
+    final_dataset = load_evaluation_set(
+        connection,
+        project_key=project_key,
+        dataset_key=report.dataset_release_id,
+        role="locked_final_test",
+    )
+    if (lineage.development, lineage.calibration, final_test.dataset) != (
+        development,
+        calibration,
+        final_dataset,
+    ):
+        raise ValueError("qualification evaluation groups differ from current canonical membership")
 
     def outcome(reference, model=None):
         return load_annotation_evidence(
