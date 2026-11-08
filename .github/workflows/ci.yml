@@ -190,7 +190,36 @@ jobs:
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10.28.2
+      - name: Check out the base lint toolchain
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .lint-baseline
+          persist-credentials: false
+      - name: Baseline lint consumer contract
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm --dir .lint-baseline install --frozen-lockfile
+          node apps/web/scripts/lint-consumer-contract.mjs .lint-baseline/apps/web/package.json
+      - name: Remove the isolated base checkout
+        if: always() && github.event_name == 'pull_request'
+        run: rm -rf .lint-baseline
+      - name: Resolve web lockfile with native policy
+        run: pnpm install --lockfile-only
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-lock-resolution
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 7
       - run: pnpm install --frozen-lockfile
+      - name: Candidate lint consumer contract
+        run: node apps/web/scripts/lint-consumer-contract.mjs
+        env:
+          EXPECTED_LINT_MATCHER: "11.0.4"
+      - name: Require the generated lockfile to be committed
+        run: git diff --exit-code -- pnpm-lock.yaml
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
