@@ -199,6 +199,36 @@ audit-failure rollback. New cases are commissioned, **not passing evidence until
 exact-head Actions completes**. These cases do not establish sessions/CSRF, full
 setup lifecycle, grouping publication, fenced jobs or project-to-export.
 
+## Canonical summary reads (partial, unmounted)
+
+`CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
+for canonical projects, assets and dataset releases. Each entry point requires a
+human admin/reviewer with review permission and constrains every query to the
+trusted deployment workspace. Unknown and foreign IDs return the same not-found
+response. Projects without a scoped management event are omitted pending explicit
+adoption. This is a partial adapter; unsupported producer kinds fail unavailable,
+not as an invented empty page or completed result.
+
+Lists use bounded UUID keysets (1–100 entries), fetch at most one lookahead row,
+and return a cursor within the published identifier bounds. Its scope tag binds
+workspace, project and resource kind to prevent accidental cursor reuse. The tag
+is not a signature, authorization or stable snapshot: the SQL query always applies
+ownership independently, and concurrent inserts before the position require a new
+traversal. No count-all query, unbounded response, offset walk or per-item query is
+used. Project revisions come from attributed management events; asset revisions
+come from current canonical annotation revisions. Asset review approval does not
+claim dataset publication, and project state remains draft until setup publication
+is implemented. Frozen dataset summaries report the actual frozen row state.
+
+Only public identity, kind, revision and lifecycle state are projected. Source
+URIs, object keys, provider payloads and audit evidence never enter summaries.
+Reads need only SELECT and append no event, revision, job or retry receipt. Actions
+Postgres cases additionally exercise reviewer reads with INSERT/UPDATE revoked,
+current annotation revisions, frozen summaries, bounded traversal, cursor scope,
+invalid limits/cursors, denied principals and foreign/legacy ID isolation. These
+new cases require exact-head Actions results; no session/CSRF, detailed read,
+setup-publication or complete operations binding is established by them.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

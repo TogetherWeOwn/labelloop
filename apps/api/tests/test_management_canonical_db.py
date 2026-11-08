@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 from labelloop_api.management_canonical import CanonicalManagementMutations
 from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze
 from labelloop_api.management_ports import ManagementFailure, MutationContext
+from labelloop_api.management_reads import CanonicalManagementReads
 from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
@@ -145,6 +146,148 @@ def counts(owner, project_id):
                 .where(canonical_event.c.aggregate_id == project_id)
             ).scalar_one(),
         )
+
+
+@dataclass(frozen=True)
+class Reader:
+    id: str = "fixture-reviewer"
+    kind: str = "human"
+    role: str = "reviewer"
+    granted: bool = True
+
+    def permits(self, permission):
+        return self.granted and permission == "review"
+
+
+def test_canonical_reads_project_asset_release_and_current_revisions(database):
+    service, owner, role = database
+    created, asset, _, payload = release_inputs(service, owner)
+    released = freeze(service, created.id, payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    # Reads need no runtime INSERT or row-lock privilege.
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    for actor in (Actor(), Reader()):
+        assert reads.read(actor, "project", created.id).revision == 3
+        summary = reads.read(actor, "asset", asset.id)
+        assert summary.revision == 2
+        assert summary.state == "draft"  # review approval is not a published dataset
+        assert set(summary.model_dump()) == {"id", "project_id", "kind", "revision", "state"}
+        assert reads.read(actor, "dataset-release", released.id) == released
+        page = reads.list_resources(actor, created.id, "dataset-release", None, 100)
+        assert page.items == [released]
+        assert page.next_cursor is None
+    assert counts(owner, created.id) == before
+
+
+def test_canonical_read_pages_are_bounded_and_scoped_keysets(database):
+    service, _, _ = database
+    created = [create(service, key=f"create-{index}") for index in range(3)]
+    target = created[0].id
+    assets = [
+        ingest(service, target, image_payload(index + 1), key=f"asset-{index}")
+        for index in range(3)
+    ]
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    actor = Reader()
+    first = reads.list_projects(actor, None, 2)
+    second = reads.list_projects(actor, first.next_cursor, 2)
+    assert first.next_cursor is not None and len(first.next_cursor) <= 128
+    assert second.next_cursor is None
+    assert [item.id for item in first.items + second.items] == sorted(item.id for item in created)
+    assert len(first.items) == 2
+    one = reads.list_resources(actor, target, "asset", None, 1)
+    two = reads.list_resources(actor, target, "asset", one.next_cursor, 1)
+    three = reads.list_resources(actor, target, "asset", two.next_cursor, 1)
+    assert [item.id for item in one.items + two.items + three.items] == sorted(
+        item.id for item in assets
+    )
+    assert three.next_cursor is None
+    for call in (
+        lambda: reads.list_resources(actor, target, "asset", first.next_cursor, 1),
+        lambda: reads.list_resources(actor, created[1].id, "asset", one.next_cursor, 1),
+        lambda: reads.list_resources(actor, target, "dataset-release", one.next_cursor, 1),
+        lambda: replace(reads, workspace_id=uuid4()).list_projects(actor, first.next_cursor, 1),
+    ):
+        with pytest.raises(ManagementFailure, match="invalid_request"):
+            call()
+
+
+@pytest.mark.parametrize("cursor", ["bad", "a" * 129, "a" * 32 + "." + "z" * 32])
+def test_canonical_read_refuses_invalid_cursors(database, cursor):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        reads.list_projects(Reader(), cursor, 1)
+
+
+@pytest.mark.parametrize("limit", [0, 101, True, 1.0])
+def test_canonical_read_refuses_unbounded_or_coerced_limits(database, limit):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        reads.list_projects(Reader(), None, limit)
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        Reader(kind="service", role="admin"),
+        Reader(kind="model"),
+        Reader(id=""),
+        Reader(role="other"),
+        Reader(granted=False),
+    ],
+)
+def test_canonical_read_denies_non_human_or_ungranted_actors(database, actor):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.list_projects(actor, None, 10)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read(actor, "project", "unknown")
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.list_resources(actor, "unknown", "asset", None, 10)
+
+
+def test_canonical_read_hides_foreign_legacy_and_unknown_resources(database):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    released = freeze(service, created.id, payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    foreign = replace(reads, workspace_id=uuid4())
+    for kind, identity in (
+        ("project", created.id),
+        ("asset", asset.id),
+        ("dataset-release", released.id),
+    ):
+        with pytest.raises(ManagementFailure, match="not_found"):
+            foreign.read(Reader(), kind, identity)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read(Reader(), kind, "unknown")
+    assert foreign.list_projects(Reader(), None, 100).items == []
+    with pytest.raises(ManagementFailure, match="not_found"):
+        foreign.list_resources(Reader(), created.id, "model", "invalid", 10)
+    with pytest.raises(ManagementFailure, match="management_unavailable"):
+        reads.list_resources(Reader(), created.id, "model", None, 10)
+    legacy_id = uuid4()
+    with owner.begin() as connection:
+        connection.execute(
+            insert(project).values(
+                id=legacy_id,
+                project_key="legacy-" + uuid4().hex,
+                workspace_id=service.workspace_id,
+                task="detect",
+                scope="legacy",
+                domain="industrial",
+            )
+        )
+    with pytest.raises(ManagementFailure, match="not_found"):
+        reads.read(Reader(), "project", str(legacy_id))
+    assert [item.id for item in reads.list_projects(Reader(), None, 100).items] == [created.id]
 
 
 def test_create_replay_and_conflict_preserve_single_canonical_ontology(database):
