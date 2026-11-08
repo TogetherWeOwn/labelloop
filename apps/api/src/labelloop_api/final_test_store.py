@@ -56,7 +56,7 @@ def load_final_test(
         .order_by(qualification_schema.final_test_event.c.revision.desc())
         .limit(1)
     ).scalar_one()
-    state = loads(json.dumps(record))
+    state = loads(json.dumps(record), FinalTestState)
     if not isinstance(state, FinalTestState) or (
         state.dataset.project_id,
         state.dataset.release_id,
@@ -160,7 +160,7 @@ def expose_final_test(
                 qualification_schema.candidate_selection.c.selection_key == selection_key,
             )
         ).scalar_one()
-        selection = loads(json.dumps(record))
+        selection = loads(json.dumps(record), CandidateSelection)
         if not isinstance(selection, CandidateSelection):
             raise ValueError("invalid persisted candidate selection")
         release = _model(connection, project_id, model_key)

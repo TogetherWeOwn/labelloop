@@ -1,22 +1,90 @@
 """Cheap journal boundary/DDL checks; PostgreSQL transitions run in Actions ML smoke."""
 
 import io
+import json
 import runpy
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from labelloop_api import qualification_schema
+from labelloop_api import final_test_store, qualification_schema
 from labelloop_api.final_test_store import (
     expose_final_test,
     invalidate_final_test,
     record_candidate_selection,
     register_final_test,
 )
-from labelloop_core.evaluation_lifecycle import EvaluationSet
+from labelloop_core.evaluation_lifecycle import CandidateSelection, EvaluationSet, FinalTestState
+from labelloop_core.qualification_wire import dumps
+
+
+@pytest.mark.parametrize(
+    "project_key,dataset_key", [("project", "test"), ("other", "test"), ("project", "other")]
+)
+def test_final_state_loader_decodes_the_expected_root_and_checks_identity(project_key, dataset_key):
+    state = FinalTestState(EvaluationSet("test", "project", ("g",), "locked_final_test"))
+    connection = Mock()
+    connection.execute.return_value.scalar_one.return_value = json.loads(dumps(state))
+    with patch.object(final_test_store, "lock_project", return_value="project-id"):
+        if (project_key, dataset_key) == ("project", "test"):
+            assert (
+                final_test_store.load_final_test(
+                    connection, project_key=project_key, dataset_key=dataset_key
+                )
+                == state
+            )
+        else:
+            with pytest.raises(ValueError, match="journal identity mismatch"):
+                final_test_store.load_final_test(
+                    connection, project_key=project_key, dataset_key=dataset_key
+                )
+
+
+@pytest.mark.parametrize("wrong_root", [False, True])
+def test_exposure_decodes_only_a_candidate_selection_before_transition(wrong_root):
+    selection = CandidateSelection(
+        "selection", "project", "model", "a" * 64, "dev-run", "dev", None, None
+    )
+    state = Mock()
+    connection = MagicMock()
+    record = (
+        FinalTestState(EvaluationSet("test", "project", ("g",), "locked_final_test"))
+        if wrong_root
+        else selection
+    )
+    connection.execute.return_value.scalar_one.return_value = json.loads(dumps(record))
+    release, report = object(), object()
+    with (
+        patch.object(final_test_store, "lock_project", return_value="project-id"),
+        patch.object(final_test_store, "load_final_test", return_value=state),
+        patch.object(final_test_store, "_model", return_value=release),
+        patch.object(final_test_store, "stored_report", return_value=report),
+        patch.object(final_test_store, "_append") as append,
+    ):
+        kwargs = dict(
+            project_key="project",
+            dataset_key="test",
+            model_key="model",
+            selection_key="selection",
+            evaluation_key="final",
+            expected_revision=0,
+            actor_id="admin",
+        )
+        if wrong_root:
+            with pytest.raises(ValueError, match="schema or record type"):
+                expose_final_test(connection, **kwargs)
+            state.expose.assert_not_called()
+            append.assert_not_called()
+        else:
+            assert expose_final_test(connection, **kwargs) is state.expose.return_value
+            state.expose.assert_called_once_with(release, selection, report, expected_revision=0)
+            append.assert_called_once_with(
+                connection, "project-id", "admin", "expose", state.expose.return_value
+            )
 
 
 @pytest.mark.parametrize(
