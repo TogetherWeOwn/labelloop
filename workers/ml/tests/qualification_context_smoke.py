@@ -939,6 +939,40 @@ def exercise_context_assembly(engine, release, final, context, actor):
         loaded = load_qualification_context(connection, **arguments)
         derived_arguments = {key: value for key, value in arguments.items() if key != "lineage"}
         derived = load_qualification_context(connection, **derived_arguments)
+        automatic_arguments = {
+            key: value for key, value in derived_arguments.items() if key != "evaluation_key"
+        }
+        automatic = load_qualification_context(connection, **automatic_arguments)
+        assert automatic == derived
+        from labelloop_api.model_store import save_evaluation
+
+        final_variant_id = connection.execute(
+            sa.select(model_schema.evaluation_run.c.variant_id).where(
+                model_schema.evaluation_run.c.run_key == final.run_id
+            )
+        ).scalar_one()
+        for other_passes in (False, True):
+            with connection.begin_nested() as transaction:
+                second = replace(final, run_id=final.run_id + "-ambiguous")
+                if not other_passes:
+                    second = replace(second, overall=replace(second.overall, map50_95=0.0))
+                save_evaluation(
+                    connection,
+                    model_key=release.release_id,
+                    variant_id=final_variant_id,
+                    report=second,
+                )
+                with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
+                    load_qualification_context(connection, **automatic_arguments)
+                assert load_registry(connection, **scope) == before
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                    ).scalar_one()
+                    == count
+                )
+                transaction.rollback()
+            assert load_qualification_context(connection, **automatic_arguments) == derived
         from labelloop_api.training_group_store import model_input_groups
 
         recorded = model_input_groups(connection, project_id=project_id, model_id=model_id)
@@ -1293,6 +1327,8 @@ def exercise_context_assembly(engine, release, final, context, actor):
         )
         with pytest.raises(ValueError, match="adverse or missing observations"):
             load_qualification_context(connection, **(arguments | {"canary": partial}))
+        with pytest.raises(ValueError, match="adverse or missing observations"):
+            load_qualification_context(connection, **(automatic_arguments | {"canary": partial}))
         # Even a valid, committed model-bound outcome cannot reuse prior audit groups.
         with pytest.raises(ValueError, match="canary groups must be fresh"):
             load_qualification_context(
@@ -1319,6 +1355,8 @@ def exercise_context_assembly(engine, release, final, context, actor):
         "scope": "synthetic canonical assembly/acceptance mechanics, never domain quality or HTTP",
         "reconnected_model_report_policy_final_and_both_measured_outcomes": True,
         "lineage_derived_from_recorded_inputs_and_selection_without_assertion": True,
+        "unique_linked_final_is_selected_without_score_or_recency_cherry_picking": True,
+        "ambiguous_final_reports_and_partial_canary_reject_without_registry_mutation": True,
         "derived_context_passes_acceptance_and_rejects_selection_group_canary": True,
         "canonical_training_reload_rejects_omitted_groups_and_new_relations_in_consumers": True,
         "canonical_evaluation_groups_recover_and_reject_missing_or_conflicting_sources": True,

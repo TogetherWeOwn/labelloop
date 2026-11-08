@@ -6,7 +6,46 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## HTTP canonical-group resumption replay controls — pending Actions
+## Service-owned final-report selection — pending Actions
+
+The persisted qualification assembler may omit its evaluation key. It reads every
+linked report from the scoped complete model release and requires one unambiguous
+locked-final report. Every linked report must match its key, recipe, weights,
+class map and inference policy. Selection uses neither scores nor recency; multiple
+final reports reject even if only one would pass. The existing explicit selector
+remains a trusted internal port, not an HTTP request field.
+
+The selected report still needs its exact committed exposure, current canonical
+membership, current policy, independent final state, measured audit and fresh
+candidate-bound canary. This selects only report identity: it does not authorize
+promotion, create measurement truth, choose audit/canary outcomes or expose final
+scores. No endpoint, schema, migration, dependency or second qualification engine.
+
+Adapter controls cover both recipes, absent/ambiguous finals, substitutions in
+final and development links, unexposed/adapted/quarantined finals and changed report
+payloads. Both-recipe disposable PostgreSQL assembly reconnects without an evaluation
+key, requires equality with explicit assembly, rejects a second persisted linked
+final regardless of its score with registry heads/events unchanged, then restores
+only the disposable savepoint and rechecks the original context. Partial canary
+rejection remains mandatory on the selector-free path. New controls are unverified
+pending exact-head Actions; no local tests/builds ran. REA angle: reuse immutable
+model-evaluation links, the final journal and the existing assembler, not another
+selection or qualification store. Trusted execution/measurement producers,
+service-owned outcome selection, authenticated promotion/automatic annotation and
+expanded restore/operational UI acceptance remain unfinished.
+
+## HTTP canonical-group resumption replay controls — verified baseline
+
+Exact `987e973896eea7f9ddf1336830083e2b44e38bdd`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42523401284),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42523400749) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42523400781)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42523401284/job/128861624563),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42523401284/job/128861624518),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the canonical-group HTTP replay controls below,
+not the new final-report selector, full UI/expanded restore or milestone acceptance.
+Totals were not extracted. Required Devin/fresh-context/native QA/Security remain.
 
 Both-recipe disposable PostgreSQL smoke commits a new canonical relation after
 remediation promotion, connecting an actual compiled training input, an actual
@@ -23,8 +62,8 @@ HTTP resumption follows all controls, so invalid incidents/revisions or a perman
 broken fixture cannot satisfy rejection alone. The shared snapshot now includes
 samples, selections and exact-revision teacher origins as well as policy, drift,
 final-test, audit and measured-outcome history. No production code, migration,
-dependency, gate or second grouping engine changed. New controls await exact-head
-Actions; no local tests or builds ran. REA angle: exercise the existing canonical
+dependency, gate or second grouping engine changed. These controls passed exact-head
+Actions at `987e973`; no local tests or builds ran. REA angle: exercise the existing canonical
 readers through the real session/resumption transaction, not another lifecycle engine.
 
 ## Metadata-only final-test inspection — verified baseline

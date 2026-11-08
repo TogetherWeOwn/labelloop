@@ -41,13 +41,35 @@ class AnnotationOutcomeRef:
             require_name(value)
 
 
+def _select_final_report(connection, release):
+    # Select by persisted role/identity only, never scores, passing outcomes or the
+    # newest timestamp. Multiple final reports need an explicit trusted decision.
+    reports = []
+    for key in release.evaluation_run_ids:
+        report = stored_report(connection, release, key)
+        if (
+            report.run_id != key
+            or report.recipe_id != release.recipe_id
+            or report.weights_sha256 != release.weights_sha256
+            or report.class_map_sha256 != release.class_map_sha256
+            or report.policy != release.policy
+            or report.role not in {"development", "calibration", "locked_final_test"}
+        ):
+            raise ValueError("linked evaluation differs from the selected model contract")
+        if report.role == "locked_final_test":
+            reports.append(report)
+    if len(reports) != 1:
+        raise ValueError("qualification requires one unambiguous linked final evaluation")
+    return reports[0]
+
+
 def load_qualification_context(
     connection: sa.Connection,
     *,
     project_key: str,
     recipe_key: str,
     model_key: str,
-    evaluation_key: str,
+    evaluation_key: str | None = None,
     qualification_key: str,
     annotation: AnnotationOutcomeRef,
     canary: AnnotationOutcomeRef,
@@ -57,12 +79,17 @@ def load_qualification_context(
 
     The final-test identity and selection come from the stored report and current
     journal, not separate caller assertions. There is no historical-group option.
+    An omitted evaluation key selects the sole linked final report by role and
+    exact model contract, not score or recency. Ambiguity fails before audit reads;
+    the selected report still requires its current committed exposure and all gates.
     This is a preflight, not registry authorization: promotion still rechecks the
     current configuration/final journal, durable veto and incumbent non-regression.
     Do not cache the result across transactions or use it as an acceptance grant.
     """
-    for value in (project_key, recipe_key, model_key, evaluation_key, qualification_key):
+    for value in (project_key, recipe_key, model_key, qualification_key):
         require_name(value)
+    if evaluation_key is not None:
+        require_name(evaluation_key)
     project_id = lock_project(connection, project_key)
     policy = load_qualification_policy(
         connection, project_key=project_key, recipe_key=recipe_key
@@ -84,7 +111,11 @@ def load_qualification_context(
     inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
     if lineage is not None and not set(inputs.training) <= set(lineage.training_group_ids):
         raise ValueError("qualification lineage omits compiled training groups")
-    report = stored_report(connection, release, evaluation_key)
+    report = (
+        _select_final_report(connection, release)
+        if evaluation_key is None
+        else stored_report(connection, release, evaluation_key)
+    )
     final_test = load_final_test(
         connection, project_key=project_key, dataset_key=report.dataset_release_id
     )
