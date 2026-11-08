@@ -3,8 +3,9 @@
 from datetime import datetime
 from functools import lru_cache
 from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection, create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,9 +15,8 @@ from labelloop_api.auth_store import Principal
 from labelloop_api.database_url import quoted_database_url
 from labelloop_api.schema import annotation_revision, project, source_asset
 
-router = APIRouter(prefix="/projects/{project_key}/assets/{asset_key}", tags=["annotations"])
-ProjectKey = Annotated[str, Path(min_length=1, max_length=256)]
-AssetKey = Annotated[str, Path(min_length=1, max_length=256)]
+# Persisted UUIDs are opaque lookup handles; canonical keys need not be URL segments.
+router = APIRouter(prefix="/projects/{project_id}/assets/{asset_id}", tags=["annotations"])
 Reviewer = Annotated[Principal, Depends(require_reviewer)]
 
 
@@ -58,8 +58,8 @@ def annotation_engine():
     return create_engine(quoted_database_url(), pool_pre_ping=True)
 
 
-def revision_query(project_key: str, asset_key: str):
-    # Both keys are bound in every query, including subsequent history pages.
+def revision_query(project_id: UUID, asset_id: UUID):
+    # Both IDs are bound in every query, including subsequent history pages.
     return (
         select(
             annotation_revision.c.revision,
@@ -74,6 +74,8 @@ def revision_query(project_key: str, asset_key: str):
             annotation_revision.c.scope_completeness,
             annotation_revision.c.training_eligible.label("recorded_training_eligible"),
             annotation_revision.c.gold_eligible.label("recorded_gold_eligible"),
+            project.c.project_key,
+            source_asset.c.asset_key,
             source_asset.c.sha256.label("source_sha256"),
             source_asset.c.width,
             source_asset.c.height,
@@ -83,7 +85,7 @@ def revision_query(project_key: str, asset_key: str):
                 source_asset, annotation_revision.c.asset_id == source_asset.c.id
             ).join(project, source_asset.c.project_id == project.c.id)
         )
-        .where(project.c.project_key == project_key, source_asset.c.asset_key == asset_key)
+        .where(project.c.id == project_id, source_asset.c.id == asset_id)
         .order_by(annotation_revision.c.revision.desc())
     )
 
@@ -94,13 +96,13 @@ def record(row) -> RevisionRecord:
     )
 
 
-def load_snapshot(connection: Connection, project_key: str, asset_key: str) -> AnnotationSnapshot:
-    row = connection.execute(revision_query(project_key, asset_key).limit(1)).mappings().first()
+def load_snapshot(connection: Connection, project_id: UUID, asset_id: UUID) -> AnnotationSnapshot:
+    row = connection.execute(revision_query(project_id, asset_id).limit(1)).mappings().first()
     if row is None:
         raise HTTPException(404, detail="annotation_not_found")
     return AnnotationSnapshot(
-        project_key=project_key,
-        asset_key=asset_key,
+        project_key=row["project_key"],
+        asset_key=row["asset_key"],
         source_sha256=row["source_sha256"],
         width=row["width"],
         height=row["height"],
@@ -110,21 +112,21 @@ def load_snapshot(connection: Connection, project_key: str, asset_key: str) -> A
 
 def load_history(
     connection: Connection,
-    project_key: str,
-    asset_key: str,
+    project_id: UUID,
+    asset_id: UUID,
     *,
     before_revision: int | None,
     limit: int,
 ) -> AnnotationHistory:
     if not 1 <= limit <= 100 or (before_revision is not None and before_revision < 1):
         raise ValueError("invalid history page")
-    statement = revision_query(project_key, asset_key)
+    statement = revision_query(project_id, asset_id)
     if before_revision is not None:
         statement = statement.where(annotation_revision.c.revision < before_revision)
     rows = connection.execute(statement.limit(limit + 1)).mappings().all()
     if not rows:
         # Distinguish an exhausted cursor from an absent or cross-project asset.
-        load_snapshot(connection, project_key, asset_key)
+        load_snapshot(connection, project_id, asset_id)
     page = rows[:limit]
     return AnnotationHistory(
         revisions=[record(row) for row in page],
@@ -133,18 +135,18 @@ def load_history(
 
 
 @router.get("/annotations", response_model=AnnotationSnapshot)
-def annotation_snapshot(project_key: ProjectKey, asset_key: AssetKey, actor: Reviewer):
+def annotation_snapshot(project_id: UUID, asset_id: UUID, actor: Reviewer):
     try:
         with annotation_engine().connect() as connection:
-            return load_snapshot(connection, project_key, asset_key)
+            return load_snapshot(connection, project_id, asset_id)
     except SQLAlchemyError:
         raise HTTPException(503, detail="annotations_unavailable") from None
 
 
 @router.get("/annotation-history", response_model=AnnotationHistory)
 def annotation_history(
-    project_key: ProjectKey,
-    asset_key: AssetKey,
+    project_id: UUID,
+    asset_id: UUID,
     actor: Reviewer,
     before_revision: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -153,8 +155,8 @@ def annotation_history(
         with annotation_engine().connect() as connection:
             return load_history(
                 connection,
-                project_key,
-                asset_key,
+                project_id,
+                asset_id,
                 before_revision=before_revision,
                 limit=limit,
             )

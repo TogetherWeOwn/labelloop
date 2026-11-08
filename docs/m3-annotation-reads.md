@@ -12,18 +12,29 @@ Admin and reviewer sessions qualify; all four worker principal types are refused
 before the annotation connection is acquired. The existing authentication layer
 records permission refusals and applies `Cache-Control: no-store` to every response.
 
-- `GET /projects/{project_key}/assets/{asset_key}/annotations` returns the latest
+- `GET /projects/{project_id}/assets/{asset_id}/annotations` returns the latest
   committed annotation revision, canonical source hash, width and height. Coordinates
   remain in the original orientation-normalized source frame. The latest revision
   and source metadata are selected in one statement, not assembled from separate
   reads of a changing latest-revision pointer.
-- `GET /projects/{project_key}/assets/{asset_key}/annotation-history` returns
+- `GET /projects/{project_id}/assets/{asset_id}/annotation-history` returns
   descending immutable revision records. `limit` defaults to 20, accepts 1–100,
   and the optional `before_revision` is an exclusive positive integer cursor.
   A non-null `next_before_revision` is the last returned revision when another
   record exists. Newer revisions do not shift an in-progress history page.
 
-Both project and asset keys constrain every query. An absent asset, a key paired
+`project_id` and `asset_id` are the existing persisted `project.id` and
+`source_asset.id` UUIDs, not canonical keys or UUIDs computed from those keys.
+Use their standard 36-character hyphenated representation as bounded opaque lookup
+handles. Ingestion already assigns these IDs to every stored project and asset;
+no migration, key rewrite, new resolver table or key alphabet/length restriction is
+needed. Snapshot responses return the stored `project_key` and `asset_key` unchanged,
+including slashes, Unicode, reserved URL characters and keys longer than 256 characters.
+Do not percent-encode a canonical key into either path slot. Future project/asset
+listing and ingestion HTTP contracts must expose these existing IDs to consumers;
+those discovery APIs are not added by this read slice.
+
+Both project and asset IDs constrain every query. An absent asset, an ID paired
 with the wrong project, or an asset without an initial annotation has the same
 `404 annotation_not_found` response. An exhausted cursor for an existing annotation
 returns an empty page. Invalid query values return the existing redacted
@@ -49,6 +60,10 @@ render free text as text, never HTML.
 real stored session/service authentication, SQLite-backed execution of the actual
 SELECTs, cross-project lookup refusal, immutable pagination under intervening appends,
 zero-object history, retained machine tiers, no-store, bounds and safe driver failures.
+Authenticated admin/reviewer regressions read snapshots and both history pages for
+slash-containing, long and Unicode/reserved-character canonical keys through opaque
+IDs, verify the keys remain unchanged in storage, and refuse mismatched projects.
+Malformed and oversized lookup strings are rejected before annotation database access.
 SQLite tests do not establish PostgreSQL migration/locking behavior. This change adds
 no DDL or write transaction; existing PostgreSQL migration Actions remain mandatory.
 GitHub Actions is the CI of record; no local full suite or CI mirror is required.
