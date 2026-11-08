@@ -23,7 +23,7 @@ jobs:
   changes:
     uses: TogetherWeOwn/.github/.github/workflows/changes.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
     with:
-      areas-json: '{"python":["packages/**","apps/api/**","workers/**","scripts/**","fixtures/**","pyproject.toml","uv.lock","importlinter.ini","Makefile","Dockerfile","compose.yaml"],"web":["apps/web/**","pnpm-lock.yaml","pnpm-workspace.yaml","docs/design/mockups/src/tokens.css"],"docs":["docs/**","README.md","AGENTS.md"]}'
+      areas-json: '{"python":["packages/**","apps/api/**","workers/**","scripts/**","fixtures/**","pyproject.toml","uv.lock","importlinter.ini","Makefile","Dockerfile","compose.yaml"],"web":["apps/web/**","docs/design/mockups/src/tokens.css","pnpm-lock.yaml","pnpm-workspace.yaml"],"docs":["docs/**","README.md","AGENTS.md"]}'
       full-run-globs-json: '[".github/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","compose.yaml","Makefile*","**/Makefile*","package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","pnpm-workspace.yaml","**/pnpm-workspace.yaml","pyproject.toml","**/pyproject.toml","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","tsconfig*.json","**/tsconfig*.json"]'
       docs-areas-json: '["docs"]'
 
@@ -131,7 +131,7 @@ jobs:
   web-build:
     needs: [changes, full-run]
     if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web
-    # The pinned browser release supports Ubuntu 24.04, not rolling latest.
+    # The pinned Playwright release supports Ubuntu 24.04, not rolling latest.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -149,11 +149,19 @@ jobs:
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
       - run: pnpm --dir apps/web build
+        env:
+          VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
+          VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
       - run: pnpm --dir apps/web build:operations
+      - run: pnpm --dir apps/web build:platform-fixture
+        env:
+          VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
+          VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
       - name: Scan application and fixture bundles for secrets
         run: docker run --rm -v "$PWD/apps/web/dist:/scan:ro" zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f dir /scan --redact --exit-code 1
       - run: pnpm --dir apps/web exec playwright install --with-deps chromium
       - run: pnpm --dir apps/web test:operations
+      - run: pnpm --dir apps/web test:platform-browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -161,6 +169,13 @@ jobs:
           path: |
             apps/web/dist/operations-evidence
             apps/web/dist/operations-report
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: platform-ui-evidence
+          path: apps/web/platform-evidence/
           if-no-files-found: error
           retention-days: 7
 
@@ -230,6 +245,10 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
+      - name: Budget ledger PostgreSQL races, restart and atomic rollback
+        run: uv run pytest apps/api/tests/test_budget_store.py -v
+        env:
+          LABELLOOP_BUDGET_POSTGRES: "1"
       - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config

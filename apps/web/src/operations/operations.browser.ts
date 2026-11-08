@@ -122,7 +122,7 @@ for (const width of [1280, 390]) {
       await page.getByRole('switch').click();
       await monthly.focus();
       // Programmatic fixture control models a background read without moving focus.
-      await page.getByRole('button', { name: 'Complete background Costs read' }).evaluate((button: HTMLButtonElement) => button.click());
+      await page.getByRole('button', { name: 'Complete background Costs read' }).evaluate((button) => (button as HTMLButtonElement).click());
       await expect(page.getByRole('status').filter({ hasText: 'Authoritative Costs reads: 1' })).toBeVisible();
       await expect(monthly).toBeFocused();
       await expect(monthly).toHaveValue('99');
@@ -151,7 +151,7 @@ for (const width of [1280, 390]) {
       await expect(rows).toHaveCount(50);
       await expect(more).toBeFocused();
       expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
-      await page.getByRole('button', { name: 'Fail next audit page' }).evaluate((button: HTMLButtonElement) => button.click());
+      await page.getByRole('button', { name: 'Fail next audit page' }).evaluate((button) => (button as HTMLButtonElement).click());
       await expect(page.getByRole('alert')).toContainText('More events could not be loaded');
       await expect(rows).toHaveCount(50);
       await expect(more).toBeFocused();
@@ -160,14 +160,14 @@ for (const width of [1280, 390]) {
       await page.keyboard.press('Enter');
       await expect(more).toBeDisabled();
       await expect(rows).toHaveCount(50);
-      await page.getByRole('button', { name: 'Complete next audit page' }).evaluate((button: HTMLButtonElement) => button.click());
+      await page.getByRole('button', { name: 'Complete next audit page' }).evaluate((button) => (button as HTMLButtonElement).click());
       await expect(rows).toHaveCount(100);
       await expect(more).toBeEnabled();
       await more.focus();
       await page.keyboard.press('Enter');
       await expect(more).toBeFocused();
       await expect(rows).toHaveCount(100);
-      await page.getByRole('button', { name: 'Complete next audit page' }).evaluate((button: HTMLButtonElement) => button.click());
+      await page.getByRole('button', { name: 'Complete next audit page' }).evaluate((button) => (button as HTMLButtonElement).click());
       await expect(rows).toHaveCount(150);
       await expect(more).toHaveCount(0);
     });

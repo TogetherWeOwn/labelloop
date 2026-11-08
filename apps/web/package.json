@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:operations": "vite build --config vite.operations.config.ts",
-    "test:operations": "playwright test"
+    "test:operations": "playwright test",
+    "build:platform-fixture": "vite build --config vite.platform.config.ts",
+    "test:platform-browser": "node scripts/platform-browser.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",
