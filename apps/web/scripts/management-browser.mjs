@@ -297,6 +297,84 @@ try {
   await page.getByRole('navigation', { name: 'Setup steps' }).waitFor();
   assert.equal(await page.getByRole('button', { name: /^Edit / }).count(), 0);
   results.push({ key: 'class-editor-revision-provenance-and-role-guards', pass: true, realCommands: false });
+  const referenceValues = { class_id: 'almond', source: 'https://example.invalid/reference.png', permitted_use: 'Declared licence-clean fixture', view: 'Front', lighting: 'Store', scale: 'Native', confused_with: 'soy' };
+  const evidenceStep = () => page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Evidence/ }).click();
+  const referenceForm = page.getByRole('form', { name: 'Link reference evidence', exact: true });
+  const saveReference = referenceForm.getByRole('button', { name: 'Save proposed reference', exact: true });
+  const fillReference = async () => {
+    await referenceForm.getByLabel('Reference class', { exact: true }).selectOption('almond');
+    for (const [label, value] of [['Reference source URL', referenceValues.source], ['Reference permitted use', referenceValues.permitted_use], ['Reference view', referenceValues.view], ['Reference lighting', referenceValues.lighting], ['Reference scale', referenceValues.scale]]) await referenceForm.getByLabel(label, { exact: true }).fill(value);
+    await referenceForm.getByLabel('Often confused with', { exact: true }).selectOption('soy');
+  };
+  let referenceRequests = 0;
+  await page.route('https://example.invalid/**', (route) => { referenceRequests += 1; return route.abort(); });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open('new-project'); await evidenceStep();
+    await page.getByRole('button', { name: 'Add linked reference', exact: true }).click();
+    assert.equal(await last(), null, 'opening reference entry must not mutate');
+    assert.equal(await saveReference.isDisabled(), true, 'missing class and metadata block saving');
+    assert.equal(await page.getByRole('button', { name: 'Approve reference ref-1', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Approve evidence and continue', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Classes/ }).isDisabled(), true);
+    await fillReference();
+    for (const source of ['javascript:alert(1)', 'data:image/png;base64,AA==', '/relative.png', 'https://user:example@example.invalid/reference.png']) {
+      await referenceForm.getByLabel('Reference source URL', { exact: true }).fill(source);
+      assert.equal(await saveReference.isDisabled(), true, `${source}: source URL rejected`);
+    }
+    await referenceForm.getByLabel('Reference source URL', { exact: true }).fill(referenceValues.source);
+    await referenceForm.getByLabel('Often confused with', { exact: true }).selectOption('almond');
+    assert.equal(await saveReference.isDisabled(), true, 'a class cannot be confused with itself');
+    await referenceForm.getByLabel('Often confused with', { exact: true }).selectOption('soy');
+    await referenceForm.getByLabel('Reference permitted use', { exact: true }).fill('   ');
+    assert.equal(await saveReference.isDisabled(), true, 'permitted use is required');
+    await referenceForm.getByLabel('Reference permitted use', { exact: true }).fill(` ${referenceValues.permitted_use} `);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+    const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => item.id));
+    assert.deepEqual(violations, [], `reference-entry-${width}: axe`);
+    await page.screenshot({ path: `${evidence}/reference-entry-${width}.png`, fullPage: true });
+    await saveReference.focus(); await page.keyboard.press('Enter');
+    assert.deepEqual(await last(), { kind: 'add_reference', draft_id: 'draft-shelf', expected_revision: 7, values: referenceValues });
+    await referenceForm.getByText('Your reference did not save.', { exact: false }).waitFor();
+    assert.equal(await referenceForm.getByLabel('Reference source URL', { exact: true }).inputValue(), referenceValues.source, 'failed save retains reference fields');
+    await referenceForm.getByRole('button', { name: 'Discard reference entry', exact: true }).click();
+    assert.equal(await referenceForm.count(), 0);
+    results.push({ key: `reference-entry-${width}`, pass: true, axe: 0, keyboard: 'save-enter', realCommands: false });
+  }
+  await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`); await evidenceStep();
+  await page.getByRole('button', { name: 'Add linked reference', exact: true }).click(); await fillReference();
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
+  await referenceForm.getByText('The draft changed while you were linking evidence.', { exact: false }).waitFor();
+  assert.equal(await saveReference.isDisabled(), true);
+  assert.equal(await referenceForm.getByLabel('Reference source URL', { exact: true }).inputValue(), referenceValues.source);
+  assert.equal(await last(), null, 'conflicted reference entry cannot retarget or overwrite');
+  await referenceForm.getByRole('button', { name: 'Discard reference entry', exact: true }).click();
+  await page.getByRole('button', { name: 'Add linked reference', exact: true }).click(); await fillReference(); await saveReference.click();
+  assert.equal((await last()).expected_revision, 8);
+  assert.equal(await page.getByRole('button', { name: 'Approve reference ref-1', exact: true }).isDisabled(), true, 'approval cannot race the deferred save');
+  await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+  const approveLinked = page.getByRole('button', { name: 'Approve reference ref-linked', exact: true });
+  await approveLinked.waitFor(); assert.equal(await referenceForm.count(), 0);
+  assert.match(await page.getByRole('row').filter({ has: approveLinked }).innerText(), /Proposed/);
+  await approveLinked.click();
+  await page.getByRole('status').filter({ hasText: 'Command completed' }).waitFor();
+  assert.deepEqual(await last(), { kind: 'accept_reference', draft_id: 'draft-shelf', expected_revision: 9, id: 'ref-linked' });
+  const referenceCommands = await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'));
+  assert.deepEqual(referenceCommands.map((command) => command.kind), ['add_reference', 'accept_reference'], 'saving a link never approves it');
+  for (const state of ['ready', 'dispatch-stale', 'dispatch-published']) {
+    await page.goto(`${entry}?screen=new-project&state=${state}`); await evidenceStep();
+    assert.equal(await page.getByRole('button', { name: 'Add linked reference', exact: true }).isDisabled(), true, `${state}: linking fails closed`);
+    assert.equal(await page.getByRole('button', { name: 'Approve reference ref-1', exact: true }).isDisabled(), true, `${state}: reference approval fails closed`);
+  }
+  await page.goto(`${entry}?screen=new-project&state=dispatch-ready&role=reviewer`); await evidenceStep();
+  assert.equal(await page.getByRole('button', { name: 'Add linked reference', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: /^Approve reference/ }).count(), 0);
+  await page.goto(`${entry}?screen=new-project&state=empty`); await evidenceStep();
+  await page.getByText('No reference evidence returned.', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Add linked reference', exact: true }).isDisabled(), true, 'no class means no linked evidence');
+  assert.equal(referenceRequests, 0, 'source URLs are passive metadata; never fetched by the form or table');
+  results.push({ key: 'reference-revision-provenance-role-and-ingestion-guards', pass: true, realCommands: false });
   await page.close();
   const assets = await readdir('dist/management-fixture/assets');
   for (const asset of assets.filter((name) => /\.(js|css)$/.test(name))) {

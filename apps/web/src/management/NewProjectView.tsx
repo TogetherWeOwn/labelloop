@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Actions, ClassRow, ProjectDraft, ScreenProps, SetupStep } from './contracts.ts';
+import type { Actions, ClassRow, ProjectDraft, ReferenceInput, ScreenProps, SetupStep } from './contracts.ts';
 import { Button, CommandButton, Facts, Field, Notice, PageHeading, ReadOnly, Table, Utc } from './shared.tsx';
 
 const setupSteps: readonly SetupStep[] = ['Scope', 'Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish'];
@@ -11,7 +11,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [pairId, setPairId] = useState<string | null>(null);
   const [unsavedFields, setUnsavedFields] = useState(false);
   const [editing, setEditing] = useState<{ row: ClassRow; revision: number; draftId: string } | null>(null);
-  const pendingEdits = unsavedFields || editing !== null;
+  const [referenceEntry, setReferenceEntry] = useState<{ revision: number; draftId: string } | null>(null);
+  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null;
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -49,9 +50,14 @@ export function NewProjectView({ data, actions }: ScreenProps) {
           </Table> : <Notice tone="info">No row errors reported. This is not class approval.</Notice>}
         </section> : <Notice tone="info">No dataset import validation report is available.</Notice>}
       </>}
-      {step === 'Evidence' && <Table caption="Reference evidence" columns={['Class', 'Source and permitted use', 'View / lighting / scale', 'Often confused with', 'Provenance', 'Actions']}>
-        {draft.references.map((reference) => <tr key={reference.id}><th scope="row">{reference.class_id}</th><td>{reference.source} · {reference.permitted_use}</td><td>{reference.view} / {reference.lighting} / {reference.scale}</td><td>{reference.confused_with}</td><td><span className="tag proposed">{reference.provenance}</span></td><td>{reference.provenance === 'Proposed' && <CommandButton actions={actions} onClick={() => { void actions.send({ kind: 'accept_reference', draft_id: draft.id, expected_revision: draft.revision, id: reference.id }); }}>Approve reference {reference.id}</CommandButton>}</td></tr>)}
-      </Table>}
+      {step === 'Evidence' && <>
+        {draft.references.length === 0 ? <Notice tone="info">No reference evidence returned. Adding a link does not approve it.</Notice> : <Table caption="Reference evidence" columns={['Class', 'Source and permitted use', 'View / lighting / scale', 'Often confused with', 'Provenance', 'Actions']}>
+          {draft.references.map((reference) => <tr key={reference.id}><th scope="row">{reference.class_id}</th><td>{reference.source} · {reference.permitted_use}</td><td>{reference.view} / {reference.lighting} / {reference.scale}</td><td>{reference.confused_with || 'None'}</td><td><span className={`tag ${reference.provenance === 'Proposed' ? 'proposed' : 'reviewed'}`}>{reference.provenance}</span></td><td>{reference.provenance === 'Proposed' && <CommandButton actions={actions} disabled={readOnly || pendingEdits} onClick={() => { void actions.send({ kind: 'accept_reference', draft_id: draft.id, expected_revision: draft.revision, id: reference.id }); }}>Approve reference {reference.id}</CommandButton>}</td></tr>)}
+        </Table>}
+        <Notice tone="info">Reference uploads and URL ingestion are not connected in this module. Link metadata capture does not fetch pixels or grant permitted use. New references remain Proposed until separately approved.</Notice>
+        <CommandButton actions={actions} disabled={readOnly || pendingEdits} reason={draft.classes.length === 0 ? 'Add a class before linking evidence.' : undefined} onClick={() => setReferenceEntry({ revision: draft.revision, draftId: draft.id })}>Add linked reference</CommandButton>
+        {referenceEntry && <ReferenceFields draft={draft} actions={actions} revision={referenceEntry.revision} draftId={referenceEntry.draftId} readOnly={readOnly} onClose={() => setReferenceEntry(null)} />}
+      </>}
       {step === 'Labelling guide' && <DraftFields key={`${draft.id}:guide`} draft={draft} actions={actions} step={step} values={draft.guide} readOnly={readOnly} onDirtyChange={setUnsavedFields} labels={{ extent: 'Visible or estimated extent (default visible)', truncation: 'Targets at image edges', occlusion: 'Occluded targets', reflections: 'Reflections', min_target_px: 'Minimum target size in pixels', exhaustive: 'Exhaustive for scope', background: 'Out-of-scope background' }} />}
       {step === 'Sources and groups' && <>
         <Facts items={[[ 'Images / source groups', `${draft.sources.images} / ${draft.sources.groups}` ], ['Declared metadata keys', draft.sources.metadata_keys], ['Split preview', draft.sources.split_summary]]} />
@@ -100,6 +106,43 @@ function ClassFields({ draft, actions, row, revision, draftId, readOnly, onClose
     {failed && <Notice tone="danger">Your class change did not save. Fields are retained; refresh uncertain records before trying again.</Notice>}
     <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void save(); }}>{saving ? 'Saving class…' : 'Save class changes'}</CommandButton>
     <Button disabled={saving || actions.busy} onClick={onClose}>Discard class edits</Button>
+  </form>;
+}
+
+function referenceReason(values: ReferenceInput, draft: ProjectDraft) {
+  if (!draft.classes.some((row) => row.id === values.class_id)) return 'Choose a class from this draft.';
+  if (values.confused_with && (values.confused_with === values.class_id || !draft.classes.some((row) => row.id === values.confused_with))) return 'Choose a different class for Often confused with, or None.';
+  try {
+    const url = new URL(values.source.trim());
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return 'Enter an HTTP or HTTPS source URL without embedded credentials.';
+  } catch { return 'Enter an HTTP or HTTPS source URL without embedded credentials.'; }
+  if (!values.permitted_use.trim() || !values.view.trim() || !values.lighting.trim() || !values.scale.trim()) return 'Record permitted use, view, lighting and scale before saving.';
+}
+
+function ReferenceFields({ draft, actions, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {
+  const [values, setValues] = useState<ReferenceInput>({ class_id: '', source: '', permitted_use: '', view: '', lighting: '', scale: '', confused_with: '' });
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const conflict = draftId !== draft.id || revision !== draft.revision;
+  const reason = conflict ? 'The draft changed. Discard this entry and inspect current records before linking evidence again.' : referenceReason(values, draft);
+  function change(field: keyof ReferenceInput, value: string) { setValues((current) => ({ ...current, [field]: value })); }
+  async function save() {
+    if (readOnly || saving || reason) return;
+    setSaving(true);
+    const saved = await actions.send({ kind: 'add_reference', draft_id: draftId, expected_revision: revision, values: { ...values, source: values.source.trim(), permitted_use: values.permitted_use.trim(), view: values.view.trim(), lighting: values.lighting.trim(), scale: values.scale.trim() } });
+    setSaving(false); setFailed(!saved);
+    if (saved) onClose();
+  }
+  return <form className="stack" aria-label="Link reference evidence" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <h3>Link reference evidence</h3>
+    <div className="field"><label htmlFor="reference-class">Reference class</label><select id="reference-class" value={values.class_id} disabled={readOnly || saving} onChange={(event) => change('class_id', event.currentTarget.value)}><option value="">Choose a class</option>{draft.classes.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.id}</option>)}</select></div>
+    {(['source', 'permitted_use', 'view', 'lighting', 'scale'] as const).map((field) => <Field key={field} name={field} label={{ source: 'Reference source URL', permitted_use: 'Reference permitted use', view: 'Reference view', lighting: 'Reference lighting', scale: 'Reference scale' }[field]} value={values[field]} readOnly={readOnly || saving} onChange={(value) => change(field, value)} />)}
+    <div className="field"><label htmlFor="reference-confused">Often confused with</label><select id="reference-confused" value={values.confused_with} disabled={readOnly || saving} onChange={(event) => change('confused_with', event.currentTarget.value)}><option value="">None</option>{draft.classes.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.id}</option>)}</select></div>
+    <p>Saving records proposed metadata only, not approval or evidence that the source is usable. The server must validate ownership, permitted use and holdout exclusion before ingestion or approval.</p>
+    {conflict && <Notice tone="danger">The draft changed while you were linking evidence. Your fields are retained; no overwrite was sent.</Notice>}
+    {failed && <Notice tone="danger">Your reference did not save. Fields are retained; refresh uncertain records before trying again.</Notice>}
+    <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void save(); }}>{saving ? 'Saving reference…' : 'Save proposed reference'}</CommandButton>
+    <Button disabled={saving || actions.busy} onClick={onClose}>Discard reference entry</Button>
   </form>;
 }
 

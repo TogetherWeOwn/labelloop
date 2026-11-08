@@ -14,6 +14,7 @@ export interface ReferenceRow {
   id: string; class_id: string; source: string; permitted_use: string; view: string;
   lighting: string; scale: string; confused_with: string; provenance: 'Proposed' | 'Approved by an admin';
 }
+export type ReferenceInput = Pick<ReferenceRow, 'class_id' | 'source' | 'permitted_use' | 'view' | 'lighting' | 'scale' | 'confused_with'>;
 // Read-only view projections. Missing detail stays unavailable, never inferred
 // from collection totals; final field mapping belongs to the generated client adapter.
 export interface DatasetImportReport {
@@ -109,6 +110,7 @@ export type ManagementCommand =
   | { kind: 'accept_class' | 'accept_reference'; draft_id: string; expected_revision: number; id: string }
   | { kind: 'add_class'; draft_id: string; expected_revision: number; name: string }
   | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: Pick<ClassRow, 'name' | 'aliases' | 'parent' | 'exclusions' | 'mirror_safe'> }
+  | { kind: 'add_reference'; draft_id: string; expected_revision: number; values: ReferenceInput }
   | { kind: 'resolve_pair'; draft_id: string; expected_revision: number; pair_id: string; same_group: boolean }
   | { kind: 'publish_project'; draft_id: string; expected_revision: number }
   | { kind: 'freeze_release'; release_id: string; expected_revision: number }
