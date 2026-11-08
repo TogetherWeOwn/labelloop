@@ -226,11 +226,11 @@ def record_annotation_audit(
         )
 
 
-def training_ancestor_assets(
+def training_ancestor_runs(
     runs: dict[object, tuple[dict, dict[str, int]]],
     run_id: object,
     teachers: dict[str, list[tuple[int, object]]] | None = None,
-) -> set[str]:
+) -> set[object]:
     """Trace checkpoint parents and recorded model-generated label influence.
 
     Equal checkpoint digests conservatively include every matching run. Visited run
@@ -248,7 +248,6 @@ def training_ancestor_assets(
             by_checkpoint.setdefault(checkpoint["sha256"], set()).add(key)
     pending = [run_id]
     visited: set[object] = set()
-    assets: set[str] = set()
     while pending:
         key = pending.pop()
         if key in visited:
@@ -257,7 +256,6 @@ def training_ancestor_assets(
             raise ValueError("model training lineage is outside its project")
         visited.add(key)
         record, membership = runs[key]
-        assets.update(membership)
         for asset, revision in membership.items():
             pending.extend(
                 teacher
@@ -265,7 +263,20 @@ def training_ancestor_assets(
                 if origin_revision <= revision
             )
         pending.extend(by_checkpoint.get(record["request"]["initialization_sha256"], ()))
-    return assets
+    return visited
+
+
+def training_ancestor_assets(
+    runs: dict[object, tuple[dict, dict[str, int]]],
+    run_id: object,
+    teachers: dict[str, list[tuple[int, object]]] | None = None,
+) -> set[str]:
+    """Keep the veto's conservative full-release membership over the shared graph."""
+    return {
+        asset
+        for ancestor in training_ancestor_runs(runs, run_id, teachers)
+        for asset in runs[ancestor][1]
+    }
 
 
 def require_no_annotation_veto(

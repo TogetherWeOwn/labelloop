@@ -8,22 +8,47 @@ qualification engine, registry, ledger, secret store, UI or backup tool.
 
 ## Compiled training groups constrain context assembly
 
-The persisted context assembler now reads the selected model's training input
-manifest through its same-project frozen variant. It validates compiled source
-revisions, assignment version and consistent derivative group/split identity, then
-rechecks every compiled source against current canonical transitive groups. Only
-`train` samples count as weight-fitting groups; validation/test sources are checked
-but not misreported as training. Supplied qualification lineage must include every
-compiled training group or assembly fails before reading audit/canary outcomes.
-The project and canonical group locks remain held through the outer transaction.
+The persisted context assembler reads compiled training inputs across the selected
+model's same-project checkpoint and recorded label-teacher ancestry, reusing the
+veto's traversal rather than maintaining a second graph. Unregistered runs,
+unselected checkpoints, every duplicate-digest parent and every contributing teacher
+are included. Visited run IDs bound mixed cycles; future teacher origins do not
+influence earlier frozen membership. Unknown external base hashes do not acquire
+invented parents; explicitly missing local/teacher lineage fails closed.
 
-This narrows one caller obligation, not all of them. Checkpoint/teacher ancestor
-isolation, reference use, canonical development/calibration/final groups, original
-pipeline/acceptance/score/threshold and independent measurement producers still
-need authoritative integration. This preflight is not an authenticated route or
-an acceptance grant; direct trusted registry consumers still own complete lineage.
-No endpoint, migration or dependency is added. New adapter cases and both-recipe
-PostgreSQL omitted-group/reconnect controls await exact-head Actions.
+Each reachable immutable input must retain a frozen canonical release, exact sample
+revisions, assignment version and consistent derivative group/split identity. Every
+compiled source is rechecked against current canonical transitive groups. Only
+`train` samples count as weight-fitting groups; validation/test sources are checked
+but are not misreported as training. Supplied qualification lineage must include
+all inherited training groups. The existing pure gates then reject overlap with
+development/final/canary groups even when that exposure is honestly reported.
+Unrelated runs' inputs are not included. Project and canonical group locks remain
+held through the caller's outer transaction.
+
+This narrows caller obligations, not all of them. Ancestor validation/selection use,
+reference use, canonical development/calibration/final groups, original pipeline/
+acceptance/score/threshold and independent measurements still require authoritative
+integration. Historical missing provenance and cross-project imports are not inferred.
+This preflight is not an authenticated route or an acceptance grant; direct trusted
+registry consumers still own complete lineage. No endpoint, migration or dependency
+is added. Fifteen additional adapter assertions await new-head Actions.
+
+Selected-run head `3d49e96` completed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42473468132)
+with **2 failed, 1388 passed, 80 skipped**: only the two global migration-head
+assertions failed. All 22 added adapter cases passed. ML smoke, queue and dev-stack
+stopped on multiple-head migration setup; PostgreSQL context/proposal assertions did
+not run. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42473467880),
+lint, types and import-contract passed. Unlike the previous head's MinIO HTTP 503,
+this dev-stack failure is the migration gate. No overall CI or acceptance PASS.
+
+Static fixture inspection also found that `registry_smoke.seed_variant` seeds only
+synthetic ordinary-label canonical members while retaining the CPU manifest's source
+IDs. The stricter compiled-input reader cannot accept that fixture as authoritative
+canonical lineage. Disposable PostgreSQL fixture alignment and explicit inherited
+training-group acceptance remain owned integration work; no guard will be relaxed
+or mock substituted for that evidence. This issue is not established by an executed
+PostgreSQL failure because migration setup still prevents those assertions.
 
 At previous `4a03da8`, [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397)
 failed. [Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397/job/128704659677)

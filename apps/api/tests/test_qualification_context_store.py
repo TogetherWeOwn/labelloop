@@ -148,6 +148,28 @@ def test_asserted_lineage_cannot_omit_compiled_training_groups(monkeypatch, side
     readers["load_annotation_evidence"].assert_not_called()
 
 
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("role", ["development", "final", "canary"])
+def test_inherited_training_groups_cannot_be_hidden_in_other_roles(monkeypatch, side, role):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    evidence = expected.evidence
+    group = {
+        "development": evidence.lineage.development.group_ids[0],
+        "final": evidence.final_test.dataset.group_ids[0],
+        "canary": evidence.canary_audit.sources[0].group_id,
+    }[role]
+    groups = (*evidence.lineage.training_group_ids, group)
+    readers["model_training_groups"].return_value = groups
+    # Reporting the inherited exposure satisfies completeness but cannot make the
+    # same group independent selection/final/canary evidence.
+    args["lineage"] = replace(evidence.lineage, training_group_ids=groups)
+    with pytest.raises(ValueError, match="evaluation groups overlap|canary groups must be fresh"):
+        store.load_qualification_context(connection, **args)
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
 @pytest.mark.parametrize("field", ["project_id", "recipe_id", "release_id", "missing"])
 def test_scoped_model_substitution_fails_before_outcome_reads(monkeypatch, field):
     connection, args, _, readers = setup(monkeypatch)

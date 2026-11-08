@@ -1,13 +1,15 @@
-"""Current groups of the candidate's compiled training inputs, not asserted lineage.
+"""Current compiled training groups across stored checkpoint and teacher ancestors.
 
-This covers the selected training run only. Checkpoint ancestors, reference use,
-selection and calibration provenance still need their own authoritative producers.
-The caller retains the project and canonical group locks through its decision.
+Reference use, selection and calibration still need authoritative producers. Missing
+external/imported lineage is not inferred. The caller retains the project and
+canonical group locks through its decision.
 """
 
 import sqlalchemy as sa
 
 from labelloop_api import model_schema
+from labelloop_api.annotation_audit_store import training_ancestor_runs
+from labelloop_api.generated_label_store import label_teacher_runs
 from labelloop_api.qualification_store import release_membership
 from labelloop_api.schema import canonical_dataset_release, yolo_dataset_variant
 from labelloop_api.source_group_store import current_release_groups
@@ -17,38 +19,63 @@ from labelloop_core.qualification_data import require_name
 def model_training_groups(
     connection: sa.Connection, *, project_id: object, model_id: object
 ) -> tuple[str, ...]:
-    """Load the immutable compiled input and check every sample's current group.
+    """Check all reachable immutable inputs using the veto's existing ancestry graph.
 
-    Validation/test samples are checked but never counted as weight-fitting groups.
-    Multiple derivatives may name one source, but cannot disagree about its split
-    or group. Missing or substituted manifest membership fails closed.
+    Unregistered runs and unselected checkpoints still contribute weight-fitting
+    groups. Teacher edges use frozen canonical revisions, conservatively retaining
+    influence after later revisions. No unrelated run's groups are included.
     """
-    row = (
+    run_id = connection.execute(
+        sa.select(model_schema.model_release.c.training_run_id).where(
+            model_schema.model_release.c.id == model_id,
+            model_schema.model_release.c.project_id == project_id,
+        )
+    ).scalar_one()
+    rows = (
         connection.execute(
             sa.select(
+                model_schema.training_run.c.id,
+                model_schema.training_run.c.record,
                 model_schema.training_run.c.input_manifest,
                 canonical_dataset_release.c.release_key,
                 canonical_dataset_release.c.assignment_version,
                 canonical_dataset_release.c.sample_revisions,
-            )
-            .select_from(
-                model_schema.model_release.join(model_schema.training_run)
-                .join(yolo_dataset_variant)
-                .join(canonical_dataset_release)
-            )
-            .where(
-                model_schema.model_release.c.id == model_id,
-                model_schema.model_release.c.project_id == project_id,
-                canonical_dataset_release.c.project_id == project_id,
                 canonical_dataset_release.c.frozen,
             )
+            .select_from(
+                model_schema.training_run.join(yolo_dataset_variant).join(canonical_dataset_release)
+            )
+            .where(canonical_dataset_release.c.project_id == project_id)
         )
         .mappings()
-        .one()
+        .all()
     )
+    inputs = {row["id"]: row for row in rows}
+    ancestors = training_ancestor_runs(
+        {
+            key: (row["record"], release_membership(row["sample_revisions"]))
+            for key, row in inputs.items()
+        },
+        run_id,
+        label_teacher_runs(connection, project_id),
+    )
+    return tuple(
+        sorted(
+            {
+                group
+                for ancestor in sorted(ancestors, key=str)
+                for group in _compiled_training_groups(connection, project_id, inputs[ancestor])
+            }
+        )
+    )
+
+
+def _compiled_training_groups(connection, project_id, row):
+    # Validate all derivatives, but never misreport val/test as weight-fitting data.
     manifest = row["input_manifest"]
     if (
-        not isinstance(manifest, dict)
+        row["frozen"] is not True
+        or not isinstance(manifest, dict)
         or manifest.get("release_id") != row["release_key"]
         or manifest.get("split_assignment_version") != row["assignment_version"]
         or not isinstance(manifest.get("samples"), list)
