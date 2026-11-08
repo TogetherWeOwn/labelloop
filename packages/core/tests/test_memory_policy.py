@@ -335,9 +335,9 @@ def test_unbound_revisions_cannot_enter_selection_or_memory() -> None:
     scope = scope_for()
     unbound = AnnotationRevision(1, (), "model")
     with pytest.raises(ValueError, match="source-bound revision"):
-        replace(candidates_for(scope)[0], revision=unbound)
+        replace(candidates_for(scope)[0], revision=unbound)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="source-bound revision"):
-        replace(memory_for(scope), revision=unbound)
+        replace(memory_for(scope), revision=unbound)  # type: ignore[arg-type]
 
 
 def test_revision_project_binding_cannot_be_laundered_by_matching_asset_or_class_ids() -> None:
@@ -359,9 +359,10 @@ def test_source_bound_revision_preserves_identity_and_base_validation() -> None:
     )
     assert isinstance(updated, SourceAnnotationRevision)
     assert (updated.asset_id, updated.project_id, updated.revision) == ("easy-a", "office", 2)
-    for change in ({"asset_id": ""}, {"project_id": " "}):
-        with pytest.raises(ValueError, match="revision source"):
-            replace(revision, **change)
+    with pytest.raises(ValueError, match="revision source"):
+        replace(revision, asset_id="")
+    with pytest.raises(ValueError, match="revision source"):
+        replace(revision, project_id=" ")
     with pytest.raises(ValueError, match="positive"):
         replace(revision, revision=0)
     with pytest.raises(ValueError, match="authenticated human"):
