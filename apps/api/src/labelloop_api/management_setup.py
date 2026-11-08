@@ -13,6 +13,7 @@ INVALIDATING_OPERATIONS = (
     "save_scope_draft",
     "save_guide_draft",
     "save_class_catalog_draft",
+    "publish_class_catalog",
     "save_source_policy_draft",
     "enroll_reference",
     "accept_reference",

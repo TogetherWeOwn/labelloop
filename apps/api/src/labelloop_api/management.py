@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from .management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
+    ClassCatalogPublish,
     EvaluationStart,
     ExportRead,
     GuideDraft,
@@ -192,6 +193,23 @@ def management_router(
             actor, idempotency_key, "save_class_catalog_draft", project_id, payload
         )
         return invoke(lambda: service.save_class_catalog_draft(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/setup/classes/publish",
+        response_model=Resource,
+        operation_id="publishClassCatalog",
+    )
+    def publish_class_catalog(
+        project_id: Identifier,
+        payload: ClassCatalogPublish,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_class_catalog", project_id, payload
+        )
+        return invoke(lambda: service.publish_class_catalog(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/setup/sources",

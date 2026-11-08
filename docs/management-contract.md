@@ -149,6 +149,41 @@ is not an effective identity migration. Scope, guide and class drafts preserve
 each other but consume one shared project revision sequence. Historical frozen
 releases remain readable. This does not enable real asset admission.
 
+## Class catalog publication (unmounted)
+
+`publishClassCatalog`, `POST /projects/{project_id}/setup/classes/publish`, creates
+one new immutable ontology version from the saved catalog. Send the current
+project revision, `versions.ontology_id` as `base_ontology_id`, the server-projected
+`setup_draft_sha256.classes`, and a reason. Class definitions, indices, identities
+and approval fields cannot be supplied by this command. Refresh `readProject`
+after the mutation; the project resource remains `draft`.
+
+The owned-project/retry locks and atomic attributed receipt are shared with draft
+saves. Publication checks the latest saved catalog receipt and exact digest. All
+existing stable IDs must remain: removal, merge and split migrations require a
+separate explicit migration path and are refused here. Existing export indices
+are preserved regardless of draft order; added stable IDs receive dense indices
+in sorted order after the existing map. Earlier ontologies, annotations,
+completeness assessments, frozen datasets and descendants are never rewritten.
+Names, definitions, aliases and parents enter the canonical ontology. Prose
+examples, exclusions and mirror-safety intent are retained in the publication
+receipt, not silently converted to reference support or training configuration.
+
+Every enrolled reference must first be explicitly withdrawn, including stale
+accepted and proposed evidence. Publication never repins or reapproves it. New
+enrollment must pass all current source/holdout/context checks. Publication clears
+setup approvals and automatic acceptance, consumes the draft and records a
+receipt-bound current ontology marker in canonical project policy. Project reads
+verify that marker, publication receipt, consumed draft and canonical ontology
+agree; new drafts must pin the new version. Retry returns the original resource,
+not another ontology version. The read projection remains SELECT-only.
+
+This publishes the **catalog only**, not a complete project configuration or a
+qualification. `published_release_id` remains null, class quality approval and
+reference-support fields remain unknown, and edited projects still cannot freeze
+new datasets until the remaining setup/project-publication gates are implemented.
+No real admission, runtime grant, retrieval, automatic migration or spend is enabled.
+
 ## Source policy draft save (unmounted)
 
 `saveSourcePolicyDraft`, `POST /projects/{project_id}/setup/sources`, persists
@@ -238,7 +273,8 @@ accepted. Withdrawal does not need current approval eligibility: stale scope,
 guide, source-policy, ontology, holdout or pending-pair evidence must not prevent
 revocation. The persisted row and attributed enrollment/acceptance history must
 still match. Public reads continue to recheck current eligibility for every
-unwithdrawn accepted reference; the history-only loader is private to revocation.
+unwithdrawn accepted reference; the history-only loader is private to retirement
+and the catalog publication's all-retired precondition, never public approval reads.
 
 The shared project/retry locks serialize withdrawal with enrollment, acceptance
 and setup changes. The transaction sets only the existing `approved` column to

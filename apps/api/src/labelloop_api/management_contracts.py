@@ -112,6 +112,12 @@ class ClassCatalogDraft(Mutation):
         return self
 
 
+class ClassCatalogPublish(Mutation):
+    base_ontology_id: Identifier
+    draft_sha256: Digest
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class SourcePolicyDraft(Mutation):
     metadata_keys: Annotated[
         list[Literal["session", "sequence", "subject"]], Field(min_length=1, max_length=3)

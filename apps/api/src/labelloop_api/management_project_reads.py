@@ -21,6 +21,7 @@ from .management_details import (
     SourcePairRead,
     SourcePolicyRead,
 )
+from .management_ontology import read_catalog_publication
 from .management_references import read_references
 from .management_setup import draft_sha256, read_setup_approvals
 from .schema import (
@@ -191,11 +192,19 @@ def class_catalog_draft(
         .limit(1)
     ).one_or_none()
     stored = project_row.access_policy.get("management_class_catalog_draft")
+    publication = read_catalog_publication(connection, project_row, workspace_id)
     if receipt is None:
-        if stored is not None:
+        if stored is not None or publication is not None:
             refuse("missing_evidence")
         return None
     evidence = receipt.payload["evidence"]["class_catalog_draft"]
+    if stored is None and publication is not None:
+        if (
+            publication.expected_revision <= receipt.expected_revision
+            or publication.payload["evidence"]["class_catalog"] != evidence
+        ):
+            refuse("missing_evidence")
+        return None
     draft = ClassCatalogDraft.model_validate(
         {**evidence, "expected_revision": receipt.expected_revision}
     )
@@ -321,7 +330,7 @@ def project_detail(
         source_policy_draft=source_policy,
         setup_draft_sha256={
             step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
-            for step, value in (("scope", draft), ("guide", guide))
+            for step, value in (("scope", draft), ("guide", guide), ("classes", catalog))
             if value is not None
         },
         approved_steps=read_setup_approvals(connection, project_row, workspace_id)

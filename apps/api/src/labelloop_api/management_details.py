@@ -111,7 +111,9 @@ class ProjectDetail(Contract):
     sources: SourceGroupsRead
     # Configuration intent is separate from observed grouping/split facts.
     source_policy_draft: SourcePolicyRead | None = None
-    setup_draft_sha256: dict[Literal["scope", "guide"], Digest] = Field(default_factory=dict)
+    setup_draft_sha256: dict[Literal["scope", "guide", "classes"], Digest] = Field(
+        default_factory=dict
+    )
     approved_steps: list[SetupStep] | None
     versions: dict[Identifier, Identifier]
     published_release_id: Identifier | None

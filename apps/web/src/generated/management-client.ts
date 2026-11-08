@@ -8,6 +8,7 @@ export type Box = { "x_max": number; "x_min": number; "y_max": number; "y_min": 
 export type CheckRead = { "code": string; "passed": boolean | null; "reason": string };
 export type Checkpoint = { "epoch": number; "evaluation_run_id": string; "role"?: "development" | "calibration" | "locked_final_test"; "sha256": string; "validation_map": number };
 export type ClassCatalogDraft = { "base_ontology_id": string; "classes": Array<ClassDraftInput>; "expected_revision": number };
+export type ClassCatalogPublish = { "base_ontology_id": string; "draft_sha256": string; "expected_revision": number; "reason": string };
 export type ClassCatalogRead = { "base_ontology_id": string; "classes": Array<ClassDraftInput> };
 export type ClassDraftInput = { "aliases": Array<string>; "definition": string; "exclusions": Array<string>; "mirror_safe": boolean; "name": string; "parent_id": string | null; "positive_examples": Array<string>; "stable_id": string };
 export type ClassInput = { "definition": string; "name": string; "stable_id": string };
@@ -199,6 +200,11 @@ export class ManagementClient {
 
   saveClassCatalogDraft(input: { "project_id": string; "idempotency-key": string; body: ClassCatalogDraft }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/classes`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  publishClassCatalog(input: { "project_id": string; "idempotency-key": string; body: ClassCatalogPublish }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/classes/publish`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 

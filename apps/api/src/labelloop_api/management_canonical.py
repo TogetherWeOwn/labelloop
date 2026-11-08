@@ -18,6 +18,7 @@ from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 from .management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
+    ClassCatalogPublish,
     Contract,
     GuideDraft,
     ManagementError,
@@ -31,10 +32,11 @@ from .management_contracts import (
     SetupStepApprove,
     SourcePolicyDraft,
 )
+from .management_ontology import canonical_classes, validate_ontology
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
 from .management_references import accept_reference as approve_reference
 from .management_references import enroll_reference as create_reference
-from .management_references import reference_context_sha256
+from .management_references import reference_context_sha256, require_retired_references
 from .management_references import withdraw_reference as retire_reference
 from .management_release import freeze_candidate
 from .management_setup import draft_sha256, read_setup_approvals
@@ -387,6 +389,87 @@ class CanonicalManagementMutations:
                         "sources",
                         "publish",
                     ],
+                },
+            )
+            return result
+
+    def publish_class_catalog(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ClassCatalogPublish
+    ) -> Resource:
+        from .management_project_reads import class_catalog_draft
+
+        self.authorize(actor, context, "publish_class_catalog", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            ontology = connection.execute(
+                select(ontology_release)
+                .where(ontology_release.c.project_id == owned.id)
+                .order_by(ontology_release.c.version.desc())
+                .limit(1)
+            ).one_or_none()
+            if ontology is None or ontology.ontology_key != payload.base_ontology_id:
+                refuse("revision_conflict")
+            validate_ontology(ontology)
+            draft = class_catalog_draft(connection, owned, self.workspace_id, ontology.ontology_key)
+            if draft is None:
+                refuse("missing_evidence")
+            catalog = draft.model_dump(mode="json")
+            if draft_sha256(catalog) != payload.draft_sha256:
+                refuse("revision_conflict")
+            proposed_ids = {item.stable_id for item in draft.classes}
+            # No implicit deletion, merge or split of an established identity.
+            if not ontology.class_map.keys() <= proposed_ids:
+                refuse("unsupported_classes")
+            read_setup_approvals(connection, owned, self.workspace_id)
+            require_retired_references(connection, owned, self.workspace_id)
+            mapping = dict(ontology.class_map)
+            for identifier in sorted(proposed_ids - mapping.keys()):
+                mapping[identifier] = len(mapping)
+            ontology_id = str(uuid4())
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key=ontology_id,
+                    project_id=owned.id,
+                    version=ontology.version + 1,
+                    classes=canonical_classes(catalog),
+                    class_map=mapping,
+                )
+            )
+            policy = dict(owned.access_policy)
+            policy.pop("management_class_catalog_draft")
+            policy["management_class_catalog_publication"] = {
+                "ontology_id": ontology_id,
+                "receipt_revision": payload.expected_revision + 1,
+            }
+            policy["management_setup_approvals"] = {}
+            policy.pop("auto_accept_qualification", None)
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "class_catalog": catalog,
+                    "draft_sha256": payload.draft_sha256,
+                    "ontology_id": ontology_id,
+                    "ontology_version": ontology.version + 1,
+                    "class_map": mapping,
+                    "reason": payload.reason,
                 },
             )
             return result

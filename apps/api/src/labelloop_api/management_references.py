@@ -309,6 +309,14 @@ def _reference_history(connection: Connection, project_row, workspace_id):
     return result
 
 
+def require_retired_references(connection: Connection, project_row, workspace_id) -> None:
+    if any(
+        ref.approval != "withdrawn"
+        for ref, _, _ in _reference_history(connection, project_row, workspace_id)
+    ):
+        reject("missing_evidence")
+
+
 def read_references(
     connection: Connection, project_row, workspace_id
 ) -> list[ReferenceRead] | None:
