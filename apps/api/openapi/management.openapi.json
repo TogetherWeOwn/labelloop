@@ -408,12 +408,19 @@
             "type": "array"
           },
           "approval": {
-            "enum": [
-              "proposed",
-              "admin_approved"
+            "anyOf": [
+              {
+                "enum": [
+                  "proposed",
+                  "admin_approved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Approval",
-            "type": "string"
+            "title": "Approval"
           },
           "definition": {
             "maxLength": 4096,
@@ -422,16 +429,30 @@
             "type": "string"
           },
           "exclusions": {
-            "items": {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            "title": "Exclusions",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 16384,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusions"
           },
           "mirror_safe": {
-            "title": "Mirror Safe",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mirror Safe"
           },
           "name": {
             "maxLength": 256,
@@ -454,9 +475,16 @@
             "title": "Parent Id"
           },
           "positive_examples": {
-            "minimum": 0.0,
-            "title": "Positive Examples",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positive Examples"
           },
           "stable_id": {
             "maxLength": 128,
@@ -1337,20 +1365,32 @@
       "ProjectDetail": {
         "additionalProperties": false,
         "properties": {
+          "annotation_guide": {
+            "maxLength": 16384,
+            "title": "Annotation Guide",
+            "type": "string"
+          },
           "approved_steps": {
-            "items": {
-              "enum": [
-                "scope",
-                "classes",
-                "evidence",
-                "guide",
-                "sources",
-                "publish"
-              ],
-              "type": "string"
-            },
-            "title": "Approved Steps",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "scope",
+                    "classes",
+                    "evidence",
+                    "guide",
+                    "sources",
+                    "publish"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Steps"
           },
           "classes": {
             "items": {
@@ -1375,17 +1415,38 @@
             "type": "array"
           },
           "guide": {
-            "$ref": "#/components/schemas/GuideRead"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuideRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "intended_use": {
-            "maxLength": 16384,
-            "title": "Intended Use",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intended Use"
           },
           "name": {
-            "maxLength": 16384,
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "published_release_id": {
             "anyOf": [
@@ -1402,16 +1463,30 @@
             "title": "Published Release Id"
           },
           "references": {
-            "items": {
-              "$ref": "#/components/schemas/ReferenceRead"
-            },
-            "title": "References",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ReferenceRead"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "References"
           },
           "representation": {
-            "maxLength": 16384,
-            "title": "Representation",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Representation"
           },
           "resource": {
             "$ref": "#/components/schemas/Resource"
@@ -1435,9 +1510,16 @@
             "$ref": "#/components/schemas/SourceGroupsRead"
           },
           "specificity": {
-            "maxLength": 16384,
-            "title": "Specificity",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specificity"
           },
           "versions": {
             "patternProperties": {
@@ -1468,6 +1550,7 @@
           "external_provider_ids",
           "classes",
           "references",
+          "annotation_guide",
           "guide",
           "sources",
           "approved_steps",
@@ -2557,9 +2640,16 @@
             "title": "Assignment Version"
           },
           "groups": {
-            "minimum": 0.0,
-            "title": "Groups",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groups"
           },
           "images": {
             "minimum": 0.0,
@@ -2567,14 +2657,21 @@
             "type": "integer"
           },
           "metadata_keys": {
-            "items": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_.-]+$",
-              "type": "string"
-            },
-            "title": "Metadata Keys",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_.-]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Keys"
           },
           "pending_pairs": {
             "items": {
@@ -2584,19 +2681,26 @@
             "type": "array"
           },
           "split_counts": {
-            "additionalProperties": {
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "propertyNames": {
-              "enum": [
-                "train",
-                "val",
-                "test"
-              ]
-            },
-            "title": "Split Counts",
-            "type": "object"
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "train",
+                    "val",
+                    "test"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Counts"
           }
         },
         "required": [

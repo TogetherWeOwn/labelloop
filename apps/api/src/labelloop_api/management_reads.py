@@ -9,9 +9,10 @@ from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 
 from .management_canonical import refuse
 from .management_contracts import Resource, ResourceKind, ResourcePage
-from .management_details import FreezePlanRead, ReleaseDetail
+from .management_details import FreezePlanRead, ProjectDetail, ReleaseDetail
 from .management_freeze_plan import freeze_plan
 from .management_ports import ManagementPrincipal
+from .management_project_reads import project_detail
 from .management_release_reads import release_detail
 from .schema import (
     annotation_revision,
@@ -167,6 +168,28 @@ class CanonicalManagementReads:
         if row is None:
             refuse("not_found")
         return self.resource(kind, row)
+
+    def read_project(self, actor: ManagementPrincipal, project_id: str) -> ProjectDetail:
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(project, owned.c.revision.label("management_revision"))
+                    .join(owned, project.c.id == owned.c.id)
+                    .where(cast(project.c.id, String) == project_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                try:
+                    return project_detail(
+                        connection, row, row.management_revision, self.workspace_id
+                    )
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
 
     def read_freeze_plan(self, actor: ManagementPrincipal, project_id: str) -> FreezePlanRead:
         authorize_reader(actor)

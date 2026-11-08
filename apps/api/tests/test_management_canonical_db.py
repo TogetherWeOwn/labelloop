@@ -528,6 +528,291 @@ def test_resource_scope_and_context_are_checked_before_writes_or_replays(databas
     assert counts(owner, created.id) == (1, 1, 2)
 
 
+def test_project_detail_select_only_preserves_bootstrap_facts_not_setup_approvals(database):
+    service, owner, role = database
+    payload = pack()
+    created = create(service, payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    for actor in (Actor(), Reader()):
+        detail = reads.read_project(actor, created.id)
+        assert detail.resource == created
+        assert (detail.scope, detail.domain) == (payload.scope, payload.domain)
+        assert detail.annotation_guide == payload.annotation_guide
+        assert detail.source_permitted_use == payload.source_permitted_use
+        assert detail.external_provider_ids == []
+        assert detail.name is detail.representation is detail.intended_use is None
+        assert detail.specificity is detail.guide is detail.references is None
+        assert detail.approved_steps is detail.published_release_id is None
+        assert detail.sources.images == 0
+        assert detail.sources.groups is detail.sources.split_counts is None
+        assert detail.sources.metadata_keys is detail.sources.assignment_version is None
+        assert detail.sources.pending_pairs == []
+        assert detail.versions["ontology"] == "1"
+        assert detail.saved_at.endswith("Z")
+        item = detail.classes[0]
+        assert (item.stable_id, item.name, item.definition) == (
+            "package",
+            "Package",
+            "A visible package",
+        )
+        assert item.aliases == [] and item.parent_id is None
+        assert (
+            item.approval is item.mirror_safe is item.positive_examples is item.exclusions is None
+        )
+    assert counts(owner, created.id) == before
+
+
+@pytest.mark.parametrize(
+    "actor", [Reader(kind="service"), Reader(role="worker"), Reader(granted=False)]
+)
+def test_project_detail_denies_untrusted_principals(database, actor):
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            actor, str(uuid4())
+        )
+
+
+def test_project_detail_hides_foreign_legacy_and_unknown_projects(database):
+    service, owner, _ = database
+    created = create(service)
+    with owner.begin() as connection:
+        legacy = connection.execute(
+            insert(project)
+            .values(
+                project_key="legacy-" + uuid4().hex,
+                workspace_id=service.workspace_id,
+                task="detect",
+                scope="Legacy",
+                domain="industrial",
+            )
+            .returning(project.c.id)
+        ).scalar_one()
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    foreign = CanonicalManagementReads(service.engine, uuid4())
+    for reader, target in [(foreign, created.id), (reads, str(legacy)), (reads, "missing")]:
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reader.read_project(Reader(), target)
+
+
+def test_project_detail_uses_current_ontology_assignment_counts_and_pending_pairs(database):
+    service, owner, _ = database
+    created, asset, source, _ = release_inputs(service, owner)
+    second = ingest(service, created.id, image_payload(2), key="second")
+    with owner.begin() as connection:
+        second_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == second.id)
+        ).scalar_one()
+        connection.execute(
+            insert(ontology_release).values(
+                ontology_key="ontology-2",
+                project_id=created.id,
+                version=2,
+                classes=[
+                    {
+                        "stable_id": "package",
+                        "name": "Renamed",
+                        "definition": "A package",
+                        "aliases": ["Parcel"],
+                        "parent_id": None,
+                    }
+                ],
+                class_map={"package": 0},
+            )
+        )
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=second_id,
+                group_id="group-1",
+                split="val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=True,
+            )
+        )
+        pair_id = connection.execute(
+            insert(borderline_review)
+            .values(
+                left_asset_id=source.id,
+                right_asset_id=second_id,
+                metric="phash",
+                value="9",
+                review_state="pending",
+                algorithm_version="fixture",
+            )
+            .returning(borderline_review.c.id)
+        ).scalar_one()
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.resource.revision == 3
+    assert detail.classes[0].name == "Renamed" and detail.classes[0].aliases == ["Parcel"]
+    assert detail.versions["ontology"] == "2"
+    assert detail.sources.images == 2 and detail.sources.groups == 1
+    assert detail.sources.split_counts == {"train": 0, "val": 2, "test": 0}
+    assert detail.sources.assignment_version == "assignment-1"
+    assert detail.sources.pending_pairs[0].model_dump() == {
+        "id": str(pair_id),
+        "left_asset_id": asset.id,
+        "right_asset_id": second.id,
+    }
+    # Pending grouping is not hidden by otherwise materialized split counts;
+    # this summary never asserts that freezing or publication can pass.
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    assert "source_uri" not in detail.model_dump_json()
+    assert "object_key" not in detail.model_dump_json()
+
+
+@pytest.mark.parametrize("mode", ["missing", "unlocked", "mixed", "tie"])
+def test_project_detail_does_not_invent_a_current_split_publication(database, mode):
+    service, owner, _ = database
+    created, _, source, _ = release_inputs(
+        service, owner, locked=mode not in {"missing", "unlocked"}
+    )
+    with owner.begin() as connection:
+        if mode == "missing":
+            connection.execute(
+                source_split_assignment.delete().where(
+                    source_split_assignment.c.asset_id == source.id
+                )
+            )
+        if mode in {"mixed", "tie"}:
+            if mode == "mixed":
+                ingest(service, created.id, image_payload(2), key="second")
+            else:
+                stamp = connection.execute(
+                    select(source_split_assignment.c.created_at).where(
+                        source_split_assignment.c.asset_id == source.id
+                    )
+                ).scalar_one()
+                connection.execute(
+                    insert(source_split_assignment).values(
+                        assignment_version="assignment-tie",
+                        asset_id=source.id,
+                        group_id="group-1",
+                        split="train",
+                        seed=7,
+                        algorithm="fixture",
+                        thresholds={},
+                        reason="fixture",
+                        locked=True,
+                        created_at=stamp,
+                    )
+                )
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.sources.groups is detail.sources.split_counts is None
+    assert detail.sources.assignment_version is None
+    assert "assignment" not in detail.versions
+
+
+@pytest.mark.parametrize("missing", ["policy", "class_map"])
+def test_project_detail_missing_evidence_fails_closed(database, missing):
+    service, owner, _ = database
+    created = create(service)
+    with owner.begin() as connection:
+        if missing == "policy":
+            connection.execute(
+                project.update()
+                .where(project.c.id == created.id)
+                .values(access_policy={"internal": "never-reflect-raw-policy"})
+            )
+        else:
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key="invalid-map",
+                    project_id=created.id,
+                    version=2,
+                    classes=[{"stable_id": "package", "name": "Package", "definition": "Package"}],
+                    class_map={"other": 0},
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def test_project_detail_snapshot_does_not_lock_writers_or_mix_later_ingest(database):
+    service, _, _ = database
+    created = create(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    changed = False
+
+    def concurrent_ingest(connection, cursor, statement, parameters, context, executemany):
+        nonlocal changed
+        if changed or "FROM ontology_release" not in statement:
+            return
+        changed = True
+        ingest(service, created.id)
+
+    event.listen(service.engine, "after_cursor_execute", concurrent_ingest)
+    try:
+        detail = reads.read_project(Reader(), created.id)
+    finally:
+        event.remove(service.engine, "after_cursor_execute", concurrent_ingest)
+    assert changed and detail.resource.revision == 1 and detail.sources.images == 0
+    later = reads.read_project(Reader(), created.id)
+    assert later.resource.revision == 2 and later.sources.images == 1
+
+
+def test_project_detail_ignores_unattributed_approval_and_provider_payload_fields(database):
+    service, owner, _ = database
+    created = create(service)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = {
+            **row.access_policy,
+            "approved_steps": ["publish"],
+            "classes": [{"approval": "admin_approved"}],
+            "provider_payload": {"key": "never-reflect-raw-policy"},
+        }
+        connection.execute(
+            project.update().where(project.c.id == created.id).values(access_policy=policy)
+        )
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.approved_steps is detail.classes[0].approval is None
+    assert "never-reflect-raw-policy" not in detail.model_dump_json()
+
+
+def test_project_detail_cross_project_pending_relation_fails_without_disclosing_endpoint(database):
+    service, owner, _ = database
+    first = create(service)
+    second = create(service, key="other-project")
+    assets = [ingest(service, target.id, key="ingest-" + target.id) for target in (first, second)]
+    with owner.begin() as connection:
+        ids = [
+            connection.execute(
+                select(source_asset.c.id).where(source_asset.c.asset_key == asset.id)
+            ).scalar_one()
+            for asset in assets
+        ]
+        connection.execute(
+            insert(borderline_review).values(
+                left_asset_id=ids[0],
+                right_asset_id=ids[1],
+                metric="phash",
+                value="9",
+                review_state="pending",
+                algorithm_version="fixture",
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), first.id
+        )
+
+
 def release_inputs(service, owner, *, complete=True, split="val", locked=True):
     created = create(service)
     asset = ingest(service, created.id)

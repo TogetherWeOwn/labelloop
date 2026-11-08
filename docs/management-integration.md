@@ -229,6 +229,43 @@ invalid limits/cursors, denied principals and foreign/legacy ID isolation. These
 new cases require exact-head Actions results; no session/CSRF,
 setup-publication or complete operations binding is established by them.
 
+### Canonical project-setup details
+
+`read_project` uses one REPEATABLE READ, READ ONLY snapshot after the same
+human/workspace/managed-project authorization. It projects current scope/domain,
+source permitted use, allowed provider IDs, the original free-text annotation
+guide and the latest canonical ontology with its stable IDs, aliases and parent
+links. Core ontology/class-map validation is reused; missing policy or invalid
+ontology evidence returns `missing_evidence`. The saved timestamp is the unique
+attributed event at the current management revision, not an inferred setup approval.
+
+The bootstrap pack has no display name, representation, intended use, specificity,
+structured guide or setup approval record. Those fields are **null**, not invented
+from scope/domain or defaults. Class approval, mirror safety, exclusions and
+positive-reference support also remain null. References stay null until their
+provenance/approval producer is implemented; null does not mean an empty reference
+bank. Arbitrary policy JSON, provider payloads and un-attributed approval-shaped
+fields are not reflected. A created ontology is not an approved/published project.
+
+Source counts and pending pair public IDs come from canonical rows. Group/split
+counts require one complete, locked, policy-consistent latest assignment version;
+missing, partial, unlocked or tied publications return null counts/version. Counts
+are descriptive, not a grouping-validation or release-readiness pass. Pending
+pairs remain visible; a relation to a source outside the authorized project fails
+closed without revealing that endpoint. Source and pending-pair lists are bounded
+to 10,000 each; larger projects return unavailable, never silently truncated data.
+Configured metadata keys remain unknown until setup publication supplies them.
+
+The isolated OpenAPI/client now distinguish those nullable facts and carry
+`annotation_guide` separately from the structured `guide`. Consumers must render
+unknown values as missing evidence, not approval or false/zero defaults. This
+adapter remains unmounted; draft writes, explicit approvals, reference provenance,
+grouping publication and project-release publication are still unimplemented.
+Disposable Actions cases cover SELECT-only access, missing evidence, denied and
+foreign/legacy IDs, current ontology/split facts, pending pairs, ambiguous
+assignments and a concurrent ingest proving snapshot consistency without locks.
+New cases are commissioned, not passing evidence until exact-head Actions finishes.
+
 ### Canonical freeze-plan read
 
 `read_freeze_plan` authorizes the human reader and managed project in one

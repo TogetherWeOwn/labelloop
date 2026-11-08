@@ -35,10 +35,10 @@ Scalar = str | int | float | bool
 class ClassRead(ClassInput):
     aliases: list[Text]
     parent_id: Identifier | None
-    positive_examples: Count
-    exclusions: list[Text]
-    mirror_safe: bool
-    approval: Literal["proposed", "admin_approved"]
+    positive_examples: Count | None
+    exclusions: list[Text] | None
+    mirror_safe: bool | None
+    approval: Literal["proposed", "admin_approved"] | None
 
 
 class ReferenceRead(Contract):
@@ -73,28 +73,30 @@ class SourcePairRead(Contract):
 
 class SourceGroupsRead(Contract):
     images: Count
-    groups: Count
-    metadata_keys: list[Identifier]
+    groups: Count | None
+    metadata_keys: list[Identifier] | None
     pending_pairs: list[SourcePairRead]
-    split_counts: dict[Literal["train", "val", "test"], Count]
+    split_counts: dict[Literal["train", "val", "test"], Count] | None
     assignment_version: Identifier | None
 
 
 class ProjectDetail(Contract):
     resource: Resource
-    name: Text
+    name: Text | None
     scope: Text
     domain: Text
-    representation: Text
-    intended_use: Text
-    specificity: Text
+    representation: Text | None
+    intended_use: Text | None
+    specificity: Text | None
     source_permitted_use: Text
     external_provider_ids: list[Identifier]
     classes: list[ClassRead]
-    references: list[ReferenceRead]
-    guide: GuideRead
+    references: list[ReferenceRead] | None
+    # The bootstrap pack stores a free-text guide, not the structured policy.
+    annotation_guide: Text
+    guide: GuideRead | None
     sources: SourceGroupsRead
-    approved_steps: list[SetupStep]
+    approved_steps: list[SetupStep] | None
     versions: dict[Identifier, Identifier]
     published_release_id: Identifier | None
     saved_at: Text

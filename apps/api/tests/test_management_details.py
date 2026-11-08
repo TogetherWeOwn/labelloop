@@ -25,6 +25,7 @@ DETAIL_READS = [
             "external_provider_ids": [],
             "classes": [],
             "references": [],
+            "annotation_guide": "Visible extents only",
             "guide": {
                 "extent": "visible",
                 "truncation": "visible",

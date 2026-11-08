@@ -30,6 +30,16 @@ and `ModelRelease`; they do not recompute geometry, metrics, checkpoint selectio
 or qualification in the API/browser. `checks[].passed: null`, null reports and
 null thresholds mean missing evidence, never success. Display copy can map wire
 identifiers to accepted screen labels without treating those labels as state.
+Project setup also distinguishes unknown fields from observed empty/false values.
+`annotation_guide` is the stored bootstrap free text; nullable `guide` is the
+structured geometry/completeness policy, never parsed or guessed from that text.
+Without a setup evidence producer, display name, representation, intended use,
+specificity, references, approved steps, class approval/mirror safety/exclusions/
+reference support and configured metadata keys remain null. Source image/pending
+pair facts are available, while group/split counts and assignment version are null
+unless one complete, locked, unambiguous version exists. Counts are not approval.
+Consumers must not coalesce missing evidence into a passing check or zero support.
+
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.
 Artifacts are application IDs authorized through the common artifact boundary.
