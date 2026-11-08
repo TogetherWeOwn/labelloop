@@ -10,7 +10,46 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from labelloop_api import qualification_schema
-from labelloop_api.annotation_audit_store import record_annotation_audit, release_membership
+from labelloop_api.annotation_audit_store import (
+    record_annotation_audit,
+    release_membership,
+    training_ancestor_assets,
+)
+
+
+def lineage_run(initialization, checkpoints, assets):
+    return (
+        {
+            "request": {"initialization_sha256": initialization},
+            "checkpoints": [{"sha256": digest} for digest in checkpoints],
+        },
+        dict.fromkeys(assets, 1),
+    )
+
+
+def test_checkpoint_lineage_traces_multiple_generations_and_unselected_parents():
+    runs = {
+        "original": lineage_run("external-base", ("selected", "unselected"), ("bad",)),
+        "intermediate": lineage_run("unselected", ("middle",), ("clean-a",)),
+        "child": lineage_run("middle", ("child",), ("clean-b",)),
+        "unrelated": lineage_run("external-base", ("other",), ("unrelated",)),
+    }
+    assert training_ancestor_assets(runs, "child") == {"bad", "clean-a", "clean-b"}
+    assert training_ancestor_assets(runs, "unrelated") == {"unrelated"}
+
+
+def test_checkpoint_lineage_includes_all_duplicate_hash_parents_and_bounds_cycles():
+    runs = {
+        "a": lineage_run("b", ("shared",), ("a",)),
+        "b": lineage_run("shared", ("b",), ("b",)),
+        "duplicate": lineage_run("external", ("shared",), ("adverse",)),
+    }
+    assert training_ancestor_assets(runs, "b") == {"a", "b", "adverse"}
+
+
+def test_missing_project_training_lineage_fails_closed():
+    with pytest.raises(ValueError, match="outside its project"):
+        training_ancestor_assets({}, "foreign")
 
 
 @pytest.mark.parametrize(

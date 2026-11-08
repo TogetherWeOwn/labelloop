@@ -125,31 +125,66 @@ def record_annotation_audit(
         )
 
 
+def training_ancestor_assets(
+    runs: dict[object, tuple[dict, dict[str, int]]], run_id: object
+) -> set[str]:
+    """Trace every recorded checkpoint, including unselected/unregistered parents.
+
+    Equal checkpoint digests conservatively include every matching run. Visited run
+    IDs bound duplicate paths and cycles; a clean child never clears an ancestor.
+    Unmatched initialization digests are external base checkpoints, not local runs.
+    """
+    if run_id not in runs:
+        raise ValueError("model training lineage is outside its project")
+    by_checkpoint: dict[str, set[object]] = {}
+    for key, (record, _) in runs.items():
+        for checkpoint in record["checkpoints"]:
+            by_checkpoint.setdefault(checkpoint["sha256"], set()).add(key)
+    pending = [run_id]
+    visited: set[object] = set()
+    assets: set[str] = set()
+    while pending:
+        key = pending.pop()
+        if key in visited:
+            continue
+        visited.add(key)
+        record, membership = runs[key]
+        assets.update(membership)
+        pending.extend(by_checkpoint.get(record["request"]["initialization_sha256"], ()))
+    return assets
+
+
 def require_no_annotation_veto(
     connection: sa.Connection, *, project_id: object, model_id: object
 ) -> None:
-    """Caller holds the project lock; inspect actual training, not final-test membership."""
-    membership = release_membership(
-        connection.execute(
-            sa.select(canonical_dataset_release.c.sample_revisions)
-            .select_from(
-                model_schema.model_release.join(model_schema.training_run)
-                .join(yolo_dataset_variant)
-                .join(canonical_dataset_release)
-            )
-            .where(
-                model_schema.model_release.c.id == model_id,
-                model_schema.model_release.c.project_id == project_id,
-                canonical_dataset_release.c.project_id == project_id,
-            )
-        ).scalar_one()
+    """Caller holds the project lock; inspect training and checkpoint ancestors."""
+    run_id = connection.execute(
+        sa.select(model_schema.model_release.c.training_run_id).where(
+            model_schema.model_release.c.id == model_id,
+            model_schema.model_release.c.project_id == project_id,
+        )
+    ).scalar_one()
+    rows = connection.execute(
+        sa.select(
+            model_schema.training_run.c.id,
+            model_schema.training_run.c.record,
+            canonical_dataset_release.c.sample_revisions,
+        )
+        .select_from(
+            model_schema.training_run.join(yolo_dataset_variant).join(canonical_dataset_release)
+        )
+        .where(canonical_dataset_release.c.project_id == project_id)
+    ).mappings()
+    assets = training_ancestor_assets(
+        {row["id"]: (row["record"], release_membership(row["sample_revisions"])) for row in rows},
+        run_id,
     )
     vetoes = connection.execute(
         sa.select(qualification_schema.annotation_audit.c.vetoed_revisions).where(
             qualification_schema.annotation_audit.c.project_id == project_id
         )
     ).scalars()
-    if any(set(release_membership(item)) & set(membership) for item in vetoes):
+    if any(set(release_membership(item)) & assets for item in vetoes):
         raise ValueError(
             "annotation audit veto: affected training lineage requires correction/re-tracing"
         )

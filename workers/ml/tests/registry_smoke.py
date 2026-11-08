@@ -1,5 +1,6 @@
 """PostgreSQL integration assertions over real CPU training/export evidence."""
 
+import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +14,11 @@ from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import model_schema as db
 from labelloop_api import qualification_schema
-from labelloop_api.annotation_audit_store import record_annotation_audit
+from labelloop_api.annotation_audit_store import (
+    lock_project,
+    record_annotation_audit,
+    require_no_annotation_veto,
+)
 from labelloop_api.model_store import (
     change_registry,
     decode_report,
@@ -79,7 +84,7 @@ def fixture_change_registry(connection, **kwargs):
     return change_registry(connection, **kwargs)
 
 
-def seed_variant(connection, request, manifest):
+def seed_variant(connection, request, manifest, *, asset_suffix=""):
     connection.execute(
         insert(project)
         .values(
@@ -112,7 +117,7 @@ def seed_variant(connection, request, manifest):
     # these are not the actual image labels or domain gold of the CPU run.
     membership = {}
     for kind in ("positive", "negative"):
-        asset_key = f"{request.project_id}-synthetic-ordinary-{kind}"
+        asset_key = f"{request.project_id}-synthetic-ordinary-{kind}{asset_suffix}"
         connection.execute(
             insert(source_asset)
             .values(
@@ -407,6 +412,9 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 connection, result, exported, manifest, initial_model, reports[0], common
             )
             assert load_registry(connection, request.project_id, other_recipe) == untouched
+            seed_checkpoint_descendants(
+                connection, result, exported, manifest, initial_model, reports[0]
+            )
         audit_veto = None
         # The recipes share a canonical training release. Finish both smoke cases
         # before inserting its durable adverse evidence; 640 runs second in Actions.
@@ -433,8 +441,6 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
 
 def exercise_common_evaluation(connection, result, exported, manifest, model, report, common):
     """Synthetic persistence regression, not a second actual training/inference claim."""
-    import hashlib
-
     request = result.request
     next_manifest = manifest | {"release_id": request.dataset_release_id + "-synthetic-r2"}
     next_request = replace(
@@ -539,6 +545,65 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
     }
 
 
+def seed_checkpoint_descendants(connection, result, exported, manifest, model, report):
+    """Persist synthetic clean-data descendants; no extra training/export claim."""
+    clean_manifest = manifest | {"release_id": result.request.dataset_release_id + "-lineage-clean"}
+    clean_request = replace(
+        result.request,
+        dataset_release_id=clean_manifest["release_id"],
+        dataset_manifest_sha256=hashlib.sha256(
+            (json.dumps(clean_manifest, sort_keys=True, indent=2) + "\n").encode()
+        ).hexdigest(),
+    )
+    variant_id = seed_variant(
+        connection, clean_request, clean_manifest, asset_suffix="-lineage-clean"
+    )
+    parent = result.selected.sha256
+    for generation in ("middle", "child", "unrelated-control"):
+        run_key = result.request.run_id + "-lineage-" + generation
+        weights = hashlib.sha256(run_key.encode()).hexdigest()
+        request = replace(
+            clean_request,
+            run_id=run_key,
+            initialization_sha256=result.request.initialization_sha256
+            if generation == "unrelated-control"
+            else parent,
+        )
+        checkpoint = replace(result.selected, sha256=weights, evaluation_run_id=run_key + "-eval")
+        synthetic_result = replace(
+            result, request=request, checkpoints=(checkpoint,), selected=checkpoint
+        )
+        synthetic_report = replace(
+            report,
+            run_id=checkpoint.evaluation_run_id,
+            dataset_release_id=request.dataset_release_id,
+            weights_sha256=weights,
+        )
+        save_training(
+            connection, variant_id=variant_id, result=synthetic_result, reports=(synthetic_report,)
+        )
+        parent = weights
+        if generation == "middle":
+            continue  # No model release: ancestry must traverse raw training checkpoints.
+        release = replace(
+            model,
+            release_id=run_key,
+            weights_sha256=weights,
+            evaluation_run_ids=(synthetic_report.run_id,),
+        )
+        save_model(
+            connection,
+            training_run_key=run_key,
+            release=release,
+            export_evidence=asdict(exported) | {"weights_sha256": weights},
+        )
+        project_id = lock_project(connection, request.project_id)
+        model_id = connection.execute(
+            sa.select(db.model_release.c.id).where(db.model_release.c.release_key == run_key)
+        ).scalar_one()
+        require_no_annotation_veto(connection, project_id=project_id, model_id=model_id)
+
+
 def exercise_annotation_veto(engine, request, common, gate):
     """Adverse ordinary labels veto actual persisted heads, not just a pure verdict."""
     actor = "fixture-independent-auditor"
@@ -631,7 +696,28 @@ def exercise_annotation_veto(engine, request, common, gate):
             ).all()
             qualified = []
             development_only = 0
+            clean_descendants = 0
+            unaffected_controls = 0
+            project_id = lock_project(connection, request.project_id)
             for candidate in candidates:
+                if candidate.release_key.endswith("-lineage-unrelated-control"):
+                    require_no_annotation_veto(
+                        connection, project_id=project_id, model_id=candidate.id
+                    )
+                    unaffected_controls += 1
+                    continue
+                if candidate.release_key.endswith("-lineage-child"):
+                    membership = connection.execute(
+                        sa.select(canonical_dataset_release.c.sample_revisions)
+                        .select_from(
+                            db.model_release.join(db.training_run)
+                            .join(yolo_dataset_variant)
+                            .join(canonical_dataset_release)
+                        )
+                        .where(db.model_release.c.id == candidate.id)
+                    ).scalar_one()
+                    assert not {positive, negative} & set(membership)
+                    clean_descendants += 1
                 release = load_release(connection, candidate.id)
                 development_only += len(release.evaluation_run_ids) == 1
                 report = stored_report(connection, release, release.evaluation_run_ids[0])
@@ -658,6 +744,7 @@ def exercise_annotation_veto(engine, request, common, gate):
                 context.require_qualified(release, final)
                 qualified.append((release, final, context))
             assert development_only >= 1  # Regression: the unpromoted racer is still covered.
+            assert clean_descendants == unaffected_controls == 1
             # Evaluation links are append-only model metadata. Snapshot only after
             # fixture preparation, then prove the rejected operations change nothing.
             before = load_registry(connection, request.project_id, recipe)
@@ -685,5 +772,7 @@ def exercise_annotation_veto(engine, request, common, gate):
         "scope": "synthetic ordinary-label audit mechanics, not domain quality",
         "wrong_identity_and_missed_object_persisted": True,
         "clean_replacement_sample_did_not_clear_veto": True,
+        "clean_data_checkpoint_descendants_vetoed_both_recipes": True,
+        "unrelated_clean_data_controls_not_vetoed": True,
         "heads_and_event_count_unchanged": True,
     }

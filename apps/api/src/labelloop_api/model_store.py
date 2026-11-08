@@ -161,6 +161,8 @@ def save_training(
         ):
             raise ValueError("checkpoint evaluation lineage mismatch")
     with connection.begin_nested():
+        # Keep the checkpoint ancestry snapshot ordered with audits and promotion.
+        lock_project(connection, request.project_id)
         run_id = connection.execute(
             sa.insert(db.training_run).values(
                 run_key=request.run_id,

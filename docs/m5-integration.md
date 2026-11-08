@@ -46,24 +46,42 @@ fixture incorrectly reused as a final ID (`StopIteration` before the veto assert
 The repair appends a separate explicitly synthetic final evaluation to each candidate,
 reloads linked evidence, verifies clean fixture qualification, and snapshots registry
 metadata after that preparation. It also requires coverage of the development-only
-losing challenger. Corrected-head Actions verification is pending; no veto PASS is claimed.
-The prior head's [unit job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42442337445/job/128614029452)
-passed **757 tests, 38 skipped**, including the 12 paired preparation cases; those
-results do not replace the failed PostgreSQL/CPU gate.
+losing challenger. Corrected head `4bf3806` passed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42443635030),
+including [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42443635030/job/128617916952),
+[dev-stack](https://github.com/TogetherWeOwn/labelloop/actions/runs/42443635030/job/128617916920),
+and [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42443635030/job/128617916833)
+(**757 passed, 38 skipped**). CodeQL, gitleaks and standards passed at that head.
+This verifies the direct persisted veto fixture, not HTTP authorization, empirical
+quality, or the checkpoint-ancestry extension below, which awaits new-head Actions.
 
 `qualification_0001` follows the delivered ledger's `budget_0002`. The new
 `qualification_annotation_audit` table is append-only at the database boundary and
 must be included in the final restore inventory. Audits load frozen membership and
 prior actors from canonical records. Audit writes and registry changes lock the
 project before any recipe head, ordering adverse evidence against concurrent promotion.
-No new sampler, audit truth source or HTTP endpoint is introduced in this slice.
+Training appends now take that same project lock. Registry vetoes walk initialization
+hashes through all same-project training checkpoints, including unselected checkpoints
+and runs without registered models. Matching duplicate hashes include every possible
+ancestor; visited run IDs bound cycles. External base hashes without a local matching
+checkpoint have no inferred parent. This does not implement cross-project imports.
+
+New synthetic PostgreSQL cases for both recipes persist a clean-data intermediate
+training run without a model release, a clean-data child initialized from it, and an
+unrelated clean-data control. After adverse evidence is committed on the original
+ancestor, the child must fail registry mutation even though its own membership contains
+neither audited source. The unrelated control must not be vetoed. All rejected changes
+must preserve heads and event count. Unit cases additionally cover unselected parents,
+duplicate digest branches and cycles. These additions await exact-head Actions.
+No new migration, sampler, audit truth source or HTTP endpoint is introduced in this slice.
 
 Vetoes currently hold every later revision of an affected source conservatively;
 there is no clearing API. An authenticated correction plus complete descendant
 re-tracing must precede any future clearing transition. Indirect teacher/generated-label
-and checkpoint-ancestry tracing, current-champion automatic-acceptance enforcement,
-representative population sampling, authoritative acceptance-score/threshold provenance,
-lifecycle storage and authenticated adapters remain integration obligations.
+provenance, current-champion automatic-acceptance enforcement, representative population
+sampling, authoritative acceptance-score/threshold provenance, lifecycle storage and
+authenticated adapters remain integration obligations. The in-memory checkpoint index
+is project-scoped and rebuilt from immutable records under the project lock; scale
+optimization must preserve the same ancestry and concurrency semantics.
 The internal audit writer is **not** an authorization boundary: its caller must derive
 an authorized human principal from the existing session service. Passing a string
 actor or synthetic clean qualification is never evidence of HTTP authorization.
