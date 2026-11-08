@@ -109,6 +109,9 @@ def database(tmp_path):
 def prepared_evaluation_stage(
     database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
 ):
+    import hashlib
+    import json
+
     from labelloop_api.management_evaluate_worker import CanonicalLocalEvaluationWorker
     from labelloop_core.evaluation import DerivedPredictions
     from labelloop_core.geometry import AffineTransform, Crop
@@ -130,7 +133,15 @@ def prepared_evaluation_stage(
         assert class_ids == ("package",)
         expected_images = {root / sample["image_path"] for sample in samples}
         assert expected_images and set(root.rglob("*.jpg")) == expected_images
-        assert {path for path in root.rglob("*") if path.is_file()} == expected_images
+        manifest_path = root / "manifest.json"
+        assert {path for path in root.rglob("*") if path.is_file()} == expected_images | {
+            manifest_path
+        }
+        manifest_bytes = manifest_path.read_bytes()
+        assert hashlib.sha256(manifest_bytes).hexdigest() == lease.input["manifest_sha256"]
+        assert [
+            sample for sample in json.loads(manifest_bytes)["samples"] if sample["split"] == "val"
+        ] == samples
         assert not (root / "images/train").exists()
         assert not (root / "images/test").exists()
         assert not (root / "labels").exists()
