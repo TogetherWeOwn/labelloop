@@ -69,6 +69,9 @@ def decode_report(value: dict) -> EvaluationReport:
                 "overall": metrics(value["overall"]),
                 "slices": {key: metrics(row) for key, row in value["slices"].items()},
                 "coverage": tuple(Coverage(**row) for row in value["coverage"]),
+                "source_truth_sha256": tuple(
+                    tuple(row) for row in value.get("source_truth_sha256", ())
+                ),
             }
         )
     )

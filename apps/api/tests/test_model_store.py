@@ -2,8 +2,10 @@
 
 import io
 import runpy
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -23,7 +25,8 @@ from labelloop_core.registry import ModelRelease
 from labelloop_core.training import InferencePolicy
 
 
-def test_persisted_release_and_source_frame_evaluation_round_trip():
+@pytest.mark.parametrize("truth_pins", [(), (("source", "e" * 64),)])
+def test_persisted_release_and_source_frame_evaluation_round_trip(truth_pins):
     policy = InferencePolicy(320)
     transform = full_frame_transform(100, 100, 320)
     box = Box(10, 20, 30, 40)
@@ -56,8 +59,12 @@ def test_persisted_release_and_source_frame_evaluation_round_trip():
         ("eval",),
     )
     assert decode_release(json_record(release)) == release
+    report = replace(report, source_truth_sha256=truth_pins)
     restored = decode_report(json_record(report))
     assert restored == report
+    legacy = json_record(report)
+    del legacy["source_truth_sha256"]
+    assert decode_report(legacy) == replace(report, source_truth_sha256=())
     assert not restored.overall.per_class["absent"].supported
     assert restored.overall.per_class["absent"].map50_95 is None
 

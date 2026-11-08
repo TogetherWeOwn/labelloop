@@ -9,7 +9,7 @@ from itertools import product
 from statistics import mean
 from typing import Literal
 
-from .evaluation import EvaluationReport, Metrics
+from .evaluation import ClassMetrics, EvaluationReport, Metrics
 from .training import (
     AugmentationProfile,
     InferencePolicy,
@@ -318,7 +318,8 @@ def _validate_report(
     ):
         raise ValueError("comparison cannot hide targets through reduced coverage")
     for metrics in (report.overall, *report.slices.values()):
-        for scores in (metrics, *metrics.per_class.values()):
+        score_sets: tuple[Metrics | ClassMetrics, ...] = (metrics, *metrics.per_class.values())
+        for scores in score_sets:
             for value in (scores.map50, scores.map50_95, scores.precision, scores.recall):
                 if value is not None and (not math.isfinite(value) or not 0 <= value <= 1):
                     raise ValueError("nonfinite or invalid evaluation metric")
