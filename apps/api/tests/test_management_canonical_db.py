@@ -1,6 +1,7 @@
 """Real canonical transactions, only against a disposable Actions Postgres service.
 
-These are not session/CSRF, queue, setup-publication or project-to-export tests.
+The explicit session-composition case covers project create/read/replay only;
+these are not shared-queue, setup-publication or project-to-export tests.
 """
 
 import base64
@@ -103,6 +104,94 @@ def database(tmp_path):
             connection.execute(text(f'DROP OWNED BY "{role}"'))
             connection.execute(text(f'DROP ROLE "{role}"'))
         owner.dispose()
+
+
+def test_shared_session_canonical_project_create_read_and_replay(database, monkeypatch):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api import auth
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.auth_store import PASSWORDS, AuthStore
+    from labelloop_api.main import create_app
+
+    service, owner, _ = database
+    identity, name = str(uuid4()), "fixture-" + uuid4().hex
+    password, origin = "fixture-password-only", "https://testserver"
+    with owner.begin() as connection:
+        connection.execute(
+            insert(principal).values(
+                id=identity,
+                name=name,
+                kind="human",
+                role="admin",
+                password_hash=PASSWORDS.hash(password),
+                enabled=True,
+                failed_attempts=0,
+            )
+        )
+    store = AuthStore(owner)
+    monkeypatch.setattr(auth, "auth_store", lambda: store)
+    monkeypatch.setattr(auth, "clock", lambda: datetime(2026, 11, 8, tzinfo=UTC))
+    monkeypatch.setenv("AUTH_ORIGIN", origin)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    # Only these real adapters are bound for this case, never an admission/queue port.
+    operations = SimpleNamespace(
+        create_project=service.create_project,
+        list_projects=reads.list_projects,
+    )
+    payload = pack().model_dump(mode="json")
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.get("/projects").status_code == 401
+        login = client.post(
+            "/auth/login",
+            json={"name": name, "password": password},
+            headers={"origin": origin},
+        )
+        assert login.status_code == 200
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "session-create",
+        }
+        denied = client.post(
+            "/projects", json=payload, headers={"Idempotency-Key": "session-create"}
+        )
+        assert denied.status_code == 403 and denied.json() == {"detail": "csrf_denied"}
+        with owner.connect() as connection:
+            assert (
+                connection.execute(
+                    select(project.c.id).where(project.c.project_key == payload["project_key"])
+                ).first()
+                is None
+            )
+        created = client.post("/projects", json=payload, headers=headers)
+        assert created.status_code == 201, created.text
+        replay = client.post("/projects", json=payload, headers=headers)
+        assert replay.status_code == 201 and replay.json() == created.json()
+        conflict = client.post(
+            "/projects", json={**payload, "scope": "Changed scope"}, headers=headers
+        )
+        assert conflict.status_code == 409 and conflict.json() == {"detail": "idempotency_conflict"}
+        page = client.get("/projects")
+        assert page.status_code == 200 and page.json()["items"] == [created.json()]
+        with owner.connect() as connection:
+            receipts = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.aggregate_id == created.json()["id"]
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert len(receipts) == 1
+        assert receipts[0]["actor_kind"] == "human" and receipts[0]["actor_id"] == identity
+        assert counts(owner, created.json()["id"]) == (0, 0, 1)
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.get("/projects").status_code == 401
 
 
 def pack():

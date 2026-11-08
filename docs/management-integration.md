@@ -22,6 +22,28 @@ principals cannot use either human management surface, even with an admin role.
 Shared middleware still owns session authentication, CSRF and denial auditing.
 The router is **not** a replacement for that middleware.
 
+`labelloop_api.main.create_app(management_operations=...)` is the opt-in server
+composition boundary. It installs the existing authentication middleware and auth
+routes exactly once, then binds management to `auth.current_principal`. No caller
+can supply a separate principal resolver through this factory; the operations
+resolver is trusted server code, never a request field or environment switch.
+Human sessions use the same origin/CSRF proof as review operations. Service tokens
+retain service identity and cannot enter management reads or mutations. The
+factory does not supply an adapter, change grants or enable admission by itself.
+The default `main.app = create_app()` still mounts **no management routes**.
+
+Actions cases exercise this composition with the real SQL-backed auth store:
+identity attribution, reviewer reads/admin refusal, forged-field rejection,
+all four service roles, CSRF, expiry, revocation, current-role reload, unavailable
+authentication and refusal before operations resolution. Recording-port cases
+prove only the identity boundary. One disposable Postgres case additionally binds
+real canonical project creation and reads under the existing restricted canonical
+role, checks a single attributed receipt on replay, rejects changed-key content
+and verifies logout. Its auth store uses the fixture owner connection; it does
+**not** prove production auth-role provisioning, full adapter composition, shared
+queue dispatch or the project-to-export acceptance path. Newly added cases require
+exact-head Actions verification; test source is not a passing result.
+
 | Method/path | Port | Result |
 | --- | --- | --- |
 | POST /projects | create_project | 201 resource |
