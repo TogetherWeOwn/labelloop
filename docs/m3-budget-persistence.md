@@ -184,10 +184,10 @@ actual request-bound enforcement are also dispatch integration obligations.
 
 Alembic revision `budget_0001` follows delivered `0002_local_models`. Its distinct
 identity is reserved with the authentication migration owner; sibling auth uses
-`0003_authentication`. Whichever sibling integrates second must reconcile the
-migration graph (a merge revision or a not-yet-shipped down-revision adjustment)
-with that owner before merge. This is integration ordering, not a global build
-hold. `budget_0002` follows `budget_0001`, adding the child request table and
+`0003_authentication`. The second integrator joins `0003_authentication` and
+`budget_0002` through the no-DDL `auth_budget_0001` merge revision. Both historical
+chains remain unchanged, and Alembic has a single head for upgrade/downgrade.
+`budget_0002` follows `budget_0001`, adding the child request table and
 batch-specific pause. Historical DDL is explicit and does not import application metadata.
 
 Tables: `budget_head` (current policy/revision/pause), `budget_dry_run` (current
