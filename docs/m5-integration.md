@@ -509,6 +509,43 @@ Corrected measured-outcome head `294746a612ffeef80f0ca0d4cfbdda7cc7f5dc79` passe
 queue PostgreSQL, migration cycles and dev-stack. Web-build was path-skipped. That
 verifies prior outcome storage, not this new assembly or final milestone acceptance.
 
+## Persisted final identity overrides supplied development roles
+
+The final-test store now checks the latest scoped final-test journal before
+recording candidate selection, before exposing final results for an older selection,
+and when reloading qualification for promotion, resumption or automatic acceptance.
+The persisted context assembler performs the same check against the exact exposure's
+selection. A supplied development/calibration role or a previously stored report cannot
+hide a dataset currently reserved as a locked final test. Registration, invalidation,
+selection and consumers share the existing project lock, so these checks remain bound
+to the outer transaction rather than a cached earlier role.
+
+An explicit adaptation event permits the entire former test release to become
+development/regression evidence, as required by plan §11.1. It does not turn that
+release into a calibration set or rehabilitate it as independent final evidence.
+Quarantine blocks both selection and threshold tuning, even after adaptation.
+An absent final journal is not proof of a canonical role, independent groups, original
+pipeline execution or measurement truth. Those trusted producer obligations and the
+remaining authenticated consumers are unchanged. No new endpoint or migration is added.
+
+New adapter cases cover both use categories, locked/adapted/quarantined states,
+foreign/substituted records and current-context replay. Paired synthetic PostgreSQL
+assertions reject selection and final exposure after a later locked reservation,
+permit explicitly adapted development use, and reject quarantine. The persisted
+assembly exercise additionally replays an earlier passing context against the actual
+automatic-acceptance and registry stores, requiring unchanged complete heads and event
+count. Temporary role reservations in these fixtures roll back; they do not modify the
+actual CPU fixture's canonical assignments or claim new domain-quality evidence.
+These assertions await exact-head Actions; no local tests or builds were run.
+
+Previous head `39f1734c600101e57df7d39bedb9e2b4355a9395` failed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42464174543):
+unit had two migration-head assertion failures; queue/ML migration setup failed on
+multiple heads before the new PostgreSQL assembly assertions ran. Dev-stack separately
+failed on a MinIO HTTP 504 download. CodeQL passed, but does not clear failed CI.
+Later composition must consume the independently owned auth/jobs repair without
+rewriting historical migrations. No repair, complete acceptance or PASS is inferred.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

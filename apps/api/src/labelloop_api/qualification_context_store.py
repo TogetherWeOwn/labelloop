@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 from labelloop_api import model_schema
 from labelloop_api.annotation_evidence_store import load_annotation_evidence
-from labelloop_api.final_test_store import load_final_test
+from labelloop_api.final_test_store import load_final_test, require_development_uses
 from labelloop_api.model_store import load_release, stored_report
 from labelloop_api.qualification_policy_store import load_qualification_policy
 from labelloop_api.qualification_store import lock_project
@@ -90,6 +90,12 @@ def load_qualification_context(
     )
     if len(selections) != 1:
         raise ValueError("qualification requires one exact committed final-test exposure")
+    require_development_uses(
+        connection,
+        project_key=project_key,
+        development_set_key=selections[0].development_set_id,
+        calibration_set_key=selections[0].calibration_set_id,
+    )
 
     def outcome(reference, model=None):
         return load_annotation_evidence(

@@ -33,6 +33,7 @@ def setup(monkeypatch, side=320):
             )
         ),
         "load_final_test": MagicMock(return_value=evidence.final_test),
+        "require_development_uses": MagicMock(),
         "load_annotation_evidence": MagicMock(
             side_effect=[
                 StoredAnnotationEvidence(evidence.annotation_audit, None),
@@ -68,6 +69,13 @@ def test_assembly_uses_only_scoped_current_stored_inputs_and_real_quality_gates(
     )
     readers["load_final_test"].assert_called_once_with(
         connection, project_key=args["project_key"], dataset_key="final-set"
+    )
+    selection = expected.evidence.final_test.assessments[0].selection
+    readers["require_development_uses"].assert_called_once_with(
+        connection,
+        project_key=args["project_key"],
+        development_set_key=selection.development_set_id,
+        calibration_set_key=selection.calibration_set_id,
     )
     calls = readers["load_annotation_evidence"].call_args_list
     for call, reference, model in zip(
@@ -111,6 +119,7 @@ def test_outcome_refs_reject_empty_identity(field):
         "load_release",
         "stored_report",
         "load_final_test",
+        "require_development_uses",
         "load_annotation_evidence",
     ],
 )

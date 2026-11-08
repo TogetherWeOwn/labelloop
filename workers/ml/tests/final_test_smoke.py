@@ -55,6 +55,61 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
             development_set=development,
             actor_id=actor,
         )
+    # Registering the selection's development identity as locked after selection
+    # cannot be hidden by replaying the earlier development role or report.
+    with engine.begin() as connection, connection.begin_nested() as transaction:
+        register_final_test(
+            connection, dataset=replace(development, role="locked_final_test"), actor_id=actor
+        )
+        selection_args = dict(
+            project_key=model.project_id,
+            model_key=model.release_id,
+            selection_key="role-replay-" + model.release_id,
+            development_key=report.run_id,
+            development_set=development,
+            actor_id=actor,
+        )
+        with pytest.raises(ValueError, match="role forbids"):
+            record_candidate_selection(connection, **selection_args)
+        with pytest.raises(ValueError, match="role forbids"):
+            expose_final_test(
+                connection,
+                **scope,
+                model_key=model.release_id,
+                selection_key=selection.selection_id,
+                evaluation_key=final.run_id,
+                expected_revision=0,
+                actor_id=actor,
+            )
+        assert load_final_test(connection, **scope).revision == 0
+        invalidate_final_test(
+            connection,
+            project_key=model.project_id,
+            dataset_key=development.release_id,
+            action="adapt",
+            reason="explicitly reclassified as development/regression",
+            expected_revision=0,
+            actor_id=actor,
+        )
+        assert (
+            record_candidate_selection(connection, **selection_args).development_set_id
+            == development.release_id
+        )
+        invalidate_final_test(
+            connection,
+            project_key=model.project_id,
+            dataset_key=development.release_id,
+            action="quarantine",
+            reason="related group integrity finding",
+            expected_revision=1,
+            actor_id=actor,
+        )
+        with pytest.raises(ValueError, match="quarantined"):
+            record_candidate_selection(
+                connection,
+                **(selection_args | {"selection_key": "quarantined-" + model.release_id}),
+            )
+        transaction.rollback()
     # Selection is durable before access; exposure is its own committed transaction.
     with engine.begin() as connection:
         exposed = expose_final_test(
@@ -200,4 +255,6 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
         "racing_invalidation_winners": 1,
         "failed_write_unchanged": True,
         "historical_context_rejected_after_reload": True,
+        "locked_development_identity_blocks_selection_and_later_exposure": True,
+        "explicit_adaptation_allows_development_but_quarantine_blocks_it": True,
     }

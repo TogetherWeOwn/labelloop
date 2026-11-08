@@ -57,6 +57,7 @@ def test_exposure_decodes_only_a_candidate_selection_before_transition(wrong_roo
         else selection
     )
     connection.execute.return_value.scalar_one.return_value = json.loads(dumps(record))
+    connection.execute.return_value.scalar_one_or_none.return_value = None
     release, report = object(), object()
     with (
         patch.object(final_test_store, "lock_project", return_value="project-id"),

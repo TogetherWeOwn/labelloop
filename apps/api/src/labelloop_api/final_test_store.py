@@ -18,6 +18,7 @@ from labelloop_api.schema import canonical_dataset_release
 from labelloop_core.evaluation_lifecycle import (
     CandidateSelection,
     EvaluationSet,
+    EvidenceUse,
     FinalTestState,
     select_candidate,
 )
@@ -63,6 +64,47 @@ def load_final_test(
     ) != (project_key, dataset_key):
         raise ValueError("final-test journal identity mismatch")
     return state
+
+
+def require_development_uses(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    development_set_key: str,
+    calibration_set_key: str | None = None,
+) -> None:
+    """A supplied role cannot hide an existing final-test reservation.
+
+    An explicitly adapted test may be development/regression data, but never a
+    calibration set or a later independent final. Quarantined data is unusable.
+    Absence of a journal is not proof of canonical role or group independence;
+    those still require the trusted producer and the complete qualification gate.
+    """
+    project_id = lock_project(connection, project_key)
+    uses: list[tuple[str, EvidenceUse]] = [(development_set_key, "checkpoint_selection")]
+    if calibration_set_key is not None:
+        uses.append((calibration_set_key, "threshold_tuning"))
+    for dataset_key, purpose in uses:
+        record = connection.execute(
+            sa.select(qualification_schema.final_test_event.c.record)
+            .where(
+                qualification_schema.final_test_event.c.project_id == project_id,
+                qualification_schema.final_test_event.c.dataset_key == dataset_key,
+            )
+            .order_by(qualification_schema.final_test_event.c.revision.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if record is None:
+            continue
+        state = loads(json.dumps(record), FinalTestState)
+        if not isinstance(state, FinalTestState) or (
+            state.dataset.project_id,
+            state.dataset.release_id,
+        ) != (project_key, dataset_key):
+            raise ValueError("final-test journal identity mismatch")
+        if state.quarantine_reasons:
+            raise ValueError("quarantined final-test data cannot guide selection or thresholds")
+        replace(state.dataset, role=state.effective_role).require_use(purpose)
 
 
 def _append(connection, project_id, actor_id, action, state):
@@ -128,6 +170,12 @@ def record_candidate_selection(
             else None,
             calibration_set=calibration_set,
         )
+        require_development_uses(
+            connection,
+            project_key=project_key,
+            development_set_key=selection.development_set_id,
+            calibration_set_key=selection.calibration_set_id,
+        )
         connection.execute(
             sa.insert(qualification_schema.candidate_selection).values(
                 project_id=project_id,
@@ -163,6 +211,12 @@ def expose_final_test(
         selection = loads(json.dumps(record), CandidateSelection)
         if not isinstance(selection, CandidateSelection):
             raise ValueError("invalid persisted candidate selection")
+        require_development_uses(
+            connection,
+            project_key=project_key,
+            development_set_key=selection.development_set_id,
+            calibration_set_key=selection.calibration_set_id,
+        )
         release = _model(connection, project_id, model_key)
         changed = state.expose(
             release,
@@ -205,6 +259,13 @@ def current_qualification_context(
     canary records. This helper alone does not authorize or qualify a promotion.
     """
     dataset = context.evidence.final_test.dataset
+    lineage = context.evidence.lineage
+    require_development_uses(
+        connection,
+        project_key=dataset.project_id,
+        development_set_key=lineage.development.release_id,
+        calibration_set_key=lineage.calibration.release_id if lineage.calibration else None,
+    )
     return replace(
         context,
         current_final_test=load_final_test(
