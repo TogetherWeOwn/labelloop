@@ -280,7 +280,8 @@ try {
   const acceptAssistant = page.getByRole('button', { name: 'Accept Oat milk 1 L', exact: true });
   await acceptAssistant.waitFor();
   assert.equal(await assistantPanel.count(), 0);
-  const proposedRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Oat milk 1 L', exact: true }) });
+  const proposedRow = page.getByRole('table', { name: 'Classes in this draft', exact: true }).getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Oat milk 1 L', exact: true }) });
+  assert.equal(await proposedRow.count(), 1, 'the returned proposal must appear exactly once in the draft catalog');
   assert.match(await proposedRow.innerText(), /Proposed/);
   assert.equal(await page.getByRole('button', { name: 'Approve classes and continue', exact: true }).isDisabled(), true);
   assert.equal((await last()).kind, 'draft_assistant_classes', 'returning a proposal never accepts it');
