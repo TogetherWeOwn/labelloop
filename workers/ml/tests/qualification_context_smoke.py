@@ -372,6 +372,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     release_id=strict_release_id,
                     sample_key=strict_release,
                     require_current_groups=True,
+                    original_pipeline=original.policy.pipeline,
                 )
                 == frozen
             )
@@ -412,6 +413,14 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 changed_pipeline = replace(
                     original.policy.pipeline, reviewer_model_version="changed"
                 )
+                with pytest.raises(ValueError, match="original acceptance pipeline"):
+                    load_audit_sample(
+                        connection,
+                        project_id=source_release["project_id"],
+                        sample_key=strict_release,
+                        require_current_groups=True,
+                        original_pipeline=changed_pipeline,
+                    )
                 with pytest.raises(ValueError, match="original acceptance pipeline"):
                     freeze_automatic_audit_sample(
                         connection,
@@ -952,6 +961,49 @@ def exercise_context_assembly(engine, release, final, context, actor):
             ).scalar_one()
             == count
         )
+        # Real targets must not reinterpret synthetic/historical populations as
+        # original automatic provenance. No truth or legacy event is backfilled.
+        with connection.begin_nested() as real_policy_transaction:
+            current = load_qualification_policy(connection, **scope)
+            targets = replace(current.policy.targets, fixture_only=False)
+            append_qualification_policy(
+                connection,
+                **scope,
+                actor_id=actor,
+                expected_revision=current.revision,
+                policy=replace(current.policy, targets=targets),
+            )
+            replay = replace(loaded, evidence=replace(loaded.evidence, targets=targets))
+            message = "audit sample lacks the exact original acceptance pipeline"
+            with pytest.raises(ValueError, match=message):
+                load_qualification_context(connection, **arguments)
+            with pytest.raises(ValueError, match=message):
+                require_automatic_acceptance(
+                    connection,
+                    **scope,
+                    evaluation_key=final.run_id,
+                    qualification=replay,
+                    scope=replay.evidence.scope[0],
+                )
+            with pytest.raises(ValueError, match=message):
+                change_registry(
+                    connection,
+                    **scope,
+                    actor_id=actor,
+                    expected_revision=before.revision,
+                    candidate_key=release.release_id,
+                    evaluation_key=final.run_id,
+                    policy=PromotionPolicy(1, 0.0),
+                    qualification=replay,
+                )
+            assert load_registry(connection, **scope) == before
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                ).scalar_one()
+                == count
+            )
+            real_policy_transaction.rollback()
         assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit

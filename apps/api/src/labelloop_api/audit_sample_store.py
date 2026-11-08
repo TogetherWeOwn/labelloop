@@ -254,6 +254,8 @@ def _freeze_audit_sample(
         population = AuditSample(sample_key + "-population", tuple(candidates), seed)
         sample = select_audit_sample(tuple(candidates), sample_id=sample_key, size=size, seed=seed)
         snapshot = {"population": json.loads(dumps(population)), "groups": groups}
+        if original_pipeline is not None:
+            snapshot["original_pipeline_sha256"] = original_pipeline.pipeline_id
         digest = record_sha256(snapshot)
         connection.execute(
             sa.insert(qualification_schema.audit_sample).values(
@@ -277,13 +279,23 @@ def load_audit_sample(
     sample_key: str,
     release_id: object | None = None,
     require_current_groups: bool = False,
+    original_pipeline: PipelineIdentity | None = None,
 ) -> FrozenAuditSample:
     """Historical reads preserve adverse evidence; qualification must recheck groups.
+
+    A strict read requires a producer-bound original pipeline and rechecks every
+    original decision, including unselected population members. Legacy snapshots
+    stay historical; current policy is never used to backfill their provenance.
 
     The checked path requires the caller's project lock and retains relation-table
     read locks through commit. A valid grouping is necessary, never sufficient for
     independent audit truth, representative error bounds or qualification.
     """
+    if original_pipeline is not None:
+        if not isinstance(original_pipeline, PipelineIdentity):
+            raise ValueError("automatic audit requires a typed original pipeline")
+        if lock_project(connection, original_pipeline.project_id) != project_id:
+            raise ValueError("automatic audit pipeline differs from the sample project")
     statement = sa.select(qualification_schema.audit_sample).where(
         qualification_schema.audit_sample.c.project_id == project_id,
         qualification_schema.audit_sample.c.sample_key == sample_key,
@@ -292,12 +304,22 @@ def load_audit_sample(
         statement = statement.where(qualification_schema.audit_sample.c.release_id == release_id)
     row = connection.execute(statement).mappings().one()
     record = row["record"]
+    if not isinstance(record, dict) or set(record) not in (
+        {"population", "groups", "sample"},
+        {"population", "groups", "sample", "original_pipeline_sha256"},
+    ):
+        raise ValueError("invalid persisted audit population")
+    snapshot = {key: value for key, value in record.items() if key != "sample"}
+    if (
+        original_pipeline is not None
+        and record.get("original_pipeline_sha256") != original_pipeline.pipeline_id
+    ):
+        raise ValueError("audit sample lacks the exact original acceptance pipeline")
     population = loads(json.dumps(record["population"]), AuditSample)
     sample = loads(json.dumps(record["sample"]), AuditSample)
     groups = record["groups"]
     if (
-        record_sha256({"population": record["population"], "groups": groups})
-        != row["population_sha256"]
+        record_sha256(snapshot) != row["population_sha256"]
         or set(groups) != {item.asset_id for item in population.candidates}
         or sample.sample_id != sample_key
         or sample
@@ -336,8 +358,40 @@ def load_audit_sample(
         )
         if current != groups:
             raise ValueError("audit population no longer matches pinned source groups")
+    if original_pipeline is not None:
+        for candidate in population.candidates:
+            original = load_automatic_acceptance(
+                connection,
+                project_key=original_pipeline.project_id,
+                asset_key=candidate.asset_id,
+                revision=candidate.revision.revision,
+            )
+            if (
+                original.policy.pipeline != original_pipeline
+                or candidate.pipeline_id != original_pipeline.pipeline_id
+            ):
+                raise ValueError("audit population differs from the original acceptance pipeline")
     return FrozenAuditSample(
         sample,
         row["population_sha256"],
         {item.asset_id: groups[item.asset_id] for item in sample.candidates},
     )
+
+
+def require_automatic_audit_samples(
+    connection: sa.Connection, *, pipeline: PipelineIdentity, samples: tuple[AuditSample, ...]
+) -> None:
+    """Recheck original provenance and current groups in the consuming transaction."""
+    if not isinstance(pipeline, PipelineIdentity):
+        raise ValueError("automatic audit requires a typed original pipeline")
+    project_id = lock_project(connection, pipeline.project_id)
+    for sample in samples:
+        frozen = load_audit_sample(
+            connection,
+            project_id=project_id,
+            sample_key=sample.sample_id,
+            require_current_groups=True,
+            original_pipeline=pipeline,
+        )
+        if frozen.sample != sample:
+            raise ValueError("qualification sample differs from the committed automatic audit")

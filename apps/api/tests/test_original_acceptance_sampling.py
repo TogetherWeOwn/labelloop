@@ -77,7 +77,7 @@ def test_strict_population_checks_every_original_before_selection(monkeypatch, s
     assert frozen.independent_groups == 1
     saved = connection.execute.call_args.args[0].compile().params
     assert saved["population_sha256"] == record_sha256(
-        {key: saved["record"][key] for key in ("population", "groups")}
+        {key: saved["record"][key] for key in ("population", "groups", "original_pipeline_sha256")}
     )
     assert len(saved["record"]["population"]["payload"]["candidates"]) == 2
 

@@ -15,6 +15,7 @@ import sqlalchemy as sa
 
 from labelloop_api import model_schema
 from labelloop_api.annotation_evidence_store import load_annotation_evidence
+from labelloop_api.audit_sample_store import require_automatic_audit_samples
 from labelloop_api.evaluation_group_store import load_evaluation_set
 from labelloop_api.final_test_store import load_final_test, require_development_uses
 from labelloop_api.model_store import load_release, stored_report
@@ -161,6 +162,12 @@ def load_qualification_context(
     fresh = outcome(canary, model_key)
     if fresh.canary_release_sha256 != digest:
         raise ValueError("qualification canary differs from the complete current release")
+    if not policy.targets.fixture_only:
+        require_automatic_audit_samples(
+            connection,
+            pipeline=policy.pipeline,
+            samples=(audit.evidence.sample, fresh.evidence.sample),
+        )
     evidence = QualificationEvidence(
         qualification_key,
         digest,

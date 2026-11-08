@@ -6,6 +6,48 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Original-policy sampling at qualification consumers — pending Actions
+
+Strict producers now bind the complete original-pipeline digest into the immutable
+population fingerprint. Strict reads require that binding and reload original
+acceptance events for every member, including unselected members. Generic and
+pre-binding snapshots remain available for historical inspection but cannot be
+upgraded into original-provenance proof by passing today's policy.
+
+For non-fixture targets, both persisted context assembly and the shared consuming
+transaction guard require current canonical groups and exact original provenance
+for the annotation and canary samples. This covers registry promotion, automatic
+acceptance and drift resumption. The server-owned current policy must match before
+those consumers run; caller-provided fixture flags are not a grant. Explicit
+fixture-only mechanics remain distinct and never establish adjudicated truth.
+
+Adapter cases cover both recipes, whole-population recovery, missing/legacy/changed
+provenance, foreign project, fingerprint/selection substitution and mandatory
+consumer calls. Disposable PostgreSQL controls reload real positive/negative
+annotation samples, reject changed-pipeline reads, and reject legacy synthetic
+samples at assembly and actual registry/acceptance consumers under non-fixture
+policy while preserving complete heads/event counts. These assertions await Actions.
+No migration, codec root, endpoint, dependency or second sampling engine is added.
+
+Baseline `60530273857f2e1b23e4bf62a881b772770ebbbf`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42499984223) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42499983862) succeeded,
+including [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42499984223/job/128790465046).
+Separate [gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42499983912/job/128790428585)
+failed on a historical generic-api-key match: `compile_request`'s static
+`compile-evaluation-640` idempotency key in
+`apps/api/tests/test_management_canonical_db.py:419`, commit `5aa876d`.
+The helper passes the value to `MutationContext.bind` as a compilation operation
+key, not a provider credential. Metadata and AST dataflow were inspected without
+printing matched secret fields. No scanner configuration, historical revision or
+ignore entry was changed; the failed gate remains unresolved, not a scan PASS.
+
+Original reviewer execution, score/threshold and source/condition/measurement
+producers, authenticated services and expanded restore/UI evidence remain
+unfinished. Real null targets fail closed; fixture mechanics are not domain gold.
+REA angle: reuse original review-event reads and the single canonical sampler in
+existing transaction-bound consumers, not another provenance or qualification engine.
+
 ## Server-derived qualification lineage — pending Actions
 
 The existing context assembler can now derive lineage without a supplied assertion.

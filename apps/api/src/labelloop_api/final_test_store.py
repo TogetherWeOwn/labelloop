@@ -259,6 +259,7 @@ def current_qualification_context(
     canary records. This helper alone does not authorize or qualify a promotion.
     Keep the outer transaction alive through the consuming state change.
     """
+    from labelloop_api.audit_sample_store import require_automatic_audit_samples
     from labelloop_api.evaluation_group_store import load_evaluation_set
     from labelloop_api.training_group_store import model_input_groups
 
@@ -289,4 +290,13 @@ def current_qualification_context(
             raise ValueError(
                 "qualification evaluation groups differ from current canonical membership"
             )
+    if not context.evidence.targets.fixture_only:
+        require_automatic_audit_samples(
+            connection,
+            pipeline=context.evidence.pipeline,
+            samples=(
+                context.evidence.annotation_audit.sample,
+                context.evidence.canary_audit.sample,
+            ),
+        )
     return replace(context, current_final_test=current)
