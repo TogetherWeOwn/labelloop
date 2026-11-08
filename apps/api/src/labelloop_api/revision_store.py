@@ -2,15 +2,40 @@
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import Connection, insert, select, text
 
 from labelloop_core.domain import AnnotationRevision, DatasetObject
 from labelloop_core.geometry import Box
+from labelloop_core.qualification import QualificationContext
+from labelloop_core.qualification_data import ScopeCell, require_name, require_scope
 
+from .acceptance_store import require_automatic_acceptance
+from .qualification_store import lock_project
 from .repository import source_uuid
-from .schema import annotation_revision, review_event, source_asset
+from .schema import annotation_revision, project, review_event, source_asset
+
+
+@dataclass(frozen=True, slots=True)
+class AutomaticReview:
+    """Internal service inputs, never a request-body or model-output authorization.
+
+    The service derives source/condition coverage and qualification from trusted
+    producers. This port does not establish that provenance. Until those producers
+    exist, HTTP callers must not construct this object from submitted claims.
+    """
+
+    recipe_key: str
+    evaluation_key: str
+    scope: tuple[ScopeCell, ...]
+    qualification: QualificationContext
+
+    def __post_init__(self) -> None:
+        require_name(self.recipe_key)
+        require_name(self.evaluation_key)
+        require_scope(self.scope)
 
 
 def completeness_context_hash(
@@ -38,6 +63,7 @@ def append_review(
     objects: list[dict[str, Any]],
     training_eligible: bool = False,
     gold_eligible: bool = False,
+    automatic: AutomaticReview | None = None,
 ) -> int:
     if actor_kind not in {"human", "model", "system"} or expected_revision < 1:
         raise ValueError("invalid actor or expected revision")
@@ -49,8 +75,25 @@ def append_review(
         raise ValueError("gold eligibility requires authenticated adjudication")
     if actor_kind == "model" and training_eligible:
         raise ValueError("model output cannot assert eligibility; a qualified system policy must")
+    needs_qualification = approval_state == "auto_accepted" or (
+        actor_kind == "system" and training_eligible
+    )
+    if needs_qualification:
+        if actor_kind != "system" or approval_state != "auto_accepted" or automatic is None:
+            raise ValueError("automatic acceptance requires current qualification from the service")
+        require_name(actor_id)
+    elif automatic is not None:
+        raise ValueError("automatic qualification cannot authorize a non-automatic revision")
     asset_uuid = source_uuid(connection, asset_id)
     with connection.begin_nested():
+        if needs_qualification:
+            # Follow registry/audit lock order before locking the annotation asset.
+            project_key = connection.execute(
+                select(project.c.project_key)
+                .join(source_asset, source_asset.c.project_id == project.c.id)
+                .where(source_asset.c.id == asset_uuid)
+            ).scalar_one()
+            lock_project(connection, project_key)
         connection.execute(
             text("SELECT id FROM source_asset WHERE id = :asset_id FOR UPDATE"),
             {"asset_id": asset_uuid},
@@ -103,10 +146,6 @@ def append_review(
             .one()
         )
         allowed_classes = set(context["class_map"] or {})
-        if (training_eligible or gold_eligible) and actor_kind == "system":
-            qualification = (context["access_policy"] or {}).get("auto_accept_qualification", {})
-            if qualification.get("id") != actor_id or approval_state != "auto_accepted":
-                raise ValueError("system eligibility requires its qualified auto-accept policy")
         try:
             revision = AnnotationRevision(
                 expected_revision + 1,
@@ -155,6 +194,23 @@ def append_review(
                 raise ValueError(
                     "exhaustive claims and release eligibility need a valid current completeness"
                     " assessment"
+                )
+        if needs_qualification:
+            assert automatic is not None
+            # Complete-image acceptance covers absent classes too, including negatives.
+            if (
+                not allowed_classes
+                or {cell.class_id for cell in automatic.scope} != allowed_classes
+            ):
+                raise ValueError("automatic acceptance requires the complete ontology scope")
+            for cell in automatic.scope:
+                require_automatic_acceptance(
+                    connection,
+                    project_key=project_key,
+                    recipe_key=automatic.recipe_key,
+                    scope=cell,
+                    evaluation_key=automatic.evaluation_key,
+                    qualification=automatic.qualification,
                 )
         next_completeness = (
             "unreviewed" if objects_changed else context["assessed_completeness"] or "unreviewed"

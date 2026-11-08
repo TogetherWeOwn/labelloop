@@ -6,6 +6,42 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Annotation transaction consumes the current acceptance guard
+
+`append_review` now requires internal `AutomaticReview` inputs for automatic
+acceptance, including writes that do not yet mark labels training-eligible. A
+legacy access-policy ID is not a qualification grant. Model/human claims cannot
+select the automatic path. The project is resolved from the actual asset and
+locked before the asset row, following registry/audit lock ordering. Every
+class/source/condition cell is checked through the existing current-champion,
+policy, final-state, annotation-veto and scoped-drift guard before either the
+review event or revision is appended. Complete-image acceptance covers every
+ontology class, including absent classes and negative images.
+
+The authenticated service still must derive source/condition scope and current
+qualification from trusted producers; this internal type is not an HTTP schema
+or a provenance producer. No endpoint accepts it. Original pipeline/acceptance,
+score/threshold and independent measurement provenance remain incomplete.
+
+New adapter assertions cover denial with a policy ID alone, valid system-policy
+mechanics, guard failures before writes, project-first lock ordering and incomplete
+negative-image scope. Paired synthetic PostgreSQL assertions now append actual
+positive/negative revisions and principal-bound review events, reject replay after
+a persisted scoped pause, and inject a revision-insert failure to verify rollback
+of the preceding review event. These assertions await exact-head Actions; no local
+test or new acceptance PASS is claimed. No migration, dependency or endpoint is added.
+
+Previous head `b2d91f3` completed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42467314609)
+with **2 failed, 1316 passed, 80 skipped** in
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42467314609/job/128689754602).
+The five earlier fixture setup failures are absent; the two migration-head
+assertions still fail. Queue/ML PostgreSQL assertions did not start because
+migration setup rejected multiple heads. Dev-stack failed a MinIO HTTP 504 download.
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42467314443) failed to
+download its CLI with HTTP 504, before analysis. Lint, types and import-contract
+passed. None of those results verifies this annotation-consumer change or clears
+the remaining migration/security gates.
+
 ## Final-role adapter fixture correction
 
 At `c0b395d`, [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42466087162)

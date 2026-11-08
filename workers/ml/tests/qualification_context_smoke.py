@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy as sa
 
 from labelloop_api import model_schema
-from labelloop_api.acceptance_store import require_automatic_acceptance
+from labelloop_api.acceptance_store import pause_acceptance, require_automatic_acceptance
 from labelloop_api.annotation_audit_store import record_annotation_audit
 from labelloop_api.annotation_evidence_store import record_annotation_evidence
 from labelloop_api.audit_sample_store import freeze_audit_sample
@@ -18,9 +18,14 @@ from labelloop_api.qualification_context_store import (
     load_qualification_context,
 )
 from labelloop_api.qualification_store import lock_project
+from labelloop_api.revision_store import AutomaticReview, append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
     canonical_dataset_release,
+    completeness_assessment,
+    ontology_release,
+    project,
+    review_event,
     source_asset,
     source_split_assignment,
 )
@@ -197,6 +202,122 @@ def _outcome(connection, release, context, actor, *, canary):
     return AnnotationOutcomeRef(prefix, prefix, prefix)
 
 
+def _exercise_annotation_write(connection, release, final, loaded, canary, actor):
+    """Actual revision/event writes, followed by a persisted scoped-pause veto."""
+    with connection.begin_nested() as transaction:
+        automatic = AutomaticReview(release.recipe_id, final.run_id, loaded.evidence.scope, loaded)
+        for positive in (True, False):
+            asset_key = canary.release_key + ("-positive" if positive else "-negative")
+            asset_id = connection.execute(
+                sa.select(source_asset.c.id).where(source_asset.c.asset_key == asset_key)
+            ).scalar_one()
+            ontology = connection.execute(
+                sa.select(ontology_release.c.class_map, ontology_release.c.classes, project.c.scope)
+                .join(project)
+                .where(project.c.project_key == release.project_id)
+                .order_by(ontology_release.c.version.desc())
+                .limit(1)
+            ).one()
+            connection.execute(
+                sa.insert(completeness_assessment).values(
+                    asset_id=asset_id,
+                    revision=1,
+                    ontology_hash=completeness_context_hash(*ontology),
+                    scope_completeness="exhaustive_for_scope",
+                    actor_kind="system",
+                    actor_id=actor,
+                    output_truncated=False,
+                    unresolved_regions=[],
+                )
+            )
+            objects = connection.execute(
+                sa.select(annotation_revision.c.objects).where(
+                    annotation_revision.c.asset_id == asset_id,
+                    annotation_revision.c.revision == 1,
+                )
+            ).scalar_one()
+            arguments = dict(
+                asset_id=asset_key,
+                actor_kind="system",
+                actor_id=actor,
+                approval_state="auto_accepted",
+                review_tier="machine_verified_no_human_review",
+                scope_completeness="exhaustive_for_scope",
+                objects=objects,
+                training_eligible=True,
+                automatic=automatic,
+            )
+            assert append_review(connection, expected_revision=1, **arguments) == 2
+            assert (
+                connection.execute(
+                    sa.select(annotation_revision.c.actor_id).where(
+                        annotation_revision.c.asset_id == asset_id,
+                        annotation_revision.c.revision == 2,
+                    )
+                ).scalar_one()
+                == actor
+            )
+            # A failing write after the review-event insert must roll back both rows.
+            connection.execute(
+                sa.text(
+                    "CREATE FUNCTION pg_temp.reject_automatic_revision() RETURNS trigger "
+                    "LANGUAGE plpgsql AS $$ BEGIN "
+                    "RAISE EXCEPTION 'injected revision failure'; END $$"
+                )
+            )
+            connection.execute(
+                sa.text(
+                    "CREATE TRIGGER reject_automatic_revision BEFORE INSERT ON annotation_revision "
+                    "FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_automatic_revision()"
+                )
+            )
+            with pytest.raises(sa.exc.DBAPIError, match="injected revision failure"):
+                append_review(connection, expected_revision=2, **arguments)
+            connection.execute(
+                sa.text("DROP TRIGGER reject_automatic_revision ON annotation_revision")
+            )
+            connection.execute(sa.text("DROP FUNCTION pg_temp.reject_automatic_revision()"))
+            event_count = connection.execute(
+                sa.select(sa.func.count())
+                .select_from(review_event)
+                .where(review_event.c.asset_id == asset_id)
+            ).scalar_one()
+            assert event_count == 1
+            # Scope state is journaled; the same previously valid context must now fail.
+            with connection.begin_nested() as pause_transaction:
+                pause_acceptance(
+                    connection,
+                    project_key=release.project_id,
+                    recipe_key=release.recipe_id,
+                    actor_id=actor,
+                    expected_revision=0,
+                    pause_id=asset_key + "-pause",
+                    qualification_id=loaded.evidence.qualification_id,
+                    scope=(loaded.evidence.scope[0],),
+                    reason="synthetic annotation containment",
+                )
+                with pytest.raises(ValueError, match="paused"):
+                    append_review(connection, expected_revision=2, **arguments)
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.count())
+                        .select_from(review_event)
+                        .where(review_event.c.asset_id == asset_id)
+                    ).scalar_one()
+                    == event_count
+                )
+                assert (
+                    connection.execute(
+                        sa.select(sa.func.max(annotation_revision.c.revision)).where(
+                            annotation_revision.c.asset_id == asset_id
+                        )
+                    ).scalar_one()
+                    == 2
+                )
+                pause_transaction.rollback()
+        transaction.rollback()
+
+
 def exercise_context_assembly(engine, release, final, context, actor):
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
@@ -228,6 +349,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
             qualification=loaded,
             scope=context.evidence.scope[0],
         )
+        _exercise_annotation_write(connection, release, final, loaded, canary, actor)
         with connection.begin_nested() as transaction:
             # The context was assembled before this new reservation. Neither a new
             # assembly nor replay of that older success may hide the locked identity.
@@ -298,4 +420,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
         "complete_fresh_canary_passes_and_partial_outcome_fails": True,
         "prior_audit_group_reuse_rejected_with_registry_unchanged": True,
         "locked_development_identity_rejected_by_assembly_acceptance_and_registry": True,
+        "positive_and_negative_annotation_writes_consume_current_qualification": True,
+        "persisted_pause_prevents_annotation_revision_and_event_append": True,
+        "injected_revision_failure_rolls_back_preceding_review_event": True,
     }
