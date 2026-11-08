@@ -430,6 +430,96 @@ try {
   await page.unroute('**/*', captureImportNetwork);
   results.push({ key: 'dataset-import-role-provenance-and-no-upload-guards', pass: true, realCommands: false });
   const sourcesStep = () => page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Sources and groups/ }).click();
+  const sourceForm = page.getByRole('form', { name: 'Source upload request', exact: true });
+  const openSources = page.getByRole('button', { name: 'Upload source images', exact: true });
+  const captureSources = page.getByRole('button', { name: 'Capture source upload request', exact: true });
+  const discardSources = page.getByRole('button', { name: 'Discard source selection', exact: true });
+  const sourceFiles = page.getByLabel('Source image files', { exact: true });
+  const selectedSources = [
+    { name: 'source.png', mimeType: 'image/png', buffer: Buffer.from('UNTRUSTED SOURCE; NOT AN IMAGE') },
+    { name: 'source.png', mimeType: 'image/png', buffer: Buffer.from('SECOND DISTINCT FILE WITH THE SAME NAME') },
+  ];
+  const expectedSources = { kind: 'request_source_upload', draft_id: 'draft-shelf', expected_revision: 7, files: selectedSources.map((file) => ({ name: file.name, size: file.buffer.length })) };
+  const sourceRequests = [];
+  const captureSourceNetwork = (route) => { if (route.request().method() !== 'GET') sourceRequests.push(route.request().method()); return route.continue(); };
+  await page.route('**/*', captureSourceNetwork);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await open('new-project'); await sourcesStep();
+    const baselineFacts = await sourceDetails.innerText();
+    await openSources.focus(); await page.keyboard.press('Enter');
+    await sourceForm.waitFor(); assert.equal(await last(), null);
+    assert.equal(await captureSources.isDisabled(), true);
+    await sourceFiles.setInputFiles([selectedSources[0], { ...selectedSources[1], buffer: Buffer.alloc(0) }]);
+    assert.equal(await captureSources.isDisabled(), true, 'one empty file refuses the entire selection');
+    await sourceFiles.setInputFiles(selectedSources);
+    assert.equal(await captureSources.isEnabled(), true);
+    const selectedRows = page.getByRole('table', { name: 'Selected source files', exact: true });
+    assert.equal(await selectedRows.getByRole('row').count(), 3, 'same-name files are not silently merged by name');
+    await sourceFiles.setInputFiles([]); assert.equal(await captureSources.isDisabled(), true);
+    assert.equal(await selectedRows.count(), 0, 'clearing selection removes all captured metadata');
+    await sourceFiles.setInputFiles(selectedSources);
+    assert.equal(await page.getByLabel('Declared metadata keys (session, sequence, subject)', { exact: true }).getAttribute('readonly'), '');
+    assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Approve sources and groups and continue', exact: true }).isDisabled(), true);
+    assert.equal(await openSources.isDisabled(), true);
+    await page.getByRole('button', { name: 'Compare source-0041 and source-0042', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Same group', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Different groups', exact: true }).isDisabled(), true);
+    await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+    const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => item.id));
+    assert.deepEqual(violations, [], `source-selection-${width}: axe`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    await page.screenshot({ path: `${evidence}/source-selection-${width}.png`, fullPage: true });
+    await captureSources.focus(); await page.keyboard.press('Enter');
+    await sourceForm.getByText('The source upload request was not confirmed.', { exact: false }).waitFor();
+    assert.deepEqual(await last(), expectedSources, 'source capture contains file metadata only, without split/group/hash/approval authority');
+    assert.deepEqual(await sourceFiles.evaluate((input) => [...input.files].map((file) => ({ name: file.name, size: file.size }))), expectedSources.files);
+    assert.equal(await sourceDetails.innerText(), baselineFacts, 'no image facts can be inferred from selection metadata');
+    assert.equal(await page.evaluate(() => window.importFileReads), 0);
+    await discardSources.focus(); await page.keyboard.press('Enter');
+    assert.equal(await sourceForm.count(), 0);
+    await openSources.click(); assert.equal(await captureSources.isDisabled(), true); await discardSources.click();
+    results.push({ key: `source-selection-${width}`, pass: true, axe: 0, keyboard: 'open-capture-discard-enter', realCommands: false });
+  }
+  await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`); await sourcesStep();
+  const initialSourceFacts = await sourceDetails.innerText();
+  const sourceSummary = page.locator('dl').filter({ hasText: 'Images / source groups' });
+  const initialSourceSummary = await sourceSummary.innerText();
+  const initialSetupSteps = await page.getByRole('navigation', { name: 'Setup steps' }).innerText();
+  await openSources.click(); await sourceFiles.setInputFiles(selectedSources);
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
+  await sourceForm.getByText('The draft changed while this source selection was open.', { exact: false }).waitFor();
+  assert.equal(await captureSources.isDisabled(), true);
+  assert.match(await sourceForm.innerText(), /draft-shelf · revision 7/);
+  assert.deepEqual(await sourceFiles.evaluate((input) => [...input.files].map((file) => ({ name: file.name, size: file.size }))), expectedSources.files);
+  assert.equal(await last(), null, 'source request must not retarget a refreshed draft');
+  await discardSources.click(); await openSources.click(); await sourceFiles.setInputFiles(selectedSources); await captureSources.click();
+  assert.deepEqual(await last(), { ...expectedSources, expected_revision: 8 });
+  assert.equal(await page.getByRole('button', { name: 'Capturing source request…', exact: true }).isDisabled(), true);
+  assert.equal(await sourceFiles.isDisabled(), true); assert.equal(await discardSources.isDisabled(), true);
+  await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+  await sourceForm.waitFor({ state: 'detached' });
+  assert.equal(await sourceDetails.innerText(), initialSourceFacts, 'acknowledged capture does not fabricate source facts or reassign splits');
+  assert.equal(await sourceSummary.innerText(), initialSourceSummary, 'capture acknowledgment does not change totals, groups or split preview');
+  assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).innerText(), initialSetupSteps, 'capture acknowledgment does not approve setup');
+  await page.getByRole('button', { name: 'Compare source-0041 and source-0042', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Same group', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Different groups', exact: true }).isDisabled(), true);
+  assert.deepEqual((await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'))).map((command) => command.kind), ['request_source_upload']);
+  assert.equal(await page.evaluate(() => window.importFileReads), 0);
+  results.push({ key: 'source-selection-revision-and-deferred-response', pass: true, realCommands: false });
+  for (const state of ['ready', 'dispatch-fixture', 'dispatch-stale', 'dispatch-published']) {
+    await page.goto(`${entry}?screen=new-project&state=${state}`); await sourcesStep();
+    assert.equal(await openSources.isDisabled(), true, `${state}: source selection fails closed`);
+    assert.equal(await last(), null);
+  }
+  await page.goto(`${entry}?screen=new-project&state=dispatch-ready&role=reviewer`); await sourcesStep();
+  assert.equal(await openSources.count(), 0); assert.equal(await sourceFiles.count(), 0);
+  await page.goto(`${entry}?screen=new-project&state=dispatch-paid-paused`); await sourcesStep();
+  assert.equal(await openSources.isEnabled(), true, 'local file-selection capture does not spend');
+  assert.deepEqual(sourceRequests, [], 'source selection must not upload bytes or metadata');
+  await page.unroute('**/*', captureSourceNetwork);
+  results.push({ key: 'source-selection-role-provenance-and-no-upload-guards', pass: true, realCommands: false });
   const metadataKeys = page.getByLabel('Declared metadata keys (session, sequence, subject)', { exact: true });
   const discardFields = page.getByRole('button', { name: 'Discard local changes and load current revision', exact: true });
   for (const width of [1280, 390]) {
@@ -438,6 +528,7 @@ try {
     const originalKeys = await metadataKeys.inputValue();
     await metadataKeys.fill('session, subject');
     assert.equal(await last(), null, 'editing metadata keys must not dispatch or assign groups');
+    assert.equal(await openSources.isDisabled(), true, 'save or discard metadata edits before opening a source selection');
     assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).isDisabled(), true);
     assert.equal(await page.getByRole('button', { name: 'Approve sources and groups and continue', exact: true }).isDisabled(), true);
     await discardFields.focus(); await page.keyboard.press('Enter');

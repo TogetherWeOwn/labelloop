@@ -113,6 +113,7 @@ export type ManagementCommand =
   | { kind: 'draft_assistant_classes'; draft_id: string; expected_revision: number }
   // Selection metadata only. No bytes, parsing, upload or import authority.
   | { kind: 'request_dataset_import'; draft_id: string; expected_revision: number; file: { name: string; size: number } }
+  | { kind: 'request_source_upload'; draft_id: string; expected_revision: number; files: readonly { name: string; size: number }[] }
   | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: Pick<ClassRow, 'name' | 'aliases' | 'parent' | 'exclusions' | 'mirror_safe'> }
   | { kind: 'add_reference'; draft_id: string; expected_revision: number; values: ReferenceInput }
   | { kind: 'resolve_pair'; draft_id: string; expected_revision: number; pair_id: string; same_group: boolean }

@@ -14,7 +14,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [referenceEntry, setReferenceEntry] = useState<{ revision: number; draftId: string } | null>(null);
   const [assistantEntry, setAssistantEntry] = useState<{ revision: number; draftId: string; scope: string } | null>(null);
   const [importEntry, setImportEntry] = useState<{ revision: number; draftId: string } | null>(null);
-  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null || assistantEntry !== null || importEntry !== null;
+  const [sourceEntry, setSourceEntry] = useState<{ revision: number; draftId: string } | null>(null);
+  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null || assistantEntry !== null || importEntry !== null || sourceEntry !== null;
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -67,7 +68,9 @@ export function NewProjectView({ data, actions }: ScreenProps) {
       {step === 'Labelling guide' && <DraftFields key={`${draft.id}:guide`} draft={draft} actions={actions} step={step} values={draft.guide} readOnly={readOnly} onDirtyChange={setUnsavedFields} labels={{ extent: 'Visible or estimated extent (default visible)', truncation: 'Targets at image edges', occlusion: 'Occluded targets', reflections: 'Reflections', min_target_px: 'Minimum target size in pixels', exhaustive: 'Exhaustive for scope', background: 'Out-of-scope background' }} />}
       {step === 'Sources and groups' && <>
         <Facts items={[[ 'Images / source groups', `${draft.sources.images} / ${draft.sources.groups}` ], ['Split preview', draft.sources.split_summary]]} />
-        <DraftFields key={`${draft.id}:sources`} draft={draft} actions={actions} step={step} values={{ metadata_keys: draft.sources.metadata_keys }} readOnly={readOnly} onDirtyChange={setUnsavedFields} labels={{ metadata_keys: 'Declared metadata keys (session, sequence, subject)' }} />
+        <CommandButton actions={actions} disabled={readOnly || pendingEdits} onClick={() => setSourceEntry({ revision: draft.revision, draftId: draft.id })}>Upload source images</CommandButton>
+        {sourceEntry && <SourceUpload draft={draft} actions={actions} revision={sourceEntry.revision} draftId={sourceEntry.draftId} readOnly={readOnly} onClose={() => setSourceEntry(null)} />}
+        <DraftFields key={`${draft.id}:sources`} draft={draft} actions={actions} step={step} values={{ metadata_keys: draft.sources.metadata_keys }} readOnly={readOnly || sourceEntry !== null} onDirtyChange={setUnsavedFields} labels={{ metadata_keys: 'Declared metadata keys (session, sequence, subject)' }} />
         <p>Declared metadata keys describe grouping constraints, not split assignments. Saving does not decide near-duplicate pairs or approve this step. The server validates the keys, computes transitive groups and invalidates dependent approvals.</p>
         <p>Source uploads and image connections are not connected in this module. Dimensions, hashes and split assignments below are read-only records, not browser calculations.</p>
         {data.provenance === 'fixture' && <p className="help">Invented source facts only. These digests are not hashes of delivered image files.</p>}
@@ -89,6 +92,35 @@ export function NewProjectView({ data, actions }: ScreenProps) {
     </section>
     <div className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={pendingEdits || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></div></div>
   </>;
+}
+
+function SourceUpload({ draft, actions, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {
+  const [files, setFiles] = useState<readonly { name: string; size: number }[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const conflict = draftId !== draft.id || revision !== draft.revision;
+  const reason = conflict ? 'The draft changed. Discard this selection and inspect current records before selecting sources again.' : files.length === 0 ? 'Select source image files first.' : files.some((file) => !file.name.trim() || !Number.isSafeInteger(file.size) || file.size <= 0) ? 'Select non-empty files. Image contents and formats are not validated here.' : undefined;
+  async function capture() {
+    if (readOnly || saving || reason) return;
+    setSaving(true);
+    const saved = await actions.send({ kind: 'request_source_upload', draft_id: draftId, expected_revision: revision, files });
+    setSaving(false); setFailed(!saved);
+    if (saved) onClose();
+  }
+  return <form className="stack" aria-label="Source upload request" onSubmit={(event) => { event.preventDefault(); void capture(); }}>
+    <h3>Upload source images</h3>
+    <Facts items={[[ 'Inspected draft', `${draftId} · revision ${revision}`]]} />
+    <Notice tone="info">Fixture selection capture only. No file contents are read or uploaded. Selecting files does not validate image formats, dimensions, hashes or permitted use.</Notice>
+    <div className="field"><label htmlFor="source-upload-files">Source image files</label><input id="source-upload-files" type="file" multiple disabled={readOnly || saving} onChange={(event) => { setFiles(Array.from(event.currentTarget.files ?? [], (file) => ({ name: file.name, size: file.size }))); setFailed(false); }} /></div>
+    {files.length > 0 && <Table caption="Selected source files" columns={['File', 'Bytes']}>
+      {files.map((file, index) => <tr key={index}><th scope="row">{file.name}</th><td>{file.size}</td></tr>)}
+    </Table>}
+    <p>Filenames and byte counts are untrusted metadata, not image identity. The server must validate and normalize originals, compute hashes and transitive groups, quarantine cross-split relationships and invalidate dependent approvals. This request cannot set source IDs, groups, splits, labels or approval.</p>
+    {conflict && <Notice tone="danger">The draft changed while this source selection was open. Your selection is retained; no request was retargeted to the new revision.</Notice>}
+    {failed && <Notice tone="danger">The source upload request was not confirmed. Your selection is retained; refresh uncertain records before trying again. No upload or grouping decision is implied.</Notice>}
+    <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void capture(); }}>{saving ? 'Capturing source request…' : 'Capture source upload request'}</CommandButton>
+    <Button disabled={saving || actions.busy} onClick={onClose}>Discard source selection</Button>
+  </form>;
 }
 
 function DatasetImport({ draft, actions, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {

@@ -53,7 +53,7 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
       read: () => Promise.resolve(structuredClone(snapshot)),
       execute: (command) => {
         capture(command);
-        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes' || command.kind === 'request_dataset_import') return new Promise((resolve) => {
+        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes' || command.kind === 'request_dataset_import' || command.kind === 'request_source_upload') return new Promise((resolve) => {
           finishSave = () => {
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;

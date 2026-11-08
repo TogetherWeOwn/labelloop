@@ -27,7 +27,7 @@ second registry, status poller or full-screen navigation should be mounted.
 
 | Accepted screen | Fixture implementation | Contract/browser coverage |
 | --- | --- | --- |
-| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, dataset file-selection and assistant draft request capture and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
+| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, dataset/source file-selection and assistant draft request capture and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
 | 03 Dataset releases | Accepted-label provenance, distribution table, changed images, exclusions, gate/build/quarantine/identical/frozen states, in-place freeze confirmation | Frozen release exposes no edit/freeze, compiler reason visible, freeze pins expected revision |
 | 04 Size/crop recipes | Shared-scale J22 frames, recorded affine/box geometry, image-level exclusion consequences, locked recipe versioning, compilation/artifact surfaces | Browser rectangles cross-checked with the Python compiler geometry, 640 frame twice 320, compile pins recipe IDs |
 | 05 Local training | Local-only run table and selected details, explicit start/cancel panels, fixed-shape development selection, settings mismatch table, retention and checkpoint hashes | Start pins release/recipe/base hash, size not user-overridden, cancel explicit, no paid start |
@@ -182,8 +182,29 @@ responses, not ingestion or server validation. `request_dataset_import` is not a
 generated wire command: actual upload transport, archive safety/limits, ontology
 mapping, ownership/licensing, split isolation, revision checks, approval invalidation
 and persistence remain with the producer. Do not wire this metadata-only capture
-to a real importer as-is. Its new browser/keyboard/axe/no-file-read/no-upload cases
-are pending on Actions.
+to a real importer as-is. Its browser/keyboard/axe/no-file-read/no-upload cases
+passed on Actions at `a6f51ea`; this is not working import evidence.
+
+Source-image selection uses the accepted Sources upload action with the same
+A11 fields, A1 controls, A14 notices and J13 table. Multiple files retain their
+order and individual byte counts, including same-name files; the browser does not
+merge them by filename or infer content identity. Opening, changing, clearing and
+explicitly discarding never dispatch. Capture pins the inspected draft/revision
+and sends only file names and byte counts. Missing selections or any empty file
+refuse the entire capture. Failed/conflicting selections remain visible; pending
+requests block selection changes, discard, metadata editing, navigation and approval.
+No file bytes, image decoding, hashes, upload, source IDs, groups, splits or labels
+are produced. The deferred fixture acknowledges capture without fabricating source
+facts or changing totals, pair decisions, split membership or approvals. Original
+pair pixels are still unavailable, so relationship decisions remain disabled.
+
+`request_source_upload` is not a generated wire command or a real ingest request.
+Transport, supported formats/limits, ownership/licensing, safe image normalization,
+immutable original storage, hashes, transitive grouping, cross-split quarantine,
+revision locking and approval invalidation remain with the producer. Selection
+metadata must not be wired to an importer as-is. Its new keyboard/axe, failure,
+revision, deferred-response, read-only and no-file-read/no-upload cases are pending
+on Actions. No new tokens, upload adapter, client, shell or persistent store is added.
 
 ## Remaining acceptance and final wiring obligations
 
@@ -204,14 +225,15 @@ These remain open; merging fixture components does not discharge them:
   Platform run extension and the operational canary/drift extension. Do not mount
   their standalone fixture screens as competing application screens.
 - Complete exact-head Actions evidence and native UX, QA and Security stages.
-  At `dc65c59`, [Actions run `42440540202`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42440540202),
-  [web job `128608652869`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42440540202/job/128608652869)
-  passed lint, types, 35 web unit cases, both builds, all **161 browser cases**
-  (including assistant request/source metadata lifecycles, keyboard/axe) and the
-  six-box compiler DOM cross-check. [Browser artifact `13601223266`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42440540202/artifacts/13601223266).
-  CI/ci-ok, CodeQL and required gitleaks passed on that head. The earlier
-  same-name assistant assertion is repaired; no scanner waiver was needed.
-  These results predate dataset file selection and do not verify its new cases.
+  At `a6f51ea`, [Actions run `42441797093`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441797093),
+  [web job `128612421496`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441797093/job/128612421496)
+  passed lint, types, 35 web unit cases, both builds, all **166 browser cases**
+  (including dataset selection/assistant/source metadata lifecycles, keyboard/axe)
+  and the six-box compiler DOM cross-check. [Browser artifact `13601484984`](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441797093/artifacts/13601484984).
+  CI/ci-ok, [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441796799)
+  and [required gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42441796800)
+  passed on that head. No scanner waiver was needed.
+  These results predate source file selection and do not verify its new cases.
   A supplemental fresh-context review of `4272a28` was completed with eight
   findings addressed in `752a914`; it is not native approval. Screenshots
   generated by mockups are not browser evidence.
