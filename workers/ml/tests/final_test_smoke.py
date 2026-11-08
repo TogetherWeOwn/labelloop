@@ -58,6 +58,52 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
     # Registering the selection's development identity as locked after selection
     # cannot be hidden by replaying the earlier development role or report.
     with engine.begin() as connection, connection.begin_nested() as transaction:
+        # Prepare a different development selection before exposing the reserved
+        # identity. These copied scores exercise lifecycle mechanics, not quality.
+        replay_dataset_key = dataset_key + "-role-development"
+        replay_development = replace(
+            report,
+            run_id=report.run_id + "-role-development",
+            dataset_release_id=replay_dataset_key,
+        )
+        replay_variant_id = seed_variant(
+            connection,
+            replace(result.request, dataset_release_id=replay_dataset_key),
+            manifest | {"release_id": replay_dataset_key},
+        )
+        replay_final = synthetic_final(
+            report,
+            run_id=report.run_id + "-role-final",
+            dataset_id=development.release_id,
+        )
+        development_variant_id = connection.execute(
+            sa.select(model_schema.evaluation_run.c.variant_id).where(
+                model_schema.evaluation_run.c.run_key == report.run_id
+            )
+        ).scalar_one()
+        save_evaluation(
+            connection,
+            model_key=model.release_id,
+            variant_id=replay_variant_id,
+            report=replay_development,
+        )
+        save_evaluation(
+            connection,
+            model_key=model.release_id,
+            variant_id=development_variant_id,
+            report=replay_final,
+        )
+        replay_selection = record_candidate_selection(
+            connection,
+            project_key=model.project_id,
+            model_key=model.release_id,
+            selection_key="role-exposure-" + model.release_id,
+            development_key=replay_development.run_id,
+            development_set=EvaluationSet(
+                replay_dataset_key, model.project_id, ("role-development-group",), "development"
+            ),
+            actor_id=actor,
+        )
         register_final_test(
             connection, dataset=replace(development, role="locked_final_test"), actor_id=actor
         )
@@ -82,13 +128,34 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
                 actor_id=actor,
             )
         assert load_final_test(connection, **scope).revision == 0
+        development_scope = dict(project_key=model.project_id, dataset_key=development.release_id)
+        unexposed = load_final_test(connection, **development_scope)
+        with pytest.raises(ValueError, match="unexposed final test"):
+            invalidate_final_test(
+                connection,
+                **development_scope,
+                action="adapt",
+                reason="must not adapt before exposure",
+                expected_revision=0,
+                actor_id=actor,
+            )
+        assert load_final_test(connection, **development_scope) == unexposed
+        replay_exposed = expose_final_test(
+            connection,
+            **development_scope,
+            model_key=model.release_id,
+            selection_key=replay_selection.selection_id,
+            evaluation_key=replay_final.run_id,
+            expected_revision=0,
+            actor_id=actor,
+        )
+        assert replay_exposed.assessments
         invalidate_final_test(
             connection,
-            project_key=model.project_id,
-            dataset_key=development.release_id,
+            **development_scope,
             action="adapt",
             reason="explicitly reclassified as development/regression",
-            expected_revision=0,
+            expected_revision=1,
             actor_id=actor,
         )
         assert (
@@ -101,7 +168,7 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
             dataset_key=development.release_id,
             action="quarantine",
             reason="related group integrity finding",
-            expected_revision=1,
+            expected_revision=2,
             actor_id=actor,
         )
         with pytest.raises(ValueError, match="quarantined"):

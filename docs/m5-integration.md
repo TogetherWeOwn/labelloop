@@ -6,6 +6,31 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Final-test fixture repair and latest completed evidence
+
+At exact head `c38285fa1cdfc48c761ef94f6f1d4e62d8fce13b`,
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42479456754) failed:
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42479456754/job/128728030122)
+reported **2 failed, 17 passed**. Canonical seeding completed, but both recipes
+reached a fixture that attempted adaptation of an unexposed final test. The
+production lifecycle guard correctly rejected that attempt; later qualification
+assertions did not complete. The separate budget step passed **24 tests**.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42479456754/job/128728030083)
+passed **1419 tests, 80 skipped**. Queue PostgreSQL, migration round trip and all
+four parent upgrades, dev-stack, web-build, lint, types, import-contract and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42479456350) passed.
+These successes do not clear failed CI or establish HTTP/UI/restore acceptance.
+
+The corrected paired fixture retains the role-replay rejection controls, explicitly
+asserts unexposed adaptation fails without changing the journal, then prepares a
+separate synthetic development selection and exposes the reserved dataset through
+the real store before adapting it. Quarantine uses the resulting revision. All
+auxiliary reports, links, releases, selections and events remain inside the rolled-back
+savepoint so the original durable selection remains unchanged. Copied scores and
+invented groups prove mechanics only, never independent quality. No production
+transition, migration, authorization or quality gate is changed. The new assertions
+await corrected-head GitHub Actions; no local tests or builds ran.
+
 ## Qualification/auth migration composition
 
 The independently delivered auth/jobs repair is merged in [PR #31](https://github.com/TogetherWeOwn/labelloop/pull/31),
