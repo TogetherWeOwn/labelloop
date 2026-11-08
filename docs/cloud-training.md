@@ -48,13 +48,25 @@ unpersisted start pricing instead leaves a durable `pricing_unconfirmed` marker;
 `pause_pricing_uncertain` fails closed on further paid work without inventing a
 price/actual. The pause is attempted even on a receipt-save exception and retried
 on recovery. Readback cannot resolve pricing, and there is no automatic resume.
-A transaction bound
-to both model and provider run ID supplies the actual, with charge attribution and
-settlement stored atomically. Recovery restores that durable attribution before
-model readback, even during a model-endpoint outage. A replacement provider job
-is quarantined as `identity_mismatch`, while late billing for the original bound
-job remains independently reconcilable. Replacement checkpoints are never downloaded. Until attribution, the ledger retains the reservation estimate
-even when training failed or was cancelled. Downloaded `best.pt` is bounded and hashed by
+`TrainingTransport.charge` returns only an authoritative **FINAL TOTAL** bound to
+both the original model and provider run ID, or `None`. Interim, partial, estimated
+and unknown totals must normalize to `None`, even with a valid transaction ID and
+attribution. Real integrations need authoritative billing finality evidence; without
+it they must return `None`. Neither a terminal model state nor attribution alone
+proves finality, and the backend cannot detect an adapter lying about it. A final
+billing total can arrive while model readback is stale/running or unavailable;
+there is no terminal-model gate.
+
+`Charge` represents that final total, not an increment. `BudgetPort.reconcile`
+stores the final amount and original-job attribution atomically and immutably;
+repeating the same settlement is idempotent. `None` keeps the estimate counted and
+actual unset until final, and never overwrites settlement. `settled_charge` restores
+the same durable final total and attribution after a crash before model readback,
+even during a model-endpoint outage. A replacement provider job is quarantined as
+`identity_mismatch`, while late final billing for the original bound job remains
+independently reconcilable. Replacement checkpoints are never downloaded. Until an
+authoritative attributed final total is available, the ledger retains the reservation
+estimate even when training failed or was cancelled. Downloaded `best.pt` is bounded and hashed by
 the application, then placed in the injected content-addressed artifact store.
 No vendor hash is assumed. Provider initialization digest, package versions,
 Albumentations behavior, dataloader retention and fixed-shape checkpoint selection
@@ -129,7 +141,12 @@ plan v0.3 and SDK commit `8af3921`, not captured account traffic. The HTTP trans
 owner supplies raw pinned OpenAPI fixture qualification separately. Fixtures cover
 both sizes/NMS modes, missing controls, concurrent/restarted attempts, uncertain
 create/start, 402/503, cost attribution, captured dataset identity and checkpoint
-limits. No paid training or live Platform call is allowed in CI.
+limits. Synthetic billing normalization returns `None` for nonfinal totals (including
+an interim 10,000 micro-USD), retaining the 172,500 estimate across active, restarted,
+quarantined and model-outage advances; an authoritative final 120,000 replaces it
+once. The outage fixture also supplies explicitly final billing despite cached
+running state. These fixtures qualify the port contract, not a real HTTP adapter's
+finality detection. No paid training or live Platform call is allowed in CI.
 
 ## Dependency and verification scope
 

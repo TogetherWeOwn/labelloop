@@ -348,6 +348,7 @@ def test_active_job_billing_recovers_during_model_outage():
     r.transport.progress("running")
     assert advance(r).state == "active"
     r.transport.charge_queries.clear()
+    # Authoritative FINAL billing, despite stale cached running state/model outage.
     r.transport.charge_value = replace(Charge(**FIXTURE["charge"]), actual_microusd=1_000_000)
 
     def unavailable(grant, model_id, p):
@@ -366,6 +367,68 @@ def test_active_job_billing_recovers_during_model_outage():
         assert r.ledger.gate.pause_reason == "estimate_overrun"
     assert r.transport.charge_queries == [("fixture-model", "fixture-job")]
     assert result.checkpoint is None and "download" not in r.transport.calls
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("scenario", ["active", "restarted", "quarantined", "model_outage"])
+def test_nonfinal_billing_keeps_estimate_until_authoritative_final_total(scenario):
+    r = rig()
+    billing = SimpleNamespace(state="interim", total_microusd=10_000)
+    original_charge = r.transport.charge
+
+    def normalized_charge(grant, model_id, provider_run_id):
+        original_charge(grant, model_id, provider_run_id)
+        # Synthetic billing evidence, not a claim about any real provider schema.
+        if billing.state != "final":
+            return None
+        return replace(Charge(**FIXTURE["charge"]), actual_microusd=billing.total_microusd)
+
+    r.transport.charge = normalized_charge
+    advance(r)
+    r.transport.progress("running")
+    assert advance(r).state == "active"
+    if scenario != "active":
+        r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    if scenario == "quarantined":
+        r.transport.model = replace(r.transport.model, provider_run_id="replacement-job")
+    elif scenario == "model_outage":
+
+        def unavailable(grant, model_id, p):
+            raise TransportError(503)
+
+        r.transport.read_model = unavailable
+    r.transport.charge_queries.clear()
+    for state in ("interim", "partial", "estimated", "unknown"):
+        billing.state = state
+        result = advance(r)
+        assert result.state == ("identity_mismatch" if scenario == "quarantined" else "active")
+        assert result.provider_run_id == "fixture-job" and result.charge is None
+        entry = r.ledger.read(r.plan.spend_request())
+        assert entry.state == "unconfirmed" and entry.actual is None
+        assert entry.exposure == r.ledger.gate.monthly_exposure("2026-11") == 172_500
+        assert r.ledger.settled_charge(r.plan.spend_request()) is None
+        if scenario == "model_outage":
+            assert result.error_code == "reconcile_unavailable"
+    assert len(r.transport.charge_queries) == 4
+
+    billing.state, billing.total_microusd = "final", 120_000
+    final = advance(r)
+    assert final.charge == Charge(**FIXTURE["charge"])
+    assert final.provider_run_id == "fixture-job" and final.provider_state == "running"
+    assert final.state == ("identity_mismatch" if scenario == "quarantined" else "active")
+    assert r.ledger.settled_charge(r.plan.spend_request()) == final.charge
+    entry = r.ledger.read(r.plan.spend_request())
+    assert entry.state == "settled" and entry.actual == entry.exposure == 120_000
+    assert r.ledger.gate.monthly_exposure("2026-11") == 120_000
+    settled_gate = r.ledger.gate
+    # Late partial data cannot replace the immutable final settlement, even on restart.
+    billing.state, billing.total_microusd = "interim", 10_000
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    assert advance(r).charge == final.charge
+    assert r.ledger.gate is settled_gate and len(r.ledger.settlements) == 1
+    assert len(r.transport.charge_queries) == 5
+    assert set(r.transport.charge_queries) == {("fixture-model", "fixture-job")}
+    assert final.checkpoint is None and "download" not in r.transport.calls
     assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
 
 

@@ -48,6 +48,12 @@ class SecretPort(Protocol):
 
 @dataclass(frozen=True)
 class Charge:
+    """Authoritative final total for one model/provider job, never an interim amount.
+
+    The trusted transport establishes finality before constructing this value;
+    attribution and a nonnegative amount alone do not establish finality.
+    """
+
     transaction_id: str
     model_id: str
     provider_run_id: str
@@ -107,11 +113,20 @@ class BudgetPort(Protocol):
         ...
 
     def settled_charge(self, request: SpendRequest) -> Charge | None:
-        """Read attribution saved atomically with ledger settlement, including after crash."""
+        """Read the final total and attribution saved atomically with settlement.
+
+        Return None until settled; recover the same immutable Charge after a crash.
+        Never expose interim or estimated billing as a settled charge.
+        """
         ...
 
     def reconcile(self, request: SpendRequest, charge: Charge | None) -> LedgerEntry:
-        """Settle charge and its attribution atomically; None never overwrites settlement."""
+        """Atomically settle an authoritative final total and its original-job attribution.
+
+        Settlement is immutable and idempotent for the same Charge, not incremental
+        accounting. None keeps the estimate counted and actual unset until final;
+        it never overwrites an existing settlement.
+        """
         ...
 
     def pause_insufficient_credits(self, request: SpendRequest) -> None:
@@ -166,7 +181,16 @@ class TrainingTransport(Protocol):
     ) -> ModelSnapshot: ...
 
     def charge(self, grant: ConnectionGrant, model_id: str, provider_run_id: str) -> Charge | None:
-        """Return an attributable run charge, not estimatedCost or account balance."""
+        """Return only the authoritative FINAL TOTAL for this original model/provider job.
+
+        Return None for interim, partial, estimated or unknown totals, including
+        an attributable transaction whose finality is unconfirmed. estimatedCost
+        and account balance are never actuals. Real integrations must establish
+        finality from authoritative billing evidence or return None; neither a
+        transaction ID nor terminal model state proves it. A final charge can be
+        returned while model readback is stale/running or unavailable. The backend
+        validates attribution/amount, but cannot detect an adapter lying about finality.
+        """
         ...
 
     def download_best(
