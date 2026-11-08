@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from uuid import UUID, uuid4
 
 import psycopg
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from labelloop_core.json_records import canonical_json
 
@@ -22,8 +22,8 @@ from .management_model_worker import candidate_release
 from .management_ports import ManagementPrincipal, MutationContext
 from .management_train_worker import decode_training
 from .management_training import verified_variant
-from .model_schema import evaluation_run, model_release, training_run
-from .model_store import decode_release, record_digest, validate_model, variant_context
+from .model_schema import model_release
+from .model_store import decode_release, record_digest, validate_model
 from .schema import canonical_dataset_release, canonical_event, preprocessing_recipe, project
 from .schema import yolo_dataset_variant as variant_table
 
@@ -51,50 +51,59 @@ class ApprovedDevelopmentProtocol:
 
 def verified_model(connection, row, workspace_id: UUID):
     """Require the existing fenced model publication and shared model-store gate."""
-    receipts = (
-        connection.execute(
-            select(canonical_event.c.payload).where(
-                canonical_event.c.event_type == "management.model_exported",
-                canonical_event.c.aggregate_id == row.release_key,
-                canonical_event.c.actor_kind == "system",
-                canonical_event.c.payload["workspace_id"].as_string() == str(workspace_id),
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if len(receipts) != 1:
+    driver = connection.connection.driver_connection
+    if not isinstance(driver, psycopg.Connection):
+        refuse("management_unavailable")
+    return pinned_model(driver, row, workspace_id)
+
+
+def pinned_model(connection: psycopg.Connection, row, workspace_id: UUID):
+    """Reuse model publication authority inside the queue's native transaction."""
+    from types import SimpleNamespace
+
+    from psycopg.rows import dict_row
+    from sqlalchemy.dialects.postgresql import dialect
+
+    from .model_store import variant_context_query
+
+    release = decode_release(row.record)
+    if release.release_id != row.release_key:
         refuse("missing_evidence")
-    evidence = receipts[0]
-    published = connection.execute(
-        text(
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT payload FROM canonical_event WHERE event_type='management.model_exported' "
+            "AND aggregate_id=%s AND actor_kind='system' AND payload->>'workspace_id'=%s",
+            (row.release_key, str(workspace_id)),
+        )
+        receipts = cursor.fetchall()
+        if len(receipts) != 1:
+            refuse("missing_evidence")
+        evidence = receipts[0]["payload"]
+        cursor.execute(
             "SELECT j.input,j.project_key,j.kind,j.status,j.generation,a.generation AS applied,"
             "s.payload AS exported,t.payload AS trained FROM worker_job j "
             "JOIN worker_application a ON a.job_id=j.job_id "
             "JOIN worker_stage_artifact s ON s.job_id=j.job_id AND s.stage='export' "
             "JOIN worker_stage_artifact t ON t.job_id=j.job_id AND t.stage='training' "
-            "WHERE j.job_id=:id"
-        ),
-        {"id": evidence["job_id"]},
-    ).one_or_none()
-    release = decode_release(row.record)
-    if release.release_id != row.release_key:
-        refuse("missing_evidence")
-    run = (
-        connection.execute(select(training_run).where(training_run.c.id == row.training_run_id))
-        .mappings()
-        .one()
-    )
-    reports = (
-        connection.execute(
-            select(evaluation_run).where(
-                evaluation_run.c.training_run_id == run["id"],
-                evaluation_run.c.run_key.in_(release.evaluation_run_ids),
-            )
+            "WHERE j.job_id=%s",
+            (evidence["job_id"],),
         )
-        .mappings()
-        .all()
-    )
+        saved = cursor.fetchone()
+        published = SimpleNamespace(**saved) if saved is not None else None
+        cursor.execute("SELECT * FROM training_run WHERE id=%s", (row.training_run_id,))
+        run = cursor.fetchone()
+        if run is None:
+            refuse("missing_evidence")
+        cursor.execute(
+            "SELECT * FROM evaluation_run WHERE training_run_id=%s AND run_key=ANY(%s)",
+            (run["id"], list(release.evaluation_run_ids)),
+        )
+        reports = cursor.fetchall()
+        query = variant_context_query(run["variant_id"]).compile(dialect=dialect())
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+        if context is None:
+            refuse("missing_evidence")
     if (
         published is None
         or published.status != "succeeded"
@@ -127,9 +136,7 @@ def verified_model(connection, row, workspace_id: UUID):
         != release
     ):
         refuse("missing_evidence")
-    validate_model(
-        variant_context(connection, run["variant_id"]), run, release, row.export_evidence, reports
-    )
+    validate_model(context, run, release, row.export_evidence, reports)
     return release, evidence["job_id"]
 
 

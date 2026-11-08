@@ -402,6 +402,23 @@ def save_evaluation(
     )
     release = decode_release(row["record"])
     context = variant_context(connection, variant_id)
+    validate_evaluation(context, release, report)
+    with connection.begin_nested():
+        evaluation_id = connection.execute(
+            sa.insert(db.evaluation_run).values(
+                run_key=report.run_id,
+                training_run_id=row["training_run_id"],
+                variant_id=variant_id,
+                record=json_record(report),
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            sa.insert(db.model_evaluation).values(model_id=row["id"], evaluation_id=evaluation_id)
+        )
+
+
+def validate_evaluation(context, release: ModelRelease, report: EvaluationReport) -> None:
+    """Shared frozen lineage gate; callers separately own protocol/role authority."""
     if (
         not all(
             context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
@@ -422,17 +439,35 @@ def save_evaluation(
         or report.role not in {"development", "calibration", "locked_final_test"}
     ):
         raise ValueError("independent evaluation does not match the model and frozen release")
-    with connection.begin_nested():
-        evaluation_id = connection.execute(
-            sa.insert(db.evaluation_run).values(
-                run_key=report.run_id,
-                training_run_id=row["training_run_id"],
-                variant_id=variant_id,
-                record=json_record(report),
-            )
-        ).inserted_primary_key[0]
-        connection.execute(
-            sa.insert(db.model_evaluation).values(model_id=row["id"], evaluation_id=evaluation_id)
+
+
+def save_evaluation_transaction(
+    connection: psycopg.Connection, *, model_key: str, variant_id: object, report: EvaluationReport
+) -> None:
+    """Append report/link through the native queue transaction, never a second commit."""
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("evaluation publication requires an active caller transaction")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM model_release WHERE release_key=%s", (model_key,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("missing evaluation model")
+        query = variant_context_query(variant_id).compile(dialect=dialect())
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+        if context is None:
+            raise ValueError("missing evaluation variant")
+    validate_evaluation(context, decode_release(row["record"]), report)
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO evaluation_run(run_key,training_run_id,variant_id,record) "
+            "VALUES (%s,%s,%s,%s) RETURNING id",
+            (report.run_id, row["training_run_id"], variant_id, Jsonb(json_record(report))),
+        )
+        evaluation_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO model_evaluation(model_id,evaluation_id) VALUES (%s,%s)",
+            (row["id"], evaluation_id),
         )
 
 

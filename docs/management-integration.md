@@ -638,6 +638,37 @@ its report; it is still not a DB-backed new-project-to-export proof. These are
 commissioned cases until exact-head Actions verifies them. Completion fencing and
 report/link publication must be composed before this job is available end to end.
 
+### Fenced standalone evaluation publication (partial, unmounted)
+
+`CanonicalLocalEvaluationPublisher.publish` is the existing queue's completion
+sink for the single `evaluation` stage. It rechecks the durable human intent,
+workspace/project/model ownership, pinned protocol and saved stage digest inside
+that caller-owned psycopg transaction. Shared native compiler/model authority
+helpers serve both the SQLAlchemy intent/execution readers and this sink; no
+second connection, commit, object read or inference call is used for publication.
+Historical source membership, class support, coverage identities, derivative
+counts and observed recipe tensor shapes must match the pinned development run.
+Locked-final-test or substituted run/weights/recipe evidence is refused.
+
+The model store's existing evaluation lineage gate is shared by its SQLAlchemy
+and native transaction adapters. Publication appends the report and model link,
+then an attributed completion receipt carrying requester, worker, protocol, job,
+generation and stage digest. The existing queue application fence commits all
+three with job success, or rolls them all back on grant, caller or deadline
+failure. The immutable model payload and training selection are never rewritten;
+`load_release` includes the separately linked evidence. No registry promotion,
+qualification or final-test authority is added.
+
+Disposable Actions cases use real canonical/compiler/queue/model authority with
+explicitly synthetic predictions at both sizes. They cover precommit invisibility,
+unchanged model history, linked reads, three missing-grant rollbacks and saved
+retry, caller/deadline rollback, expired/cancelled/superseded leases, saved-stage
+resume without ML/object access, forged intent/broad audit-role refusal and pinned
+report/support/coverage/sample/shape refusals. These new cases are commissioned,
+not verified until exact-head Actions passes. Default worker registration, runtime
+grants, final mounting and DB-backed actual CPU project-to-export acceptance
+remain incomplete; the real asset-admission Security condition is unchanged.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`

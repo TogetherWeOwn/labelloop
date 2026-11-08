@@ -1,4 +1,4 @@
-"""Trusted development-evaluation stage; no final-test, publication or default runner.
+"""Trusted development evaluation and fenced publication; no final-test/default runner.
 
 The ML process injects the delivered predict_samples adapter. Identity, truth,
 recipe transforms and metrics stay code-owned; predictor output is only detections.
@@ -14,6 +14,9 @@ from types import SimpleNamespace
 from typing import Protocol
 from uuid import UUID
 
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from sqlalchemy import Engine, select, text
 
 from labelloop_compiler.compiler import json_bytes, transform_document
@@ -25,14 +28,15 @@ from labelloop_core.training import InferencePolicy
 from .management_compile_worker import (
     CompilationObjects,
     CompileContext,
+    CompileLease,
     content_key,
     pinned_release,
 )
-from .management_evaluation import ApprovedDevelopmentProtocol, verified_model
+from .management_evaluation import ApprovedDevelopmentProtocol, pinned_model, verified_model
 from .management_train_worker import checked_object, frozen_validation_images, materialize_dataset
-from .management_training import verified_variant
+from .management_training import pinned_variant, verified_variant
 from .model_schema import model_release
-from .model_store import record_digest
+from .model_store import decode_report, record_digest, save_evaluation_transaction
 from .schema import canonical_dataset_release, canonical_event, preprocessing_recipe, project
 from .schema import yolo_dataset_variant as variant_table
 
@@ -253,4 +257,163 @@ class CanonicalLocalEvaluationWorker:
         model, manifest, images = self.resolve(context)
         return evaluate_model(
             context.lease.input["run_id"], model, manifest, images, self.objects, self.predictor
+        )
+
+
+@dataclass(frozen=True)
+class CanonicalLocalEvaluationPublisher:
+    workspace_id: UUID
+
+    def publish(self, connection: psycopg.Connection, lease: CompileLease, artifacts: dict) -> None:
+        """JobStore.complete sink: report, model link and audit share its application fence."""
+        inputs, record = lease.input, artifacts["evaluation"]
+        if (
+            connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS
+            or lease.kind != "evaluate_local"
+            or inputs["workspace_id"] != str(self.workspace_id)
+            or len(canonical_json(record)) > 2_000_000
+        ):
+            raise ValueError("evaluation requires a bounded owned caller transaction")
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                "SELECT has_table_privilege(current_user,'canonical_event',"
+                "'UPDATE,DELETE,TRUNCATE') AS broad"
+            )
+            if cursor.fetchone()["broad"]:
+                raise ValueError("evaluation runtime must not rewrite canonical audit")
+            cursor.execute(
+                "SELECT input,project_key,kind FROM worker_job WHERE job_id=%s", (lease.job_id,)
+            )
+            job = cursor.fetchone()
+            cursor.execute(
+                "SELECT payload FROM canonical_event "
+                "WHERE event_type='management.start_evaluation' "
+                "AND aggregate_id=%s AND actor_kind='human' AND actor_id=%s "
+                "AND payload->>'workspace_id'=%s AND payload->'evidence'->>'job_id'=%s",
+                (inputs["model_id"], inputs["requested_by"], str(self.workspace_id), lease.job_id),
+            )
+            receipts = cursor.fetchall()
+            cursor.execute(
+                "SELECT payload,sha256 FROM worker_stage_artifact "
+                "WHERE job_id=%s AND stage='evaluation'",
+                (lease.job_id,),
+            )
+            stage = cursor.fetchone()
+            cursor.execute(
+                "SELECT m.* FROM model_release m JOIN project p ON p.id=m.project_id "
+                "WHERE m.release_key=%s AND p.id=%s AND p.workspace_id=%s AND p.project_key=%s",
+                (inputs["model_id"], inputs["project_id"], self.workspace_id, lease.project_key),
+            )
+            model = cursor.fetchone()
+            cursor.execute(
+                "SELECT v.*,r.release_key,p.recipe_key,p.policy,p.immutable "
+                "FROM yolo_dataset_variant v JOIN canonical_dataset_release r ON r.id=v.release_id "
+                "JOIN preprocessing_recipe p ON p.id=v.recipe_id "
+                "WHERE v.id=%s AND r.project_id=%s AND r.release_key=%s",
+                (inputs["variant_id"], inputs["project_id"], inputs["dataset_release_id"]),
+            )
+            variant = cursor.fetchone()
+            digest = hashlib.sha256(canonical_json(record)).hexdigest()
+            if (
+                job is None
+                or job["kind"] != lease.kind
+                or job["project_key"] != lease.project_key
+                or canonical_json(job["input"]) != canonical_json(inputs)
+                or len(receipts) != 1
+                or canonical_json(receipts[0]["payload"]["evidence"]["inputs"])
+                != canonical_json(inputs)
+                or receipts[0]["payload"]["result"]["id"] != inputs["run_id"]
+                or stage is None
+                or stage["sha256"] != digest
+                or canonical_json(stage["payload"]) != canonical_json(record)
+                or model is None
+                or variant is None
+            ):
+                raise ValueError("evaluation differs from saved stage or owned authorized intent")
+            protocol = inputs["protocol"]
+            ApprovedDevelopmentProtocol(
+                model["project_id"], protocol["id"], protocol["revision"], variant["id"]
+            )
+            release, model_job_id = pinned_model(
+                connection, SimpleNamespace(**model), self.workspace_id
+            )
+            manifest, manifest_digest, compile_job_id = pinned_variant(
+                connection, SimpleNamespace(**variant), self.workspace_id
+            )
+            if (
+                protocol["role"] != "development"
+                or protocol["split"] != "val"
+                or inputs["model_sha256"] != record_digest(model["record"])
+                or inputs["model_job_id"] != model_job_id
+                or inputs["compile_job_id"] != compile_job_id
+                or inputs["manifest_sha256"] != manifest_digest
+                or inputs["manifest_key"] != content_key(manifest_digest)
+                or inputs["weights_key"] != content_key(release.weights_sha256)
+                or inputs["policy"] != asdict(release.policy)
+            ):
+                raise ValueError("evaluation differs from pinned protocol or publication")
+            cursor.execute("SELECT input FROM worker_job WHERE job_id=%s", (compile_job_id,))
+            compiled = cursor.fetchone()["input"]
+        _, frozen, _ = pinned_release(
+            connection,
+            SimpleNamespace(
+                job_id=compile_job_id,
+                project_key=lease.project_key,
+                kind="compile_variant",
+                input=compiled,
+            ),
+            self.workspace_id,
+        )
+        images = frozen_validation_images(frozen, manifest, include_excluded=True)
+        report = decode_report(record["report"])
+        sample_count = sum(sample["split"] == "val" for sample in manifest["samples"])
+        support = Counter(obj.class_id for image in images for obj in image.objects)
+        if (
+            report.run_id != inputs["run_id"]
+            or report.role != "development"
+            or report.overall.images != len(images)
+            or report.overall.support != sum(support.values())
+            or any(
+                metrics.support != support[class_id]
+                for class_id, metrics in report.overall.per_class.items()
+            )
+            or Counter(item.asset_id for item in report.coverage)
+            != Counter(image.asset_id for image in images)
+            or type(record["sample_count"]) is not int
+            or record["sample_count"] != sample_count
+            or len(record["tensor_shapes"]) < sample_count
+        ):
+            raise ValueError("evaluation report differs from pinned run or frozen source support")
+        for shape in record["tensor_shapes"]:
+            release.policy.assert_shape(tuple(shape), stride=1)
+            if shape[0] != 1:
+                raise ValueError("evaluation requires observed single-image tensors")
+        save_evaluation_transaction(
+            connection,
+            model_key=inputs["model_id"],
+            variant_id=UUID(inputs["variant_id"]),
+            report=report,
+        )
+        connection.execute(
+            "INSERT INTO canonical_event(event_type,aggregate_id,expected_revision,"
+            "payload,actor_kind,actor_id) "
+            "VALUES ('management.evaluation_completed',%s,1,%s,'system',%s)",
+            (
+                report.run_id,
+                Jsonb(
+                    {
+                        "workspace_id": str(self.workspace_id),
+                        "project_id": inputs["project_id"],
+                        "project_key": lease.project_key,
+                        "model_id": inputs["model_id"],
+                        "variant_id": inputs["variant_id"],
+                        "protocol": protocol,
+                        "job_id": lease.job_id,
+                        "generation": lease.generation,
+                        "requested_by": inputs["requested_by"],
+                        "stage_sha256": digest,
+                    }
+                ),
+                lease.worker_id,
+            ),
         )

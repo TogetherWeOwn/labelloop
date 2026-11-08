@@ -10,7 +10,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from threading import Barrier
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from PIL import Image
@@ -104,6 +104,256 @@ def database(tmp_path):
             connection.execute(text(f'DROP OWNED BY "{role}"'))
             connection.execute(text(f'DROP ROLE "{role}"'))
         owner.dispose()
+
+
+def prepared_evaluation_publication(
+    database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
+):
+    from labelloop_api.management_evaluate_worker import CanonicalLocalEvaluationPublisher
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, accepted, lease, _, _ = prepared_evaluation_stage(
+        database, compilation, compiler_worker, recipe
+    )
+    record = worker.evaluate(StageContext(compiler_worker.store, lease, {}))
+    return CanonicalLocalEvaluationPublisher(worker.workspace_id), accepted, lease, record
+
+
+def evaluation_publication_state(owner, lease):
+    with owner.connect() as connection:
+        rows = connection.execute(
+            text("SELECT * FROM evaluation_run WHERE run_key=:id"), {"id": lease.input["run_id"]}
+        ).all()
+        links = connection.execute(
+            text(
+                "SELECT l.* FROM model_evaluation l JOIN evaluation_run e ON e.id=l.evaluation_id "
+                "WHERE e.run_key=:id"
+            ),
+            {"id": lease.input["run_id"]},
+        ).all()
+        events = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.evaluation_completed",
+                canonical_event.c.aggregate_id == lease.input["run_id"],
+            )
+        ).all()
+        applications = connection.execute(
+            text("SELECT count(*) FROM worker_application WHERE job_id=:id"), {"id": lease.job_id}
+        ).scalar_one()
+        job = connection.execute(
+            text("SELECT status,generation FROM worker_job WHERE job_id=:id"), {"id": lease.job_id}
+        ).one()
+    return rows, links, events, applications, job
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_evaluation_publication_is_atomic_and_does_not_rewrite_model(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_api.model_store import load_release
+
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    with database[1].connect() as connection:
+        original = connection.execute(
+            text("SELECT id,record FROM model_release WHERE release_key=:id"),
+            {"id": lease.input["model_id"]},
+        ).one()
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+
+    compiler_worker.store.complete(lease, ("evaluation",), sink)
+    rows, links, events, applications, job = evaluation_publication_state(database[1], lease)
+    assert len(rows) == len(links) == len(events) == applications == 1
+    assert rows[0].record == record["report"] and rows[0].run_key == accepted.resource.id
+    assert rows[0].variant_id == UUID(lease.input["variant_id"])
+    assert links[0].model_id == original.id
+    assert events[0].actor_kind == "system" and events[0].actor_id == lease.worker_id
+    assert events[0].payload["requested_by"] == Actor().id
+    assert events[0].payload["protocol"] == lease.input["protocol"]
+    assert events[0].payload["generation"] == lease.generation
+    assert job.status == "succeeded"
+    with database[1].connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT record FROM model_release WHERE id=:id"), {"id": original.id}
+            ).scalar_one()
+            == original.record
+        )
+        loaded = load_release(connection, original.id)
+        assert loaded is not None and accepted.resource.id in loaded.evaluation_run_ids
+
+
+@pytest.mark.parametrize("table", ["evaluation_run", "model_evaluation", "canonical_event"])
+def test_evaluation_publication_grant_failure_rolls_back_and_resumes(
+    database, compilation, compiler_worker, table
+):
+    import psycopg
+
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    with database[1].begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON {table} FROM "{database[2]}"'))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+    with database[1].begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON {table} TO "{database[2]}"'))
+    compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    assert len(evaluation_publication_state(database[1], lease)[0]) == 1
+
+
+@pytest.mark.parametrize("failure", ["caller", "deadline"])
+def test_evaluation_publication_late_failure_rolls_back_application(
+    database, compilation, compiler_worker, failure
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        if failure == "caller":
+            raise RuntimeError("synthetic caller failure")
+        connection.execute(
+            "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+            "WHERE job_id=%s",
+            (lease.job_id,),
+        )
+
+    with pytest.raises(RuntimeError if failure == "caller" else LeaseLost):
+        compiler_worker.store.complete(lease, ("evaluation",), sink)
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+
+
+@pytest.mark.parametrize("terminal", ["expired", "cancelled", "superseded"])
+def test_evaluation_publication_refuses_lost_lease(
+    database, compilation, compiler_worker, terminal
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    if terminal == "cancelled":
+        compiler_worker.store.cancel(lease.project_key, lease.job_id)
+    else:
+        with database[1].begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                    "WHERE job_id=:id"
+                ),
+                {"id": lease.job_id},
+            )
+        if terminal == "superseded":
+            assert compiler_worker.store.claim("evaluate_local", "replacement", job_id=lease.job_id)
+    with pytest.raises(LeaseLost):
+        compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["run", "role", "weights", "dataset", "policy", "support", "coverage", "samples", "shape"],
+)
+def test_evaluation_publication_refuses_mismatched_saved_report(
+    database, compilation, compiler_worker, field
+):
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    report = record["report"]
+    if field == "run":
+        report["run_id"] = str(uuid4())
+    elif field == "role":
+        report["role"] = "locked_final_test"
+    elif field == "weights":
+        report["weights_sha256"] = "0" * 64
+    elif field == "dataset":
+        report["dataset_release_id"] = "unowned"
+    elif field == "policy":
+        report["policy"]["conf"] = 0
+    elif field == "support":
+        report["overall"]["support"] += 1
+    elif field == "coverage":
+        report["coverage"] = []
+    elif field == "samples":
+        record["sample_count"] += 1
+    else:
+        record["tensor_shapes"] = [[1, 3, 640, 640]]
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    with pytest.raises(ValueError):
+        compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+
+
+def test_evaluation_publication_rechecks_intent_and_runtime_audit_authority(
+    database, compilation, compiler_worker
+):
+    from copy import deepcopy
+
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    forged = deepcopy(lease.input)
+    forged["protocol"]["role"] = "locked_final_test"
+    with pytest.raises(ValueError):
+        compiler_worker.store.complete(
+            replace(lease, input=forged), ("evaluation",), publisher.publish
+        )
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+    with database[1].begin() as connection:
+        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{database[2]}"'))
+    with pytest.raises(ValueError, match="must not rewrite"):
+        compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
+
+
+def test_evaluation_publication_resumes_saved_stage_without_ml_or_objects(
+    database, compilation, compiler_worker
+):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    publisher, _, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args):
+        pytest.fail("saved evaluation must not rerun inference or access objects")
+
+    runner = JobRunner(
+        compiler_worker.store,
+        "evaluate_local",
+        (Stage("evaluation", unexpected),),
+        publisher.publish,
+        job_id=lease.job_id,
+    )
+    assert runner.run_once("replacement")
+    assert not runner.run_once("replacement")
+    rows, links, events, applications, job = evaluation_publication_state(database[1], lease)
+    assert len(rows) == len(links) == len(events) == applications == 1
+    assert job.status == "succeeded" and job.generation == events[0].payload["generation"] == 2
 
 
 def prepared_evaluation_stage(

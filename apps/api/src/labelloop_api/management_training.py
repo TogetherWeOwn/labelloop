@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import psycopg
-from sqlalchemy import Connection, select, text
+from sqlalchemy import Connection, select
 
 from labelloop_compiler.compiler import json_bytes, resolve_recipe
 from labelloop_core.json_records import canonical_json
@@ -89,26 +89,35 @@ class ApprovedTrainingProfile:
 
 def verified_variant(connection: Connection, row, workspace_id: UUID) -> tuple[dict, str, str]:
     """Require the actual fenced compiler publication, not a hand-inserted variant."""
-    receipts = connection.execute(
-        select(canonical_event).where(
-            canonical_event.c.event_type == "management.variant_compiled",
-            canonical_event.c.aggregate_id == str(row.id),
-            canonical_event.c.actor_kind == "system",
-            canonical_event.c.payload["workspace_id"].as_string() == str(workspace_id),
+    driver = connection.connection.driver_connection
+    if not isinstance(driver, psycopg.Connection):
+        refuse("management_unavailable")
+    return pinned_variant(driver, row, workspace_id)
+
+
+def pinned_variant(connection: psycopg.Connection, row, workspace_id: UUID):
+    """Same compiler authority inside a native caller-owned queue transaction."""
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT payload FROM canonical_event WHERE event_type='management.variant_compiled' "
+            "AND aggregate_id=%s AND actor_kind='system' AND payload->>'workspace_id'=%s",
+            (str(row.id), str(workspace_id)),
         )
-    ).all()
-    if len(receipts) != 1:
-        refuse("missing_evidence")
-    evidence = receipts[0].payload
-    compiled = connection.execute(
-        text(
+        receipts = cursor.fetchall()
+        if len(receipts) != 1:
+            refuse("missing_evidence")
+        evidence = receipts[0]["payload"]
+        cursor.execute(
             "SELECT j.input,j.project_key,j.kind,j.status,j.generation,a.generation AS applied,"
             "s.payload FROM worker_job j JOIN worker_application a ON a.job_id=j.job_id "
             "JOIN worker_stage_artifact s ON s.job_id=j.job_id AND s.stage='compilation' "
-            "WHERE j.job_id=:id"
-        ),
-        {"id": evidence["job_id"]},
-    ).one_or_none()
+            "WHERE j.job_id=%s",
+            (evidence["job_id"],),
+        )
+        saved = cursor.fetchone()
+        compiled = SimpleNamespace(**saved) if saved is not None else None
     manifest = row.file_manifest
     manifest_sha256 = hashlib.sha256(json_bytes(manifest)).hexdigest()
     if (
@@ -136,9 +145,6 @@ def verified_variant(connection: Connection, row, workspace_id: UUID) -> tuple[d
         != hashlib.sha256(json_bytes(row.class_map)).hexdigest()
     ):
         refuse("missing_evidence")
-    driver = connection.connection.driver_connection
-    if not isinstance(driver, psycopg.Connection):
-        refuse("management_unavailable")
     # Reuse exact historical snapshot/receipt rehydration; current labels never replace it.
     lease = SimpleNamespace(
         job_id=evidence["job_id"],
@@ -147,7 +153,7 @@ def verified_variant(connection: Connection, row, workspace_id: UUID) -> tuple[d
         input=compiled.input,
     )
     try:
-        _, release, _ = pinned_release(driver, lease, workspace_id)
+        _, release, _ = pinned_release(connection, lease, workspace_id)
     except (ValueError, KeyError, TypeError):
         refuse("missing_evidence")
     if (
