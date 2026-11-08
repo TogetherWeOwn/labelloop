@@ -27,6 +27,7 @@ from labelloop_api.final_test_store import (
     record_candidate_selection,
     register_final_test,
 )
+from labelloop_api.generated_label_store import record_generated_label_origin
 from labelloop_api.model_store import (
     change_registry,
     decode_report,
@@ -686,17 +687,31 @@ def seed_checkpoint_descendants(connection, result, exported, manifest, model, r
     variant_id = seed_variant(
         connection, clean_request, clean_manifest, asset_suffix="-lineage-clean"
     )
+    teacher_manifest = manifest | {
+        "release_id": result.request.dataset_release_id + "-teacher-clean"
+    }
+    teacher_request = replace(
+        result.request,
+        dataset_release_id=teacher_manifest["release_id"],
+        dataset_manifest_sha256=hashlib.sha256(
+            (json.dumps(teacher_manifest, sort_keys=True, indent=2) + "\n").encode()
+        ).hexdigest(),
+    )
+    teacher_variant = seed_variant(
+        connection, teacher_request, teacher_manifest, asset_suffix="-teacher-clean"
+    )
     parent = result.selected.sha256
-    for generation in ("middle", "child", "unrelated-control"):
+    for generation in ("middle", "child", "unrelated-control", "teacher-child"):
         run_key = result.request.run_id + "-lineage-" + generation
         weights = hashlib.sha256(run_key.encode()).hexdigest()
         request = replace(
-            clean_request,
+            teacher_request if generation == "teacher-child" else clean_request,
             run_id=run_key,
             initialization_sha256=result.request.initialization_sha256
-            if generation == "unrelated-control"
+            if generation in {"unrelated-control", "teacher-child"}
             else parent,
         )
+        run_variant = teacher_variant if generation == "teacher-child" else variant_id
         checkpoint = replace(result.selected, sha256=weights, evaluation_run_id=run_key + "-eval")
         synthetic_result = replace(
             result, request=request, checkpoints=(checkpoint,), selected=checkpoint
@@ -708,7 +723,7 @@ def seed_checkpoint_descendants(connection, result, exported, manifest, model, r
             weights_sha256=weights,
         )
         save_training(
-            connection, variant_id=variant_id, result=synthetic_result, reports=(synthetic_report,)
+            connection, variant_id=run_variant, result=synthetic_result, reports=(synthetic_report,)
         )
         parent = weights
         if generation == "middle":
@@ -725,6 +740,16 @@ def seed_checkpoint_descendants(connection, result, exported, manifest, model, r
             release=release,
             export_evidence=asdict(exported) | {"weights_sha256": weights},
         )
+        if generation == "teacher-child":
+            for kind in ("positive", "negative"):
+                record_generated_label_origin(
+                    connection,
+                    project_key=request.project_id,
+                    asset_key=f"{request.project_id}-synthetic-ordinary-{kind}-teacher-clean",
+                    revision=1,
+                    teacher_model_key=model.release_id,
+                    actor_id="fixture-inference-worker",
+                )
         project_id = lock_project(connection, request.project_id)
         model_id = connection.execute(
             sa.select(db.model_release.c.id).where(db.model_release.c.release_key == run_key)
@@ -734,6 +759,9 @@ def seed_checkpoint_descendants(connection, result, exported, manifest, model, r
 
 def exercise_annotation_veto(engine, request, common, gate):
     """Adverse ordinary labels veto actual persisted heads, not just a pure verdict."""
+    from teacher_origin_smoke import exercise_teacher_origins
+
+    teacher_origins = exercise_teacher_origins(engine, request)
     sampling = exercise_audit_sampling(engine, request)
     actor = "fixture-independent-auditor"
     positive = f"{request.project_id}-synthetic-ordinary-positive"
@@ -833,6 +861,7 @@ def exercise_annotation_veto(engine, request, common, gate):
             qualified = []
             development_only = 0
             clean_descendants = 0
+            teacher_descendants = 0
             unaffected_controls = 0
             project_id = lock_project(connection, request.project_id)
             for candidate in candidates:
@@ -842,7 +871,7 @@ def exercise_annotation_veto(engine, request, common, gate):
                     )
                     unaffected_controls += 1
                     continue
-                if candidate.release_key.endswith("-lineage-child"):
+                if candidate.release_key.endswith(("-lineage-child", "-lineage-teacher-child")):
                     membership = connection.execute(
                         sa.select(canonical_dataset_release.c.sample_revisions)
                         .select_from(
@@ -853,7 +882,10 @@ def exercise_annotation_veto(engine, request, common, gate):
                         .where(db.model_release.c.id == candidate.id)
                     ).scalar_one()
                     assert not {positive, negative} & set(membership)
-                    clean_descendants += 1
+                    if candidate.release_key.endswith("-lineage-teacher-child"):
+                        teacher_descendants += 1
+                    else:
+                        clean_descendants += 1
                 release = load_release(connection, candidate.id)
                 development_only += len(release.evaluation_run_ids) == 1
                 report = stored_report(connection, release, release.evaluation_run_ids[0])
@@ -880,7 +912,7 @@ def exercise_annotation_veto(engine, request, common, gate):
                 context.require_qualified(release, final)
                 qualified.append((release, final, context))
             assert development_only >= 1  # Regression: the unpromoted racer is still covered.
-            assert clean_descendants == unaffected_controls == 1
+            assert clean_descendants == teacher_descendants == unaffected_controls == 1
             # Evaluation links are append-only model metadata. Snapshot only after
             # fixture preparation, then prove the rejected operations change nothing.
             before = load_registry(connection, request.project_id, recipe)
@@ -907,6 +939,8 @@ def exercise_annotation_veto(engine, request, common, gate):
     return {
         "scope": "synthetic ordinary-label audit mechanics, not domain quality",
         "canonical_sampling": sampling,
+        "generated_label_provenance": teacher_origins,
+        "clean_data_teacher_descendants_vetoed_both_recipes": True,
         "wrong_identity_and_missed_object_persisted": True,
         "clean_replacement_sample_did_not_clear_veto": True,
         "clean_data_checkpoint_descendants_vetoed_both_recipes": True,

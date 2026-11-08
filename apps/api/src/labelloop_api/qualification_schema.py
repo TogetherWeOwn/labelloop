@@ -3,9 +3,31 @@
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-from labelloop_api.schema import canonical_dataset_release, preprocessing_recipe, project
+from labelloop_api.model_schema import model_release
+from labelloop_api.schema import (
+    annotation_revision,
+    canonical_dataset_release,
+    preprocessing_recipe,
+    project,
+)
 
 metadata = sa.MetaData()
+generated_label_origin = sa.Table(
+    "qualification_generated_label_origin",
+    metadata,
+    sa.Column("project_id", UUID, sa.ForeignKey(project.c.id), nullable=False),
+    sa.Column("asset_id", UUID, primary_key=True),
+    sa.Column("revision", sa.Integer, primary_key=True),
+    sa.Column("teacher_model_id", UUID, sa.ForeignKey(model_release.c.id), primary_key=True),
+    sa.Column("actor_id", sa.String, nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    ),
+    sa.ForeignKeyConstraint(
+        ["asset_id", "revision"], [annotation_revision.c.asset_id, annotation_revision.c.revision]
+    ),
+    sa.CheckConstraint("revision >= 1 AND length(trim(actor_id)) > 0"),
+)
 policy_event = sa.Table(
     "qualification_policy_event",
     metadata,

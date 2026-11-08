@@ -374,6 +374,52 @@ standards passed; web-build was path-skipped. This verifies the prior audit load
 not the new policy journal, HTTP/UI/restore acceptance or domain quality. Native,
 fresh-context and required Devin reviews remain gates; the PR stays draft.
 
+## Generated-label teacher lineage — new assertions pending Actions
+
+`generated_label_store` appends every known contributing teacher against an exact
+canonical asset revision, including accepted negatives and later human-reviewed
+revisions. The internal caller must derive the teacher from its trusted inference
+job and append provenance in the annotation transaction; a model response cannot
+select a teacher. The port verifies source revision and teacher in the same project.
+Multiple teachers and cross-recipe teachers are retained, not overwritten. This is
+not an authenticated route or proof that inference actually ran, and it does not
+infer missing historical provenance or implement cross-project model imports.
+
+The shared registry/automatic-acceptance veto now traverses these recorded teacher
+runs as well as all checkpoint parents. A student initialized from an unrelated base
+cannot escape adverse evidence in its label teacher's ancestry. Every teacher is
+traced, including mixed teacher/checkpoint generations and cycles. Influence starts
+at the recorded revision and conservatively survives later revisions until an
+explicit authenticated correction/re-tracing operation exists. Future revision links
+do not contaminate earlier frozen training membership. Recorded out-of-project
+teachers fail closed rather than being treated as unknown external base weights.
+
+Migration `qualification_0006` follows `qualification_0005`, adding immutable
+`qualification_generated_label_origin` with exact-revision and model foreign keys.
+Restore must retain the table and all contributing links. Unit assertions cover
+multiple teachers, negative labels, revision boundaries, cycles, cross-project
+substitution and frozen DDL. Actions PostgreSQL assertions add reconnects, exact-key
+races, failed append, missing/foreign rows and update/delete/truncate guards. Both
+recipe fixtures now include an independent-initialization, clean-data teacher student;
+a committed adverse audit must reject its real registry promotion with complete heads
+and event count unchanged, while unrelated clean-data controls remain unaffected.
+All new assertions await exact-head Actions, not a domain-quality or HTTP PASS.
+
+Prior exact head `2f35a74975e391b90ddc474a691fd01b8bec3685` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42459295388) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42459295231).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42459295388/job/128664936313)
+reported **1149 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42459295388/job/128664936548)
+reported **19 passed**, plus **24 passed** in the separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42459295388/job/128664936325)
+reported **39 passed**. Migration cycles/dev-stack/lint/types/import-contract/gitleaks/
+standards passed; web-build was path-skipped. This verifies the prior current-policy
+slice, not this new teacher traversal. Trusted inference/annotation consumer wiring,
+original acceptance/score/threshold and source/condition provenance, full audit/canary
+assembly, authenticated promotion/operational adapters and expanded restore/UI
+acceptance remain incomplete. The PR stays draft and all existing reviews remain gates.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

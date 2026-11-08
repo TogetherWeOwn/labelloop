@@ -12,6 +12,7 @@ import sqlalchemy as sa
 
 from labelloop_api import model_schema, qualification_schema
 from labelloop_api.audit_sample_store import FrozenAuditSample, load_audit_sample
+from labelloop_api.generated_label_store import label_teacher_runs
 from labelloop_api.qualification_store import lock_project as lock_project
 from labelloop_api.qualification_store import release_membership as release_membership
 from labelloop_api.schema import (
@@ -226,13 +227,18 @@ def record_annotation_audit(
 
 
 def training_ancestor_assets(
-    runs: dict[object, tuple[dict, dict[str, int]]], run_id: object
+    runs: dict[object, tuple[dict, dict[str, int]]],
+    run_id: object,
+    teachers: dict[str, list[tuple[int, object]]] | None = None,
 ) -> set[str]:
-    """Trace every recorded checkpoint, including unselected/unregistered parents.
+    """Trace checkpoint parents and recorded model-generated label influence.
 
     Equal checkpoint digests conservatively include every matching run. Visited run
     IDs bound duplicate paths and cycles; a clean child never clears an ancestor.
-    Unmatched initialization digests are external base checkpoints, not local runs.
+    Teacher influence survives later revisions until authenticated correction and
+    re-tracing exist. Future revisions do not influence earlier frozen membership.
+    Unmatched initialization digests are external base checkpoints, not local runs;
+    an explicitly recorded teacher outside this project fails closed instead.
     """
     if run_id not in runs:
         raise ValueError("model training lineage is outside its project")
@@ -247,9 +253,17 @@ def training_ancestor_assets(
         key = pending.pop()
         if key in visited:
             continue
+        if key not in runs:
+            raise ValueError("model training lineage is outside its project")
         visited.add(key)
         record, membership = runs[key]
         assets.update(membership)
+        for asset, revision in membership.items():
+            pending.extend(
+                teacher
+                for origin_revision, teacher in (teachers or {}).get(asset, ())
+                if origin_revision <= revision
+            )
         pending.extend(by_checkpoint.get(record["request"]["initialization_sha256"], ()))
     return assets
 
@@ -278,6 +292,7 @@ def require_no_annotation_veto(
     assets = training_ancestor_assets(
         {row["id"]: (row["record"], release_membership(row["sample_revisions"])) for row in rows},
         run_id,
+        label_teacher_runs(connection, project_id),
     )
     vetoes = connection.execute(
         sa.select(qualification_schema.annotation_audit.c.vetoed_revisions).where(
