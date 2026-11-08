@@ -13,18 +13,24 @@ from uuid import uuid4
 
 import pytest
 from PIL import Image
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, insert, select, text
 from sqlalchemy.exc import DBAPIError
 
 from labelloop_api.management_canonical import CanonicalManagementMutations
-from labelloop_api.management_contracts import AssetIngest, ProjectCreate
+from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze
 from labelloop_api.management_ports import ManagementFailure, MutationContext
+from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import (
     annotation_revision,
+    borderline_review,
+    canonical_dataset_release,
     canonical_event,
+    completeness_assessment,
     ontology_release,
     project,
+    similarity_relation,
     source_asset,
+    source_split_assignment,
 )
 from labelloop_compiler.ingest import LocalObjectStore
 
@@ -55,10 +61,13 @@ def database(tmp_path):
         connection.execute(
             text(
                 f"GRANT SELECT, INSERT ON project, ontology_release, source_asset, "
-                f'annotation_revision, canonical_event TO "{role}"'
+                f"annotation_revision, canonical_event, canonical_dataset_release, "
+                f"completeness_assessment, source_split_assignment, similarity_relation, "
+                f'borderline_review TO "{role}"'
             )
         )
         connection.execute(text(f'GRANT UPDATE (scope) ON project TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
     runtime = create_engine(
         os.environ["DATABASE_URL"],
         connect_args={
@@ -310,3 +319,327 @@ def test_resource_scope_and_context_are_checked_before_writes_or_replays(databas
         service.ingest_asset(Actor(), replace(context, actor_id="forged"), payload)
     assert ingest(service, created.id) == accepted
     assert counts(owner, created.id) == (1, 1, 2)
+
+
+def release_inputs(service, owner, *, complete=True, split="val", locked=True):
+    created = create(service)
+    asset = ingest(service, created.id)
+    with owner.begin() as connection:
+        source = connection.execute(
+            select(source_asset).where(source_asset.c.asset_key == asset.id)
+        ).one()
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=source.id,
+                group_id="group-1",
+                split=split,
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=locked,
+            )
+        )
+        if complete:
+            connection.execute(
+                insert(completeness_assessment).values(
+                    asset_id=source.id,
+                    revision=1,
+                    ontology_hash=completeness_context_hash(
+                        ontology.class_map, ontology.classes, "Visible packages"
+                    ),
+                    scope_completeness="exhaustive_for_scope",
+                    actor_kind="human",
+                    actor_id=Actor().id,
+                    output_truncated=False,
+                    unresolved_regions=[],
+                )
+            )
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=1,
+                approval_state="human_accepted",
+                review_tier="human_reviewed",
+                scope_completeness="exhaustive_for_scope",
+                objects=[],
+                training_eligible=True,
+            )
+    payload = ReleaseFreeze(
+        expected_revision=2,
+        ontology_id=ontology.ontology_key,
+        assignment_version="assignment-1",
+        annotation_revisions={asset.id: 2 if complete else 1},
+    )
+    return created, asset, source, payload
+
+
+def freeze(service, project_id, payload, key="freeze", actor=None):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "freeze_release", project_id, payload)
+    return service.freeze_release(actor, context, payload)
+
+
+def release_count(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(func.count())
+            .select_from(canonical_dataset_release)
+            .where(canonical_dataset_release.c.project_id == project_id)
+        ).scalar_one()
+
+
+def test_parallel_freeze_replays_one_immutable_release_and_audit(database):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(_):
+        barrier.wait()
+        return freeze(service, created.id, payload)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    assert results[0] == results[1]
+    assert results[0].state == "frozen"
+    assert release_count(owner, created.id) == 1
+    assert counts(owner, created.id) == (1, 2, 3)
+    with owner.connect() as connection:
+        row = connection.execute(
+            select(canonical_dataset_release).where(canonical_dataset_release.c.id == results[0].id)
+        ).one()
+        assert row.sample_revisions == {asset.id: 2}
+        assert row.excluded_asset_ids == {}
+        assert len(row.hashes["canonical_snapshot_sha256"]) == 64
+        event = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.freeze_release",
+            )
+        ).one()
+        assert event.payload["evidence"] == row.hashes
+        assert event.actor_id == Actor().id
+    for statement in (
+        "UPDATE canonical_dataset_release SET frozen = false WHERE id = :id",
+        "DELETE FROM canonical_dataset_release WHERE id = :id",
+    ):
+        with pytest.raises(DBAPIError), owner.begin() as connection:
+            connection.execute(text(statement), {"id": results[0].id})
+    assert freeze(service, created.id, payload) == results[0]
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        freeze(service, created.id, payload, key="stale")
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        freeze(service, created.id, payload.model_copy(update={"expected_revision": 3}))
+    with pytest.raises(ManagementFailure, match="not_found"):
+        freeze(replace(service, workspace_id=uuid4()), created.id, payload)
+    for actor in (Actor(role="reviewer"), Actor(kind="service")):
+        with pytest.raises(ManagementFailure, match="permission_denied"):
+            freeze(service, created.id, payload, actor=actor)
+
+
+@pytest.mark.parametrize(
+    ("options", "code"),
+    [
+        ({"complete": False}, "incomplete_labels"),
+        ({"split": "train"}, "incomplete_labels"),
+        ({"locked": False}, "missing_evidence"),
+    ],
+)
+def test_freeze_refuses_unreviewed_negative_empty_validation_and_unlocked_split(
+    database, options, code
+):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner, **options)
+    with pytest.raises(ManagementFailure, match=code):
+        freeze(service, created.id, payload)
+    assert release_count(owner, created.id) == 0
+    assert counts(owner, created.id)[2] == 2
+
+
+def test_freeze_rechecks_annotation_and_completeness_context(database):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        freeze(
+            service, created.id, payload.model_copy(update={"annotation_revisions": {asset.id: 1}})
+        )
+    with owner.begin() as connection:
+        connection.execute(
+            project.update().where(project.c.id == created.id).values(scope="Changed")
+        )
+    with pytest.raises(ManagementFailure, match="incomplete_labels"):
+        freeze(service, created.id, payload)
+    assert release_count(owner, created.id) == 0
+
+
+def test_freeze_refuses_pending_group_review_and_cross_group_relation(database):
+    service, owner, _ = database
+    created, asset, source, payload = release_inputs(service, owner)
+    # A pending pair is not proof of independence, even for an excluded endpoint.
+    with owner.begin() as connection:
+        pair_id = connection.execute(
+            insert(borderline_review)
+            .values(
+                left_asset_id=source.id,
+                right_asset_id=source.id,
+                metric="phash",
+                value="9",
+                algorithm_version="fixture",
+            )
+            .returning(borderline_review.c.id)
+        ).scalar_one()
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(borderline_review.delete().where(borderline_review.c.id == pair_id))
+    other = ingest(service, created.id, image_payload(2), key="another-source")
+    with owner.begin() as connection:
+        other_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == other.id)
+        ).scalar_one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=other_id,
+                group_id="group-2",
+                split="train",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture",
+                locked=True,
+            )
+        )
+        connection.execute(
+            insert(similarity_relation).values(
+                left_asset_id=source.id,
+                right_asset_id=other_id,
+                reason="exact_hash",
+                evidence="fixture",
+                algorithm_version="fixture",
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(service, created.id, payload.model_copy(update={"expected_revision": 3}))
+    assert release_count(owner, created.id) == 0
+    assert asset.id in payload.annotation_revisions
+
+
+def test_freeze_event_failure_rolls_back_release_and_retry_commits(database):
+    service, owner, role = database
+    created, _, _, payload = release_inputs(service, owner)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    try:
+        with pytest.raises(DBAPIError):
+            freeze(service, created.id, payload)
+        assert release_count(owner, created.id) == 0
+    finally:
+        with owner.begin() as connection:
+            connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    result = freeze(service, created.id, payload)
+    assert result.kind == "dataset-release"
+    assert release_count(owner, created.id) == 1
+
+
+def test_freeze_pins_exclusions_and_refuses_obsolete_assignment(database):
+    service, owner, _ = database
+    created, asset, source, payload = release_inputs(service, owner)
+    extra = ingest(service, created.id, image_payload(2), key="excluded")
+    payload = payload.model_copy(update={"expected_revision": 3})
+    with owner.begin() as connection:
+        extra_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == extra.id)
+        ).scalar_one()
+        original = connection.execute(
+            select(source_split_assignment).where(source_split_assignment.c.asset_id == source.id)
+        ).one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=extra_id,
+                group_id="group-1",
+                split="val",
+                seed=7,
+                algorithm=original.algorithm,
+                thresholds=original.thresholds,
+                reason="fixture",
+                locked=True,
+            )
+        )
+    result = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(
+            select(canonical_dataset_release).where(canonical_dataset_release.c.id == result.id)
+        ).one()
+        assert row.sample_revisions == {asset.id: 2}
+        assert row.excluded_asset_ids == {extra.id: "not_selected"}
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-2",
+                asset_id=source.id,
+                group_id="group-1",
+                split="val",
+                seed=7,
+                algorithm=original.algorithm,
+                thresholds=original.thresholds,
+                reason="new publication",
+                locked=True,
+            )
+        )
+    # A historical retry is a receipt, not a new freeze under today's policy.
+    assert freeze(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        freeze(
+            service, created.id, payload.model_copy(update={"expected_revision": 4}), key="old-plan"
+        )
+
+
+def test_parallel_freeze_different_keys_share_project_revision_guard(database):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return freeze(service, created.id, payload, key=key).kind
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert sorted(outcomes) == ["dataset-release", "revision_conflict"]
+    assert release_count(owner, created.id) == 1
+
+
+def test_review_writer_and_freeze_share_source_row_synchronization(database):
+    service, owner, _ = database
+    created, asset, source, payload = release_inputs(service, owner)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with owner.begin() as connection:
+            connection.execute(
+                select(source_asset).where(source_asset.c.id == source.id).with_for_update()
+            )
+            pending = pool.submit(freeze, service, created.id, payload)
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=2,
+                approval_state="human_accepted",
+                review_tier="human_reviewed",
+                scope_completeness="exhaustive_for_scope",
+                objects=[],
+                training_eligible=True,
+            )
+        with pytest.raises(ManagementFailure, match="revision_conflict"):
+            pending.result(timeout=15)
+    assert release_count(owner, created.id) == 0

@@ -1,4 +1,4 @@
-"""Canonical create/ingest transactions for composition with the management ports.
+"""Canonical create/ingest/freeze transactions for composition with management ports.
 
 No routes are mounted here. The workspace is trusted deployment configuration,
 not request data; the caller must supply the shared authenticated principal.
@@ -7,7 +7,7 @@ Only a runtime DB role without event UPDATE/DELETE/TRUNCATE can use this adapter
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import NoReturn
 from uuid import UUID, uuid4
 
@@ -15,10 +15,18 @@ from sqlalchemy import Connection, Engine, func, insert, select, text
 
 from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 
-from .management_contracts import AssetIngest, Contract, ManagementError, ProjectCreate, Resource
+from .management_contracts import (
+    AssetIngest,
+    Contract,
+    ManagementError,
+    ProjectCreate,
+    ReleaseFreeze,
+    Resource,
+)
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
+from .management_release import freeze_candidate
 from .repository import ingest_canonical_asset
-from .schema import canonical_event, ontology_release, project
+from .schema import canonical_dataset_release, canonical_event, ontology_release, project
 
 
 def refuse(code: str) -> NoReturn:
@@ -188,37 +196,99 @@ class CanonicalManagementMutations:
             )
             return result
 
+    def lock_project(self, connection: Connection, target: str):
+        try:
+            project_id = UUID(target)
+        except ValueError:
+            refuse("not_found")
+        row = connection.execute(
+            select(project)
+            .where(project.c.id == project_id, project.c.workspace_id == self.workspace_id)
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            refuse("not_found")
+        return row
+
+    def check_project_revision(
+        self, connection: Connection, project_id: UUID, expected_revision: int
+    ) -> None:
+        last_revision = connection.execute(
+            select(func.max(canonical_event.c.expected_revision)).where(
+                canonical_event.c.aggregate_id == str(project_id),
+                canonical_event.c.event_type.like("management.%"),
+            )
+        ).scalar_one()
+        # Existing non-management projects need an explicit adoption path.
+        if last_revision is None:
+            refuse("management_unavailable")
+        if expected_revision != last_revision + 1:
+            refuse("revision_conflict")
+
+    def freeze_release(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ReleaseFreeze
+    ) -> Resource:
+        self.authorize(actor, context, "freeze_release", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            release_id = str(uuid4())
+            candidate = freeze_candidate(connection, owned, payload, release_id)
+            snapshot_sha256 = hashlib.sha256(
+                json.dumps(asdict(candidate), sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            ontology_uuid = connection.execute(
+                select(ontology_release.c.id).where(
+                    ontology_release.c.project_id == owned.id,
+                    ontology_release.c.ontology_key == payload.ontology_id,
+                )
+            ).scalar_one()
+            connection.execute(
+                insert(canonical_dataset_release).values(
+                    id=UUID(release_id),
+                    release_key=release_id,
+                    project_id=owned.id,
+                    ontology_id=ontology_uuid,
+                    assignment_version=payload.assignment_version,
+                    sample_revisions=payload.annotation_revisions,
+                    ontology_hash=candidate.ontology_hash(),
+                    excluded_asset_ids=candidate.excluded_asset_ids,
+                    hashes={"canonical_snapshot_sha256": snapshot_sha256},
+                    frozen=True,
+                )
+            )
+            result = Resource(
+                id=release_id,
+                project_id=str(owned.id),
+                kind="dataset-release",
+                revision=1,
+                state="frozen",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {"canonical_snapshot_sha256": snapshot_sha256},
+            )
+            return result
+
     def ingest_asset(
         self, actor: ManagementPrincipal, context: MutationContext, payload: AssetIngest
     ) -> Resource:
         self.authorize(actor, context, "ingest_asset", context.target_id, payload)
-        try:
-            project_id = UUID(context.target_id)
-        except ValueError:
-            refuse("not_found")
         with self.engine.begin() as connection:
             self.begin_mutation(connection, context)
             # Authorize the canonical resource before returning even a replay.
-            owned = connection.execute(
-                select(project.c.id)
-                .where(project.c.id == project_id, project.c.workspace_id == self.workspace_id)
-                .with_for_update()
-            ).scalar_one_or_none()
-            if owned is None:
-                refuse("not_found")
+            owned = self.lock_project(connection, context.target_id)
+            project_id = owned.id
             if replay := self.replay(connection, context):
                 return replay
-            last_revision = connection.execute(
-                select(func.max(canonical_event.c.expected_revision)).where(
-                    canonical_event.c.aggregate_id == str(project_id),
-                    canonical_event.c.event_type.like("management.%"),
-                )
-            ).scalar_one()
-            # Existing non-management projects need an explicit adoption path.
-            if last_revision is None:
-                refuse("management_unavailable")
-            if payload.expected_revision != last_revision + 1:
-                refuse("revision_conflict")
+            self.check_project_revision(connection, project_id, payload.expected_revision)
             asset_id = str(uuid4())
             try:
                 asset = ingest_canonical_asset(

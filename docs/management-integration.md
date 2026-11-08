@@ -115,9 +115,10 @@ a final combined app schema. No local suite is used as a substitute.
 
 ## Canonical transaction adapter (partial, unmounted)
 
-`CanonicalManagementMutations` implements project creation and original-image
-ingestion using the existing canonical tables, `ingest_canonical_asset` and
-`canonical_event`; it is not a complete `ManagementOperations` implementation.
+`CanonicalManagementMutations` implements project creation, original-image
+ingestion and eligible canonical dataset freezing using the existing canonical
+tables, `ingest_canonical_asset` and `canonical_event`; it is not a complete
+`ManagementOperations` implementation.
 No new table, migration, queue, grant or production binding is introduced.
 The workspace UUID comes only from trusted deployment configuration. The
 adapter rechecks human/admin authority and context attribution, scopes project
@@ -152,17 +153,51 @@ A storage or database error rolls back canonical rows and the audit/replay
 receipt together. Object storage is not transactional: an event failure after
 upload may leave an unreferenced, immutable content-addressed object, never a
 successful asset receipt; retries normalize the original again and safely reuse
-those bytes. No remote URL is fetched. Async release/compile/train/evaluate and
-setup edits are not implemented by this class, so it cannot dispatch paid work
-or claim queue/qualification semantics.
+those bytes. No remote URL is fetched. Async compile/train/evaluate and setup
+edits are not implemented by this class, so it cannot dispatch paid work or claim
+queue/qualification semantics.
+
+Release freeze is synchronous SQL, not a queued job. It takes the same project
+and retry locks, then locks all project sources in stable UUID order (the same
+source-row synchronization used by `append_review`). It rechecks latest ontology,
+selected annotation revisions, current scope-bound completeness, non-truncated
+inspection and actual training eligibility. Verified negatives need the same
+completeness evidence as positive images. System acceptance additionally needs
+its currently configured auto-accept qualification; request bodies cannot assert
+human review, objects, eligibility, split membership or a passing policy.
+
+Every source, including exclusions, needs a current locked assignment under one
+seed/algorithm/threshold policy. Exact-hash and declared ingest-group constraints,
+persisted similarity edges and unresolved borderline reviews are checked across
+all project sources, so removing an endpoint from the selected samples does not
+hide a cross-group relation. This consumes materialized grouping evidence; it
+does not compute missing pHashes/embeddings, create assignments or claim setup
+publication. Ambiguous assignment publication times fail closed. Setup/grouping
+writers must acquire the project lock before publishing ontology, relations or
+assignment versions; that writer binding remains a composition prerequisite.
+
+The adapter constructs the delivered `CanonicalDatasetRelease` and lets its
+class/geometry/eligibility/group/validation-membership invariants validate the
+candidate. It persists exact membership, explicit `not_selected` exclusions,
+ontology hash and a deterministic canonical snapshot digest in the existing
+frozen-release row, atomically with the attributed retry/audit event. A matching
+historical retry returns its receipt, not a new freeze against current policy.
+Failure to insert the event rolls the release back. This creates no derivative,
+starts no worker and cannot establish independent final-test qualification.
+The runtime role also needs permission to lock source rows (UPDATE on at least
+one source column; source identity mutation is still rejected by its DB trigger).
 
 Actions runs `test_management_canonical_db.py` against the migrated disposable
 Postgres service in the existing ML job. Cases cover concurrent same-key retry,
 different-key stale-revision writers, workspace/actor isolation, event/storage
 failure rollback, normalized pixels/provenance, and direct runtime-role event
-mutation refusals. They are commissioned, **not passing evidence until exact-
-head Actions completes**. These cases do not establish sessions/CSRF, frozen
-release eligibility, full setup lifecycle, fenced jobs or project-to-export.
+mutation refusals. Additional freeze cases cover concurrent identical/different
+retry keys, review-writer synchronization, unreviewed negatives, empty validation,
+unlocked/obsolete assignments, stale annotation/scope, pending grouping reviews,
+excluded relations, frozen-row mutation refusal, persisted exclusions and
+audit-failure rollback. New cases are commissioned, **not passing evidence until
+exact-head Actions completes**. These cases do not establish sessions/CSRF, full
+setup lifecycle, grouping publication, fenced jobs or project-to-export.
 
 ## Acceptance evidence still required
 
