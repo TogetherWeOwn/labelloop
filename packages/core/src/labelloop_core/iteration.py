@@ -116,7 +116,9 @@ class IterationManifest:
     # Includes provider/model config, prompt/schema and decoder/encoder versions.
     execution_environment: EvidenceRef
     acceptance_policy: EvidenceRef
+    # Preregistered metric/classes/slices/tolerances; qualification owns validation.
     evaluation_protocol: EvidenceRef
+    evaluation_release: EvidenceRef
     evidence: EvidenceRef
     policy_renewal: EvidenceRef
     maximum_training_rounds: int

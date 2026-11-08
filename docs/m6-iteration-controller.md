@@ -13,10 +13,26 @@ is claimed by these fixtures.
 annotation revisions, source batch, ontology, approved reference pack, teacher,
 each recipe/training profile/incumbent, split assignment, review pipeline,
 provider/prompt/schema/environment versions, acceptance policy, evaluation
-protocol, new evidence and explicit policy renewal. Referenced artifacts are
+protocol and evaluation release, new evidence and explicit policy renewal. Referenced artifacts are
 immutable store IDs and SHA-256 digests, never transport URLs. Source and recipe
 IDs are unique and sorted. Environment artifacts include decoder, encoder,
 interpolation and library versions that affect output.
+
+Before execution, the owner commits the preregistered protocol artifact. Its hash
+pins domain, per-recipe primary metric, critical AP50 classes/slices (including
+tiny objects and negatives), tolerances and decision rule. The protocol names the
+separately pinned `evaluation_release`; trusted qualification validators must
+check that exact binding, locked-final-test status, and split-group disjointness
+from training, references and active selection. The default primary metric is
+original-frame mAP50-95, with the lower bound of a 95% paired bootstrap interval
+above zero, resampling split groups. Critical AP50 non-regression uses the declared
+tolerance (null means zero); real targets remain admin-owned, not fixture defaults.
+A protocol changed after results are seen makes the run development evidence;
+changing either pin invalidates receipts, but cannot restore holdout independence.
+Only real human-adjudicated domain gold can support an M6 improvement claim.
+Harness truth and fixture ports prove mechanics only and never an M6 exit PASS.
+These checks belong to the authoritative qualification boundary, not to this pure
+projection; a hash reference alone proves neither provenance nor independence.
 
 The graph is freeze → propose/discover → review → validate → adjudicate/audit →
 release, then independent compile → sync → train → evaluate → promote/retain
@@ -26,6 +42,9 @@ against delivered canonical release, correction loop, audit, training,
 evaluation and registry contracts. Platform mapping/compiled variant receipts
 are integration boundaries, not a second representation of mutable Platform
 state. Proposal/discovery includes a separate whole-image discovery artifact.
+A human-first bootstrap with zero proposals is valid: its empty proposal artifact
+never establishes exhaustive completeness or a verified negative. Human review
+and the canonical completeness/release gates remain necessary.
 
 `StageReceipt` is **trusted validator evidence**, never model output or a public
 request payload. Validators own checking actual bytes/hashes, canonical
@@ -113,7 +132,11 @@ reservation alone is insufficient. This type is not authentication or a database
 commit proof by itself: only the trusted persistence/worker boundary may create
 it. That real boundary remains disabled here, so these contracts authorize no
 provider calls. A 402 is a terminal-for-now worker/ledger result and a paid-stage
-pause, not a retry instruction.
+pause, not a retry instruction. Paid review must reuse the durable review-budget
+service's fixed admin-approved batch and child-request ledger, binding images,
+provider/model, price version, release, estimate and pass count. Actuals plus
+outstanding estimates pause at the approved estimate. This controller adds no
+second batch approval, spend authority or scheduler.
 
 ## Verification and remaining integration
 
@@ -133,6 +156,9 @@ M5 qualification/registry evidence and M6 selection/experiment wiring. This modu
 must not be enabled by merely replacing the disabled factory: those boundary
 checks and integration fixtures are required first. The separate integrated
 non-game experiment remains responsible for measured improvement evidence.
+Acceptance check 22 additionally requires the authenticated application facade
+and its end-to-end flow; controller fixtures cannot substitute for it. Management
+screens are not an M6 exit gate.
 
 REA angle: reuse delivered domain/review/budget/training/evaluation/registry
 records and the existing durable runtime; no copied engine or second scheduler.

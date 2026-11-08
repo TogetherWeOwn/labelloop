@@ -60,6 +60,7 @@ def manifest() -> IterationManifest:
         execution_environment=ref("environment"),
         acceptance_policy=ref("acceptance"),
         evaluation_protocol=ref("evaluation"),
+        evaluation_release=ref("fixture-locked-test"),
         evidence=ref("evidence"),
         policy_renewal=ref("renewal"),
         maximum_training_rounds=2,
@@ -287,13 +288,18 @@ def test_restart_reuses_exact_artifact_ids_after_validation() -> None:
         resume(restored, (replace(receipts[0], artifact=ref("tampered")), *receipts[1:]))
 
 
-@pytest.mark.parametrize("change", ["source", "policy", "reference", "teacher", "recipe"])
+@pytest.mark.parametrize(
+    "change",
+    ["source", "policy", "reference", "teacher", "recipe", "protocol", "evaluation_release"],
+)
 def test_changed_inputs_retire_all_descendants_not_history(change: str) -> None:
     state = trained()
     m = state.manifest
     changes: dict[str, object] = {
         "source": replace(m, sources=(replace(m.sources[0], annotation=ref("bad-label-fixed")),)),
         "policy": replace(m, acceptance_policy=ref("new-policy")),
+        "protocol": replace(m, evaluation_protocol=ref("changed-after-results-protocol")),
+        "evaluation_release": replace(m, evaluation_release=ref("fresh-locked-test")),
         "reference": replace(m, references=ref("new-references")),
         "teacher": replace(m, teacher=ref("new-teacher")),
         "recipe": replace(
