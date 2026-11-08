@@ -14,18 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = Path("packages/platform/src/labelloop_platform/contract/openapi.json")
-SNAPSHOT_COMMIT = "93a4e40dcfd5a6729f7c8ee7c4093208a2ad10f2"
 
 
 def check(image: str) -> None:
-    # Reuse the accepted fixture without importing unrelated Platform modules.
-    # Actions fetches full history, including this immutable source commit.
-    snapshot = subprocess.check_output(
-        ["git", "show", f"{SNAPSHOT_COMMIT}:{SNAPSHOT.as_posix()}"],
-        cwd=ROOT,
-        text=True,
-        timeout=30,
-    )
+    snapshot = (ROOT / SNAPSHOT).read_text()
     config = (ROOT / ".gitleaks.toml").read_text()
     # Public, invalid key material; never generate or read an actual credential.
     canary = base64.b64encode(b"public scanner regression canary, not key material" * 4).decode()

@@ -1,0 +1,8 @@
+{
+  "sdk_version": "0.1.107",
+  "openapi_version": "3.2.0",
+  "source_commit": "8af392188a631de9275039183b290a256e8f79ab",
+  "source_url": "https://raw.githubusercontent.com/ultralytics/sdk/8af392188a631de9275039183b290a256e8f79ab/openapi.json",
+  "sha256": "141c6c80558c733e362286920be8b7a73f93f5c43ce5dd93bf4dea3da8c816ed",
+  "licence": "AGPL-3.0-only"
+}
