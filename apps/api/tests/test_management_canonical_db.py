@@ -106,6 +106,413 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_evaluation(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
+    from uuid import UUID
+
+    from labelloop_api.management_evaluation import (
+        ApprovedDevelopmentProtocol,
+        CanonicalManagementEvaluation,
+    )
+
+    publisher, accepted, lease, trained, exported = prepared_model_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.store.save_stage(lease, "training", trained)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    protocol = ApprovedDevelopmentProtocol(
+        UUID(trained["result"]["request"]["project_id"]),
+        "development",
+        1,
+        UUID(lease.input["variant_id"]),
+    )
+    return (
+        CanonicalManagementEvaluation(database[0], compilation.enqueue, (protocol,)),
+        "model-" + accepted.resource.id,
+        trained["result"]["request"]["dataset_release_id"],
+        lease,
+    )
+
+
+@pytest.fixture
+def evaluation_ready(database, compilation, compiler_worker):
+    return prepared_evaluation(database, compilation, compiler_worker)
+
+
+def evaluation_request(
+    evaluation,
+    model_id,
+    release_id,
+    *,
+    key="evaluate",
+    actor=None,
+    revision=1,
+    protocol="development",
+):
+    from labelloop_api.management_contracts import EvaluationStart
+
+    actor = actor or Actor()
+    payload = EvaluationStart(
+        expected_revision=revision, dataset_release_id=release_id, protocol_id=protocol
+    )
+    context = MutationContext.bind(actor, key, "start_evaluation", model_id, payload)
+    return evaluation.start_evaluation(actor, context, payload)
+
+
+def evaluation_intent_state(owner, model_id):
+    with owner.connect() as connection:
+        jobs = connection.execute(
+            text("SELECT * FROM worker_job WHERE kind='evaluate_local' AND input->>'model_id'=:id"),
+            {"id": model_id},
+        ).all()
+        receipts = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.start_evaluation",
+                canonical_event.c.aggregate_id == model_id,
+            )
+        ).all()
+    return jobs, receipts
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_evaluation_intent_pins_published_model_and_compiler_in_caller_transaction(
+    database, compilation, compiler_worker, recipe
+):
+    evaluation, model_id, release_id, training_lease = prepared_evaluation(
+        database, compilation, compiler_worker, recipe
+    )
+    service, owner, role = database
+
+    def enqueue(connection, *args, **kwargs):
+        assert connection.execute("SELECT current_user").fetchone()[0] == role
+        job_id = evaluation.enqueue(connection, *args, **kwargs)
+        assert evaluation_intent_state(owner, model_id) == ([], [])
+        return job_id
+
+    accepted = evaluation_request(replace(evaluation, enqueue=enqueue), model_id, release_id)
+    jobs, receipts = evaluation_intent_state(owner, model_id)
+    assert len(jobs) == len(receipts) == 1
+    job = jobs[0]
+    inputs = job.input
+    assert inputs == receipts[0].payload["evidence"]["inputs"]
+    assert receipts[0].actor_id == Actor().id and receipts[0].actor_kind == "human"
+    assert inputs["workspace_id"] == str(service.workspace_id)
+    assert inputs["project_id"] == str(evaluation.protocols[0].project_id)
+    assert inputs["model_id"] == model_id and inputs["model_job_id"] == training_lease.job_id
+    assert inputs["variant_id"] == training_lease.input["variant_id"]
+    assert inputs["compile_job_id"] == training_lease.input["compile_job_id"]
+    assert inputs["manifest_key"] == training_lease.input["manifest_key"]
+    assert inputs["dataset_release_id"] == release_id
+    assert inputs["protocol"] == {
+        "id": "development",
+        "revision": 1,
+        "role": "development",
+        "split": "val",
+    }
+    assert inputs["policy"]["imgsz"] == (320 if "320" in recipe else 640)
+    assert inputs["run_id"] == accepted.resource.id and inputs["requested_by"] == Actor().id
+    assert len(inputs["model_sha256"]) == len(inputs["manifest_sha256"]) == 64
+    assert accepted.resource.kind == "evaluation" and accepted.resource.state == "queued"
+    assert job.job_id == accepted.job_id and job.max_attempts == 3 and job.status == "queued"
+    lease = compiler_worker.store.claim("evaluate_local", "fixture-evaluator", job_id=job.job_id)
+    assert lease is not None and lease.input == inputs
+    assert evaluation_request(evaluation, model_id, release_id) == accepted
+    assert evaluation_request(replace(evaluation, protocols=()), model_id, release_id) == accepted
+    with owner.connect() as connection:
+        # Dispatch never rewrites training selection, links a report or qualifies a model.
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM model_evaluation l "
+                    "JOIN model_release m ON m.id=l.model_id "
+                    "WHERE m.release_key=:id"
+                ),
+                {"id": model_id},
+            ).scalar_one()
+            == 1
+        )
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        "INSERT ON worker_job",
+        "SELECT ON worker_job",
+        "INSERT ON canonical_event",
+        "SELECT ON worker_application",
+        "SELECT ON model_release",
+    ],
+)
+def test_evaluation_intent_grant_failure_rolls_back_queue_and_audit(
+    database, evaluation_ready, grant
+):
+    from psycopg.errors import InsufficientPrivilege
+
+    evaluation, model_id, release_id, _ = evaluation_ready
+    _, owner, role = database
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{role}"'))
+    with pytest.raises((DBAPIError, InsufficientPrivilege)):
+        evaluation_request(evaluation, model_id, release_id)
+    assert evaluation_intent_state(owner, model_id) == ([], [])
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{role}"'))
+    assert evaluation_request(evaluation, model_id, release_id).resource.state == "queued"
+
+
+def test_evaluation_intent_caller_failure_rolls_back_real_queue(database, evaluation_ready):
+    evaluation, model_id, release_id, _ = evaluation_ready
+
+    def enqueue(*args, **kwargs):
+        evaluation.enqueue(*args, **kwargs)
+        raise RuntimeError("synthetic evaluation caller failure")
+
+    with pytest.raises(RuntimeError, match="synthetic evaluation caller failure"):
+        evaluation_request(replace(evaluation, enqueue=enqueue), model_id, release_id)
+    assert evaluation_intent_state(database[1], model_id) == ([], [])
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_evaluation_intent_concurrent_retry_and_unique_protocol(
+    database, evaluation_ready, same_key
+):
+    evaluation, model_id, release_id, _ = evaluation_ready
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait(timeout=10)
+        try:
+            return evaluation_request(
+                evaluation, model_id, release_id, key="same" if same_key else str(index)
+            )
+        except ManagementFailure as exc:
+            return exc.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    if same_key:
+        assert results[0] == results[1]
+    else:
+        assert results.count("revision_conflict") == 1
+    jobs, receipts = evaluation_intent_state(database[1], model_id)
+    assert len(jobs) == len(receipts) == 1
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        Actor(role="reviewer"),
+        Actor(kind="service", role="worker_core"),
+        Actor(kind="service", role="worker_ml"),
+        Actor(kind="service", role="worker_llm"),
+        Actor(kind="service", role="worker_platform"),
+    ],
+)
+def test_evaluation_intent_denies_nonadmin_before_queue(database, evaluation_ready, actor):
+    evaluation, model_id, release_id, _ = evaluation_ready
+    with pytest.raises(ManagementFailure) as exc:
+        evaluation_request(evaluation, model_id, release_id, actor=actor)
+    assert exc.value.error.detail == "permission_denied"
+    assert evaluation_intent_state(database[1], model_id) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "foreign_workspace",
+        "unknown_model",
+        "unknown_protocol",
+        "foreign_protocol",
+        "unknown_variant",
+        "wrong_release",
+        "stale_revision",
+        "forged_context",
+        "unpublished_model",
+    ],
+)
+def test_evaluation_intent_refuses_untrusted_or_inaccessible_inputs(
+    database, evaluation_ready, failure
+):
+    from labelloop_api.management_contracts import EvaluationStart
+    from labelloop_api.model_schema import model_release
+
+    evaluation, model_id, release_id, _ = evaluation_ready
+    _, owner, _ = database
+    expected, revision, protocol_id = "not_found", 1, "development"
+    if failure == "foreign_workspace":
+        evaluation = replace(
+            evaluation, mutations=replace(evaluation.mutations, workspace_id=uuid4())
+        )
+    elif failure == "unknown_model":
+        model_id = "missing-model"
+    elif failure == "unknown_protocol":
+        protocol_id = "missing-protocol"
+    elif failure == "foreign_protocol":
+        evaluation = replace(
+            evaluation, protocols=(replace(evaluation.protocols[0], project_id=uuid4()),)
+        )
+    elif failure == "unknown_variant":
+        evaluation = replace(
+            evaluation, protocols=(replace(evaluation.protocols[0], variant_id=uuid4()),)
+        )
+    elif failure == "wrong_release":
+        release_id = "missing-release"
+    elif failure == "stale_revision":
+        revision, expected = 2, "revision_conflict"
+    elif failure == "unpublished_model":
+        with owner.begin() as connection:
+            row = dict(
+                connection.execute(
+                    select(model_release).where(model_release.c.release_key == model_id)
+                )
+                .mappings()
+                .one()
+            )
+            row.pop("id")
+            row["release_key"] = "unpublished-" + model_id
+            connection.execute(insert(model_release).values(**row))
+            model_id = row["release_key"]
+        expected = "missing_evidence"
+    if failure == "forged_context":
+        expected = "invalid_request"
+        payload = EvaluationStart(
+            expected_revision=1, dataset_release_id=release_id, protocol_id=protocol_id
+        )
+        context = MutationContext.bind(Actor(), "evaluate", "start_evaluation", model_id, payload)
+        with pytest.raises(ManagementFailure) as exc:
+            evaluation.start_evaluation(Actor(), replace(context, actor_id="forged"), payload)
+    else:
+        with pytest.raises(ManagementFailure) as exc:
+            evaluation_request(
+                evaluation, model_id, release_id, revision=revision, protocol=protocol_id
+            )
+    assert exc.value.error.detail == expected
+    assert evaluation_intent_state(owner, model_id) == ([], [])
+
+
+def test_evaluation_intent_key_collisions_are_distinct_from_model_revision(
+    database, evaluation_ready
+):
+    evaluation, model_id, release_id, _ = evaluation_ready
+    with pytest.raises(ManagementFailure) as exc:
+        evaluation_request(evaluation, model_id, release_id, key="create")
+    assert exc.value.error.detail == "idempotency_conflict"
+    assert evaluation_intent_state(database[1], model_id) == ([], [])
+    accepted = evaluation_request(evaluation, model_id, release_id)
+    with pytest.raises(ManagementFailure) as exc:
+        evaluation_request(evaluation, model_id, "another-release")
+    assert exc.value.error.detail == "idempotency_conflict"
+    assert evaluation_request(evaluation, model_id, release_id) == accepted
+    jobs, receipts = evaluation_intent_state(database[1], model_id)
+    assert len(jobs) == len(receipts) == 1
+
+
+def test_evaluation_intent_refuses_incompatible_compiled_recipe(
+    database, compilation, compiler_worker, evaluation_ready
+):
+    from uuid import UUID
+
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    evaluation, model_id, release_id, _ = evaluation_ready
+    compiled = compile_request(
+        compilation, release_id, key="compile-evaluation-640", recipe="full-letterbox-640-v1"
+    )
+    assert JobRunner(
+        compiler_worker.store,
+        "compile_variant",
+        (Stage("compilation", compiler_worker.compile),),
+        compiler_worker.publish,
+        job_id=compiled.job_id,
+    ).run_once("fixture-compiler")
+    evaluation = replace(
+        evaluation,
+        protocols=(replace(evaluation.protocols[0], variant_id=UUID(compiled.resource.id)),),
+    )
+    with pytest.raises(ManagementFailure) as exc:
+        evaluation_request(evaluation, model_id, release_id)
+    assert exc.value.error.detail == "incompatible_recipe"
+    assert evaluation_intent_state(database[1], model_id) == ([], [])
+
+
+def test_evaluation_protocol_revision_is_a_separate_pinned_intent(database, evaluation_ready):
+    evaluation, model_id, release_id, _ = evaluation_ready
+    first = evaluation_request(evaluation, model_id, release_id)
+    revised = replace(evaluation, protocols=(replace(evaluation.protocols[0], revision=2),))
+    second = evaluation_request(revised, model_id, release_id, key="evaluate-v2")
+    assert first.job_id != second.job_id and first.resource.id != second.resource.id
+    assert evaluation_request(revised, model_id, release_id) == first
+    jobs, receipts = evaluation_intent_state(database[1], model_id)
+    assert len(jobs) == len(receipts) == 2
+    assert {job.input["protocol"]["revision"] for job in jobs} == {1, 2}
+
+
+def test_evaluation_intent_requires_unique_export_publication_receipt(database, evaluation_ready):
+    evaluation, model_id, release_id, _ = evaluation_ready
+    with database[1].begin() as connection:
+        row = dict(
+            connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.event_type == "management.model_exported",
+                    canonical_event.c.aggregate_id == model_id,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        row.pop("id")
+        connection.execute(insert(canonical_event).values(**row))
+    with pytest.raises(ManagementFailure) as exc:
+        evaluation_request(evaluation, model_id, release_id)
+    assert exc.value.error.detail == "missing_evidence"
+    assert evaluation_intent_state(database[1], model_id) == ([], [])
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_evaluation_intent_binds_real_shared_session_and_csrf(
+    database, evaluation_ready, restricted_auth_store, auth_account, role
+):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.main import create_app
+
+    evaluation, model_id, release_id, _ = evaluation_ready
+    _, owner, _ = database
+    identity, credentials = auth_account
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    origin = "https://testserver"
+    operations = SimpleNamespace(start_evaluation=evaluation.start_evaluation)
+    body = {"expected_revision": 1, "dataset_release_id": release_id, "protocol_id": "development"}
+    path = f"/models/{model_id}/evaluations"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200
+        assert (
+            client.post(path, json=body, headers={"Idempotency-Key": "evaluate"}).status_code == 403
+        )
+        assert evaluation_intent_state(owner, model_id) == ([], [])
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "evaluate",
+        }
+        response = client.post(path, json=body, headers=headers)
+        if role == "reviewer":
+            assert response.status_code == 403
+            assert evaluation_intent_state(owner, model_id) == ([], [])
+        else:
+            assert response.status_code == 202, response.text
+            assert client.post(path, json=body, headers=headers).json() == response.json()
+            assert evaluation_intent_state(owner, model_id)[1][0].actor_id == identity
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
 def prepared_export_stage(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
     from labelloop_api.management_compile_worker import content_key
     from labelloop_api.management_model_worker import CanonicalLocalExportWorker

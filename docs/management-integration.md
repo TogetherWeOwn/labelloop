@@ -563,6 +563,50 @@ verified until exact-head Actions completes. They still do not establish a DB-ba
 new-project-to-CPU-export path. Standalone evaluation, detailed reads, full runtime
 registration/grants, effective setup, admission and final mounting remain open.
 
+### Standalone development-evaluation producer (partial, unmounted)
+
+`CanonicalManagementEvaluation` binds `start_evaluation` to the canonical caller
+transaction and existing shared queue. `ApprovedDevelopmentProtocol` is immutable,
+project-scoped trusted server configuration: a stable identifier/revision and a
+specific compiled variant UUID. The request selects only that approved protocol
+and its exact dataset-release ID, never a split, role, weights, threshold, path,
+class map or arbitrary inference arguments. This producer supports development
+on the variant's validation split only; it grants no final-test access, threshold
+tuning, promotion or qualification. Final-test lifecycle remains with the existing
+qualification service, not a second implementation here.
+
+Before enqueue, the adapter checks workspace/project ownership, immutable model
+revision, a unique fenced model-export receipt with saved training/export stages,
+and the delivered model-store lineage/export validator. It reuses the compiler's
+historical snapshot and publication validation for the evaluation variant; recipe,
+class-map and preprocessing identity must match the candidate. Model identity and
+all inference parameters come from the verified atomic model release. No object
+bytes are fetched, inference run, checkpoint selected or report attached during
+intent creation.
+
+The canonical project lock serializes new model/protocol/revision intents across
+actors, without incrementing project configuration or modifying the initial model.
+Existing actor/workspace idempotency locks reconcile exact retries before current
+protocol/revision checks; removing/revising server configuration does not erase an
+accepted receipt. Changed bodies/targets conflict. A distinct protocol revision
+is a distinct pinned experiment; duplicate fresh keys for the same revision are
+refused. Queue kind `evaluate_local`, bounded retries, attributed receipt and result
+identity commit together through `enqueue_in_transaction`. The intent pins model
+record digest, publishing job, weights key, historical compiler job/manifest,
+validation-only development protocol and the candidate's inference policy.
+
+Disposable Actions cases commission both sizes through real canonical/compiler,
+queue and model-publication authority, using explicitly synthetic ML artifacts.
+They cover precommit invisibility, retry/config removal, concurrent submissions,
+missing-grant/caller rollback, identity/revision/protocol/context refusal, unpublished
+or duplicate model evidence, incompatible compiled recipes, versioned protocols,
+and real restricted shared-session/CSRF/admin/reviewer composition. Small unit
+cases cover trusted-protocol validation and scope/bounds. These additions require
+exact-head Actions verification; they do not demonstrate real evaluation or CPU
+project-to-export acceptance. Evaluation worker execution, fenced report/link
+publication, lifecycle-safe final-set composition, runtime registration/grants,
+detailed reads and final app/admission mounting remain incomplete.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
