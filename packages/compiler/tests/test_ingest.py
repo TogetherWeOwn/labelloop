@@ -152,9 +152,63 @@ def test_oversized_header_is_rejected_before_pixel_decode(
         process_image(bytes(data), asset_id="large", project_id="p")
 
 
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+@pytest.mark.parametrize("orientation", range(1, 9))
+def test_supported_formats_normalize_all_exif_orientations(format, orientation):
+    image = Image.new("RGB", (12, 8), "blue")
+    image.paste((230, 40, 20), (0, 0, 6, 4))
+    exif = Image.Exif()
+    exif[274] = orientation
+    source = io.BytesIO()
+    image.save(source, format=format, exif=exif)
+    data = source.getvalue()
+    first, encoded = process_image(data, asset_id="a", project_id="p")
+    second, repeated = process_image(data, asset_id="a", project_id="p")
+    assert first == second and encoded == repeated
+    assert first.exif_orientation == orientation
+    assert (first.width, first.height) == ((8, 12) if orientation >= 5 else (12, 8))
+    transforms = {
+        2: Image.Transpose.FLIP_LEFT_RIGHT,
+        3: Image.Transpose.ROTATE_180,
+        4: Image.Transpose.FLIP_TOP_BOTTOM,
+        5: Image.Transpose.TRANSPOSE,
+        6: Image.Transpose.ROTATE_270,
+        7: Image.Transpose.TRANSVERSE,
+        8: Image.Transpose.ROTATE_90,
+    }
+    with Image.open(io.BytesIO(data)) as opened:
+        expected = opened.convert("RGB")
+        if orientation != 1:
+            expected = expected.transpose(transforms[orientation])
+        expected_output = io.BytesIO()
+        expected.save(expected_output, format="JPEG", quality=95, optimize=False, progressive=False)
+    assert encoded == expected_output.getvalue()
+    with Image.open(io.BytesIO(encoded)) as normalized:
+        assert normalized.format == "JPEG" and normalized.mode == "RGB"
+        assert normalized.getexif().get(274, 1) == 1
+
+
+def test_upload_limit_precedes_decoder(monkeypatch):
+    monkeypatch.setattr("labelloop_compiler.ingest.MAX_UPLOAD_BYTES", 8)
+
+    def open_is_forbidden(*args, **kwargs):
+        raise AssertionError("oversized upload reached the decoder")
+
+    monkeypatch.setattr(Image, "open", open_is_forbidden)
+    with pytest.raises(ValueError, match="40 MiB"):
+        process_image(b"123456789", asset_id="a", project_id="p")
+
+
+def test_truncated_png_is_rejected():
+    output = io.BytesIO()
+    Image.new("RGB", (12, 8), "blue").save(output, format="PNG")
+    with pytest.raises(ValueError, match="decoded"):
+        process_image(output.getvalue()[:40], asset_id="a", project_id="p")
+
+
 def test_fixture_image_toolchain_record():
     from labelloop_compiler.ingest import imaging_toolchain
 
     toolchain = imaging_toolchain()
     assert toolchain["decoder"] == "Pillow Image.open; ImageOps.exif_transpose; RGB"
-    assert toolchain["pillow"] == "12.2.0"
+    assert toolchain["pillow"] == "13.0.0"

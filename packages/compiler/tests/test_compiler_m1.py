@@ -20,6 +20,8 @@ from labelloop_core.geometry import Box, Crop, full_frame_transform, normalize_b
 def test_byte_identical_both_fixture_domains(domain, recipe, tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
     manifest = compile_dataset(domain.release, recipe, first, domain.images)
+    assert manifest["toolchain"]["pillow"] == "13.0.0"
+    assert manifest["toolchain"]["libjpeg_turbo"] == "3.2.0"
     compile_dataset(domain.release, recipe, second, domain.images)
     files = sorted(path.relative_to(first) for path in first.rglob("*") if path.is_file())
     assert files == sorted(path.relative_to(second) for path in second.rglob("*") if path.is_file())
