@@ -43,7 +43,7 @@ describe('screen contracts and role rendering', () => {
   it.each(views)('renders the reviewer read-only without mutation controls: %s', (View) => {
     const html = render(View, fixtureSnapshot, 'reviewer');
     expect(html).toContain('Read-only. Only an admin');
-    expect(html).not.toMatch(/>Approve .*continue<|>Accept Almond|>Freeze r0008<|>Start a run<|>Promote m-|>Roll back 640/);
+    expect(html).not.toMatch(/>Approve .*continue<|>Accept Almond|>Edit Almond|>Freeze r0008<|>Start a run<|>Promote m-|>Roll back 640/);
   });
   it('preserves proposed catalog and evidence provenance', () => {
     const html = render(NewProjectView);

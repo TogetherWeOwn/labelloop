@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { Actions, ProjectDraft, ScreenProps, SetupStep } from './contracts.ts';
-import { Button, CommandButton, Facts, Notice, PageHeading, ReadOnly, Table, Utc } from './shared.tsx';
+import type { Actions, ClassRow, ProjectDraft, ScreenProps, SetupStep } from './contracts.ts';
+import { Button, CommandButton, Facts, Field, Notice, PageHeading, ReadOnly, Table, Utc } from './shared.tsx';
 
 const setupSteps: readonly SetupStep[] = ['Scope', 'Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish'];
 
@@ -10,6 +10,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [name, setName] = useState('');
   const [pairId, setPairId] = useState<string | null>(null);
   const [unsavedFields, setUnsavedFields] = useState(false);
+  const [editing, setEditing] = useState<{ row: ClassRow; revision: number; draftId: string } | null>(null);
+  const pendingEdits = unsavedFields || editing !== null;
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -32,9 +34,10 @@ export function NewProjectView({ data, actions }: ScreenProps) {
       {step === 'Classes' && <>
         <p>Each class gets a permanent id. Renaming keeps it. Merging or splitting classes later makes a new ontology version.</p>
         <Table caption="Classes in this draft" columns={['Class', 'Aliases', 'Parent', 'Examples', 'Not this', 'Mirror-safe', 'Provenance', 'Actions']}>
-          {draft.classes.map((row) => <tr key={row.id}><th scope="row">{row.name}</th><td>{row.aliases || 'None'}</td><td>{row.parent || 'None'}</td><td>{row.examples} {row.examples < 5 && <span className="tag warn">add more</span>}</td><td>{row.exclusions}</td><td>{row.mirror_safe ? 'Yes' : 'No'}</td><td><span className={`tag ${row.provenance === 'Proposed' ? 'proposed' : 'reviewed'}`}>{row.provenance}</span></td><td>{row.provenance === 'Proposed' && <CommandButton actions={actions} onClick={() => { void actions.send({ kind: 'accept_class', draft_id: draft.id, expected_revision: draft.revision, id: row.id }); }}>Accept {row.name}</CommandButton>}</td></tr>)}
+          {draft.classes.map((row) => <tr key={row.id}><th scope="row">{row.name}</th><td>{row.aliases || 'None'}</td><td>{row.parent || 'None'}</td><td>{row.examples} {row.examples < 5 && <span className="tag warn">add more</span>}</td><td>{row.exclusions}</td><td>{row.mirror_safe ? 'Yes' : 'No'}</td><td><span className={`tag ${row.provenance === 'Proposed' ? 'proposed' : 'reviewed'}`}>{row.provenance}</span></td><td><CommandButton actions={actions} disabled={readOnly || pendingEdits} onClick={() => setEditing({ row, revision: draft.revision, draftId: draft.id })}>Edit {row.name}</CommandButton>{row.provenance === 'Proposed' && <CommandButton actions={actions} disabled={readOnly || pendingEdits} onClick={() => { void actions.send({ kind: 'accept_class', draft_id: draft.id, expected_revision: draft.revision, id: row.id }); }}>Accept {row.name}</CommandButton>}</td></tr>)}
         </Table>
-        {actions.role === 'admin' && <form onSubmit={(event) => { event.preventDefault(); void addClass(); }} className="stack"><label htmlFor="new-class">Add a class</label><input id="new-class" value={name} readOnly={readOnly} onChange={(event) => setName(event.currentTarget.value)} /><CommandButton actions={actions} reason={!name.trim() ? 'Enter a class name first.' : undefined} onClick={() => { void addClass(); }}>Add class</CommandButton><p className="help">Mirror-safe means a left-right flip does not change the class. Text on packs usually means no.</p></form>}
+        {editing && <ClassFields key={editing.row.id} draft={draft} actions={actions} row={editing.row} revision={editing.revision} draftId={editing.draftId} readOnly={readOnly} onClose={() => setEditing(null)} />}
+        {actions.role === 'admin' && <form onSubmit={(event) => { event.preventDefault(); if (!readOnly && !pendingEdits) void addClass(); }} className="stack"><label htmlFor="new-class">Add a class</label><input id="new-class" value={name} readOnly={readOnly || pendingEdits} onChange={(event) => setName(event.currentTarget.value)} /><CommandButton actions={actions} disabled={readOnly || pendingEdits} reason={!name.trim() ? 'Enter a class name first.' : undefined} onClick={() => { void addClass(); }}>Add class</CommandButton><p className="help">Mirror-safe means a left-right flip does not change the class. Text on packs usually means no.</p></form>}
         <Notice tone="info">Dataset import and assistant drafting are not connected in this module. Assistant rows remain Proposed until accepted individually.</Notice>
         {draft.dataset_import ? <section className="stack" aria-label="Dataset import validation">
           <h3>Dataset import validation</h3>
@@ -68,10 +71,36 @@ export function NewProjectView({ data, actions }: ScreenProps) {
         <CommandButton actions={actions} primary reason={!setupSteps.slice(0, -1).every((part) => draft.approved_steps.includes(part)) ? 'Approve all preceding steps before publishing.' : draft.published ? 'This release is already published.' : undefined} onClick={() => { void actions.send({ kind: 'publish_project', draft_id: draft.id, expected_revision: draft.revision }); }}>Publish project release 1</CommandButton>
       </>}
       <Notice tone="info">Changing classes re-opens Evidence and Guide. The server invalidates dependent approvals; an unapproved catalog cannot start bulk labelling.</Notice>
-      {stepIndex < setupSteps.length - 1 && !draft.published && <CommandButton actions={actions} primary reason={unsavedFields ? 'Save your changes before approving this step.' : !earlierApproved ? 'Approve the earlier steps first.' : unresolved ? 'Decide all Proposed items or near-duplicate pairs first.' : undefined} onClick={() => { void approve(); }}>Approve {step.toLowerCase()} and continue</CommandButton>}
+      {stepIndex < setupSteps.length - 1 && !draft.published && <CommandButton actions={actions} primary reason={pendingEdits ? 'Save or discard your changes before approving this step.' : !earlierApproved ? 'Approve the earlier steps first.' : unresolved ? 'Decide all Proposed items or near-duplicate pairs first.' : undefined} onClick={() => { void approve(); }}>Approve {step.toLowerCase()} and continue</CommandButton>}
     </section>
-    <div className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={unsavedFields || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></div></div>
+    <div className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={pendingEdits || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></div></div>
   </>;
+}
+
+function ClassFields({ draft, actions, row, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; row: ClassRow; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {
+  const [values, setValues] = useState(() => ({ name: row.name, aliases: row.aliases, parent: row.parent, exclusions: row.exclusions, mirror_safe: row.mirror_safe }));
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const conflict = draftId !== draft.id || revision !== draft.revision || !draft.classes.some((item) => item.id === row.id);
+  const reason = conflict ? 'The draft changed. Discard these edits and inspect the current class before editing again.' : !values.name.trim() ? 'Enter a class name first.' : undefined;
+  async function save() {
+    if (readOnly || saving || reason) return;
+    setSaving(true);
+    const saved = await actions.send({ kind: 'edit_class', draft_id: draft.id, expected_revision: revision, id: row.id, values: { ...values, name: values.name.trim() } });
+    setSaving(false); setFailed(!saved);
+    if (saved) onClose();
+  }
+  return <form className="stack" aria-label={`Edit class ${row.id}`} onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <h3>Edit {row.name}</h3>
+    <Facts items={[[ 'Permanent class ID', row.id ], ['Current provenance', row.provenance]]} />
+    <p>Saving does not accept a Proposed class or change its permanent ID. The server invalidates dependent approvals; merging or splitting classes requires a new ontology version.</p>
+    {(['name', 'aliases', 'parent', 'exclusions'] as const).map((field) => <Field key={field} name={field} label={{ name: 'Class name', aliases: 'Aliases', parent: 'Parent', exclusions: 'Not this' }[field]} value={values[field]} readOnly={readOnly || saving} onChange={(value) => setValues((current) => ({ ...current, [field]: value }))} />)}
+    <label htmlFor="class-mirror-safe">Mirror-safe</label><input id="class-mirror-safe" type="checkbox" checked={values.mirror_safe} disabled={readOnly || saving} onChange={(event) => { const checked = event.currentTarget.checked; setValues((current) => ({ ...current, mirror_safe: checked })); }} />
+    {conflict && <Notice tone="danger">The draft changed while you were editing. Your class fields are retained; no overwrite was sent.</Notice>}
+    {failed && <Notice tone="danger">Your class change did not save. Fields are retained; refresh uncertain records before trying again.</Notice>}
+    <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void save(); }}>{saving ? 'Saving class…' : 'Save class changes'}</CommandButton>
+    <Button disabled={saving || actions.busy} onClick={onClose}>Discard class edits</Button>
+  </form>;
 }
 
 type SetupValues = Readonly<Record<string, string | number | boolean>>;

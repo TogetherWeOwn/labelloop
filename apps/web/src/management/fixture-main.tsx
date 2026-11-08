@@ -27,6 +27,7 @@ if (scenario === 'empty') {
   snapshot.draft.sources = { images: 0, groups: 0, metadata_keys: '', pending_pairs: [], split_summary: 'No source assignments' };
 }
 if (scenario === 'source-details-missing') snapshot.draft.source_assets = null;
+if (scenario === 'dispatch-published') snapshot.draft.published = true;
 if (scenario === 'frozen' && snapshot.release) {
   snapshot.release.state = 'Frozen'; snapshot.release.frozen_at = snapshot.updated_at; snapshot.release.frozen_by = 'Fixture admin';
 }

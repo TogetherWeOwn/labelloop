@@ -27,7 +27,7 @@ second registry, status poller or full-screen navigation should be mounted.
 
 | Accepted screen | Fixture implementation | Contract/browser coverage |
 | --- | --- | --- |
-| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, scope/guide fields and save/error copy, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, individual class acceptance payload, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
+| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, scope/guide fields and save/error copy, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, individual class acceptance payload, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
 | 03 Dataset releases | Accepted-label provenance, distribution table, changed images, exclusions, gate/build/quarantine/identical/frozen states, in-place freeze confirmation | Frozen release exposes no edit/freeze, compiler reason visible, freeze pins expected revision |
 | 04 Size/crop recipes | Shared-scale J22 frames, recorded affine/box geometry, image-level exclusion consequences, locked recipe versioning, compilation/artifact surfaces | Browser rectangles cross-checked with the Python compiler geometry, 640 frame twice 320, compile pins recipe IDs |
 | 05 Local training | Local-only run table and selected details, explicit start/cancel panels, fixed-shape development selection, settings mismatch table, retention and checkpoint hashes | Start pins release/recipe/base hash, size not user-overridden, cancel explicit, no paid start |
@@ -92,12 +92,15 @@ this UI. This is a fidelity/integration question for the design and API owners.
 
 ## Published detail-source alignment
 
-The facade source at `f048e398dbfebb568b97b7a4848e32a3c5302fc1` now defines
+The facade at `fe95fbb292b06486040b531b01461ecd1507ba35` publishes
+`apps/api/openapi/management.openapi.json` and the generated
+`apps/web/src/generated/management-client.ts` with 19 operations, including
 `readProject`, `readFreezePlan`, `readDatasetRelease`, `readRecipePreview`,
 `listTrainingProfiles`, `readTrainingRun`, `readEvaluation` and `readRegistry`.
-Its `docs/management-contract.md` is the integration map. This is source delivery,
-not proof of generated-client publication, mounted routes, working authentication,
-queue binding or persistence. Do not hand-copy a second generated client here.
+Its `docs/management-contract.md` is the integration map. Publication/drift/type
+verification was pending at publication; this is not evidence of mounted routes,
+working authentication, queue binding or persistence. Consume those generated
+types/operations at final integration, not a hand-copied or second network client.
 
 The existing fixture command captures are deliberately **not wire payloads**:
 
@@ -111,7 +114,16 @@ The existing fixture command captures are deliberately **not wire payloads**:
   Geometry, checkpoints, evaluation and atomic registry data reuse core types.
 
 Setup writes and final-test/promotion/rollback retain their documented producers.
-The fixture port is not a replacement persistence adapter, auth session or queue.
+The fixture class editor captures only editable name/aliases/parent/exclusions and
+mirror-safe fields. It pins the inspected draft ID, revision and permanent class
+ID, retains failed/conflicting edits, blocks navigation/acceptance while open,
+and cannot write example counts or approval provenance. Saving does not accept a
+Proposed class. Its existing A11 fields, A1 controls and A14 notices introduce no
+new tokens/layout system. Server-owned definition, parent-ID/list normalization,
+approval invalidation and actual persistence still require the generated setup
+contract; the current 19 operations do not include class editing. No generic
+`save_setup` or `edit_class` capture is a wire payload. The fixture port is not a
+replacement persistence adapter, auth session or queue.
 
 ## Remaining acceptance and final wiring obligations
 
@@ -131,9 +143,14 @@ These remain open; merging fixture components does not discharge them:
 - Wire changed/excluded image drilldowns to the existing review shell, the
   Platform run extension and the operational canary/drift extension. Do not mount
   their standalone fixture screens as competing application screens.
-- Complete exact-head Actions evidence, independent fresh-context review and
-  native UX, QA and Security stages. Full browser/axe results are pending until
-  observed in Actions; screenshots generated by mockups are not this evidence.
+- Complete exact-head Actions evidence and native UX, QA and Security stages.
+  At `65ef204`, Actions run `42432088225`, web job `128583025145` passed 35
+  web unit cases, 148 browser cases (including keyboard/axe) and the six-box
+  compiler DOM cross-check. This predates class editing and does not verify that
+  addition. A supplemental fresh-context review of `4272a28` was completed with
+  eight findings addressed in `752a914`; it is not native approval. Required
+  gitleaks remained red at `65ef204`. Screenshots generated by mockups are not
+  browser evidence.
 - Demonstrate original-frame immutability and per-recipe commands through the
   real facade. UI affordances alone do not establish canonical state transitions.
 

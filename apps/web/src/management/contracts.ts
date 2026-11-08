@@ -108,6 +108,7 @@ export type ManagementCommand =
   | { kind: 'approve_step'; draft_id: string; expected_revision: number; step: SetupStep }
   | { kind: 'accept_class' | 'accept_reference'; draft_id: string; expected_revision: number; id: string }
   | { kind: 'add_class'; draft_id: string; expected_revision: number; name: string }
+  | { kind: 'edit_class'; draft_id: string; expected_revision: number; id: string; values: Pick<ClassRow, 'name' | 'aliases' | 'parent' | 'exclusions' | 'mirror_safe'> }
   | { kind: 'resolve_pair'; draft_id: string; expected_revision: number; pair_id: string; same_group: boolean }
   | { kind: 'publish_project'; draft_id: string; expected_revision: number }
   | { kind: 'freeze_release'; release_id: string; expected_revision: number }

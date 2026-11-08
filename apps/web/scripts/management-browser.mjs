@@ -235,6 +235,68 @@ try {
   assert.deepEqual(commands.map((command) => command.kind), ['save_setup', 'approve_step']);
   assert.equal(commands[1].expected_revision, commands[0].expected_revision + 1);
   results.push({ key: 'refresh-and-port-lifecycles', pass: true, realCommands: false });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open('new-project');
+    await page.getByRole('button', { name: 'Edit Almond milk 1 L', exact: true }).click();
+    const editor = page.getByRole('form', { name: 'Edit class almond', exact: true });
+    await editor.waitFor();
+    assert.equal(await last(), null, 'opening the editor must not accept or mutate');
+    assert.equal(await page.getByRole('button', { name: 'Accept Almond milk 1 L', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('navigation', { name: 'Setup steps' }).getByRole('button', { name: /Scope/ }).isDisabled(), true);
+    await editor.getByLabel('Class name', { exact: true }).fill('   ');
+    assert.equal(await editor.getByRole('button', { name: 'Save class changes', exact: true }).isDisabled(), true);
+    await editor.getByLabel('Class name', { exact: true }).fill('Almond drink 1 L');
+    await editor.getByLabel('Aliases', { exact: true }).fill('almond beverage');
+    await editor.getByLabel('Parent', { exact: true }).fill('Plant drink');
+    await editor.getByLabel('Not this', { exact: true }).fill('Other sizes and desserts');
+    await editor.getByLabel('Mirror-safe', { exact: true }).check();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+    const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => item.id));
+    assert.deepEqual(violations, [], `class-editor-${width}: axe`);
+    await page.screenshot({ path: `${evidence}/class-editor-${width}.png`, fullPage: true });
+    await editor.getByRole('button', { name: 'Save class changes', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await last(), { kind: 'edit_class', draft_id: 'draft-shelf', expected_revision: 7, id: 'almond', values: { name: 'Almond drink 1 L', aliases: 'almond beverage', parent: 'Plant drink', exclusions: 'Other sizes and desserts', mirror_safe: true } });
+    await editor.getByText('Your class change did not save.', { exact: false }).waitFor();
+    assert.equal(await editor.getByLabel('Class name', { exact: true }).inputValue(), 'Almond drink 1 L', 'failed save retains edits');
+    await editor.getByRole('button', { name: 'Discard class edits', exact: true }).click();
+    assert.equal(await editor.count(), 0);
+    results.push({ key: `class-editor-${width}`, pass: true, axe: 0, keyboard: 'save-enter', realCommands: false });
+  }
+  await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
+  await page.getByRole('button', { name: 'Edit Almond milk 1 L', exact: true }).click();
+  const editor = page.getByRole('form', { name: 'Edit class almond', exact: true });
+  await editor.getByLabel('Class name', { exact: true }).fill('Retained class edit');
+  await page.getByRole('button', { name: 'Refresh external records', exact: true }).click();
+  await editor.getByText('The draft changed while you were editing.', { exact: false }).waitFor();
+  assert.equal(await editor.getByLabel('Class name', { exact: true }).inputValue(), 'Retained class edit');
+  assert.equal(await editor.getByRole('button', { name: 'Save class changes', exact: true }).isDisabled(), true);
+  assert.equal(await last(), null, 'conflicted class edit cannot overwrite a newer revision');
+  await editor.getByRole('button', { name: 'Discard class edits', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Almond milk 1 L', exact: true }).click();
+  await editor.getByLabel('Class name', { exact: true }).fill('Renamed almond');
+  await editor.getByRole('button', { name: 'Save class changes', exact: true }).click();
+  assert.equal((await last()).expected_revision, 8);
+  assert.equal(await page.getByRole('button', { name: 'Approve classes and continue', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+  await page.getByRole('button', { name: 'Accept Renamed almond', exact: true }).waitFor();
+  assert.equal(await editor.count(), 0, 'successful save closes editor after refresh');
+  const renamedRow = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Renamed almond', exact: true }) });
+  assert.match(await renamedRow.innerText(), /Proposed/);
+  assert.match(await renamedRow.innerText(), /4 add more/);
+  await page.getByRole('button', { name: 'Accept Renamed almond', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: 'Command completed' }).waitFor();
+  assert.deepEqual(await last(), { kind: 'accept_class', draft_id: 'draft-shelf', expected_revision: 9, id: 'almond' });
+  for (const state of ['ready', 'dispatch-stale', 'dispatch-published']) {
+    await page.goto(`${entry}?screen=new-project&state=${state}`);
+    assert.equal(await page.getByRole('button', { name: 'Edit Almond milk 1 L', exact: true }).isDisabled(), true, `${state}: class editing fails closed`);
+  }
+  await page.goto(`${entry}?screen=new-project&state=dispatch-ready&role=reviewer`);
+  await page.getByRole('navigation', { name: 'Setup steps' }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /^Edit / }).count(), 0);
+  results.push({ key: 'class-editor-revision-provenance-and-role-guards', pass: true, realCommands: false });
   await page.close();
   const assets = await readdir('dist/management-fixture/assets');
   for (const asset of assets.filter((name) => /\.(js|css)$/.test(name))) {

@@ -53,10 +53,11 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
       read: () => Promise.resolve(structuredClone(snapshot)),
       execute: (command) => {
         capture(command);
-        if (command.kind === 'save_setup') return new Promise((resolve) => {
+        if (command.kind === 'save_setup' || command.kind === 'edit_class') return new Promise((resolve) => {
           finishSave = () => {
             snapshot.draft.revision += 1;
-            if (typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
+            if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
+            if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
             resolve({ message: 'Captured save only' });
           };
         });
