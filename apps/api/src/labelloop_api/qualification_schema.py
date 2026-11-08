@@ -3,9 +3,24 @@
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-from labelloop_api.schema import canonical_dataset_release, project
+from labelloop_api.schema import canonical_dataset_release, preprocessing_recipe, project
 
 metadata = sa.MetaData()
+acceptance_event = sa.Table(
+    "qualification_acceptance_event",
+    metadata,
+    sa.Column("project_id", UUID, sa.ForeignKey(project.c.id), primary_key=True),
+    sa.Column("recipe_id", UUID, sa.ForeignKey(preprocessing_recipe.c.id), primary_key=True),
+    sa.Column("revision", sa.Integer, primary_key=True),
+    sa.Column("actor_id", sa.String, nullable=False),
+    sa.Column("action", sa.String, nullable=False),
+    sa.Column("record", sa.JSON, nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    ),
+    sa.CheckConstraint("revision >= 1 AND length(trim(actor_id)) > 0"),
+    sa.CheckConstraint("action IN ('pause','resume')"),
+)
 candidate_selection = sa.Table(
     "qualification_candidate_selection",
     metadata,

@@ -131,6 +131,46 @@ The expanded restore inventory must include both journal tables as well as
 migration, database access, dependency installation or production action is part
 of this change. Frozen migration DDL deliberately does not import live metadata.
 
+## Durable scoped drift and automatic-acceptance port
+
+`acceptance_store` reuses `AcceptanceState`; migration `qualification_0003` follows
+`qualification_0002` and adds the append-only `qualification_acceptance_event` journal.
+Each project/recipe has its own revision sequence. Pauses record the current champion,
+exact affected cells, qualification, reason and incident revision. They do not require
+a failing champion to pass qualification before containment. Resumptions require a
+new qualified current champion, incident-linked qualification **and** canary, and the
+current persisted final-test state. The per-operation acceptance guard also checks the
+current champion, durable annotation veto and scoped pause history under the project
+lock; a rollback never clears that history. Callers must retain the outer transaction
+through the annotation write. Empty actors, stale revisions and failed journal writes
+cannot create a partial transition.
+
+This is an internal trusted port, **not an authenticated route or a completed producer
+integration**. The service must derive the actor, approved expanded scope, historical
+qualification identity, policy/pipeline/audit/canary and canonical group provenance.
+Without trusted qualification, resumption and automatic acceptance fail closed. The
+service/worker acceptance path does not yet consume this port. The existing registry
+port still needs automatic current-final-state and complete authoritative context
+loading; this acceptance port does not substitute for that work.
+
+The paired Actions PostgreSQL smoke now prepares synthetic affected/unaffected cells,
+reconnect recovery, racing pauses, append-only guards and an injected event-write
+failure. A newly promoted synthetic release must present persisted incident links;
+pre-incident evidence cannot resume. A successful resume must survive reconnection,
+and rollback to the invalidated release must still deny automatic acceptance even
+with a new otherwise passing synthetic qualification. These new assertions await
+exact-head Actions; no drift/HTTP acceptance or domain-quality PASS is claimed.
+The recovery owner must add the journal to the expanded restore inventory.
+
+Corrected journal-loader head `80ef127` passed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447535464)
+and [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447537762).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447535464/job/128629548277)
+reported **642 passed, 38 skipped**; [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447535464/job/128629548325)
+reported **16 passed**, plus **24 passed** in the separate budget-persistence step.
+Dev-stack, lint/types/import-contract and web-build also passed. This covers earlier
+checkpoint ancestry and final-journal mechanics at that head, not this new drift
+slice, HTTP enforcement, independent quality, or final milestone acceptance.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

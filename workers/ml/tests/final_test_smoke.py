@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
+from acceptance_smoke import exercise_acceptance
 from qualification_fixture import qualification_context, synthetic_final
 
 from labelloop_api import model_schema, qualification_schema
@@ -18,6 +19,7 @@ from labelloop_api.final_test_store import (
 )
 from labelloop_api.model_store import load_release, save_evaluation
 from labelloop_core.evaluation_lifecycle import EvaluationSet
+from labelloop_core.qualification_data import ScopeCell
 from labelloop_core.qualification_wire import dumps
 from labelloop_core.registry import PromotionPolicy
 
@@ -72,7 +74,9 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
             )
         ).scalar_one()
         release = load_release(connection, model_id)
-        context = qualification_context(release, final, PromotionPolicy(1, 0.0))
+        cells = tuple(ScopeCell(value, "fixture-source", "ordinary") for value in release.class_ids)
+        cells += (ScopeCell(release.class_ids[0], "fixture-source", "low-light"),)
+        context = qualification_context(release, final, PromotionPolicy(1, 0.0), scope=cells)
         context = replace(
             context,
             evidence=replace(
@@ -128,6 +132,10 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
         finally:
             sa.event.remove(connection, "before_cursor_execute", fail_event)
         assert load_final_test(connection, **scope) == exposed
+
+    acceptance_journal = exercise_acceptance(
+        engine, result, manifest, release, final, context, report, seed_variant
+    )
 
     def compete(reason):
         try:
@@ -185,6 +193,7 @@ def exercise_final_test(engine, result, manifest, model, report, seed_variant):
         )
     return {
         "scope": "synthetic lifecycle persistence only; no independent final accuracy",
+        "acceptance_journal": acceptance_journal,
         "selection": dumps(selection),
         "exposed": dumps(exposed),
         "invalidated": dumps(invalidated),
