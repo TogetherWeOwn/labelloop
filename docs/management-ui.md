@@ -259,11 +259,45 @@ implementation. Do not fabricate these fields when mounting the generated client
 New unit cases cover each independently missing field and distinguish known empty,
 false and zero. New browser cases exercise all six steps at 1280/390 for both roles,
 keyboard, axe, overflow and no dispatch, plus loss of evidence during an open edit.
-These new cases are pending Actions verification. The real `read_project` adapter
+These cases passed in the exact-head `fbbc92e` browser artifact (200 results,
+zero failures); the web job passed. The real `read_project` adapter
 remains unmounted; auth, typed setup writes, approval invalidation, publication,
 queue and qualification composition still belong to their existing producers.
 No raw asset URI/object key, provider policy, data parser, network client, tokens,
 components, shell or persistence store is added here.
+
+## Scope-draft producer alignment
+
+Producer source at `90e2b632b7d0eb7d12f3c0af43d2dc445532e795` adds the generated
+`saveScopeDraft` operation at `POST /projects/{project_id}/setup/scope`. This is
+source preparation on an unmounted facade, not an integration pass. Its request
+requires the project ID, an operation idempotency key, and this exact body:
+
+| Producer field | Integration obligation |
+| --- | --- |
+| `expected_revision` | Pin the inspected authoritative project revision, never a guessed draft/release revision. |
+| `name`, `intended_use`, `specificity` | Map the corresponding inspected scope fields explicitly. |
+| `scope` | Map the fixture's `detect` text; do not pass the whole scope object. |
+| `domain` | Supply authoritative project domain evidence; this fixture projection has no domain field. Never infer it from the name, catalog or detection text. |
+| `representation` | Validate the producer enum: `scene_object`, `depiction`, `interface_element`. Free text is not a valid wire enum. |
+| `source_permitted_use` | Map the fixture's `permitted_use` field explicitly. |
+
+The fixture's `external_providers` field is not accepted by this operation and
+must never become provider-policy authority through a generic scope save. Approval,
+publication, provider and spend fields are absent from the generated request.
+Keep the generic `save_setup` capture fixture-only until the shell integrates the
+generated client with the missing project/domain identity and supported policy
+operations. Do not copy the producer client into a competing network adapter.
+
+After success, `readProject` must refresh the revision and approval evidence. The
+producer clears dependent approvals; its attributed detail receipt exposes a
+known empty approved-step set, not null or cached approval. The fixture now
+simulates that empty set after a scope save. New browser regressions at 1280/390
+check revoked step markers, disabled dependent approval/assistant/publication,
+keyboard navigation, axe/overflow, no implicit follow-up command and separate
+scope approval pinned to the refreshed revision. These new cases are pending
+Actions verification. They exercise simulated responses only; no server state,
+authentication, receipt persistence, approval write or publication is implemented.
 
 ## Remaining acceptance and final wiring obligations
 
@@ -284,6 +318,14 @@ These remain open; merging fixture components does not discharge them:
   Platform run extension and the operational canary/drift extension. Do not mount
   their standalone fixture screens as competing application screens.
 - Complete exact-head Actions evidence and native UX, QA and Security stages.
+  At `fbbc92e`, [CI/ci-ok](https://github.com/TogetherWeOwn/labelloop/actions/runs/42445128295),
+  [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42445127984) and
+  [required gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42445127990)
+  passed. The [web job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42445128295/job/128622354607)
+  passed; its [management artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42445128295/artifacts/13602957984)
+  identifies that exact head and reports **200 results, zero failures**. Unknown
+  evidence cases are now verified, not inferred. These results predate the
+  scope-save approval-invalidation fixture regression.
   At `bbc1d40`, [CI/ci-ok](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426869),
   [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426763) and
   [required gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42444426741)
