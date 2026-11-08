@@ -1,5 +1,8 @@
 packages:
   - apps/web
 
+minimumReleaseAge: 4320
+ignoreScripts: true
+
 overrides:
   rollup: 4.67.5
