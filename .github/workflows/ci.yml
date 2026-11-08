@@ -221,6 +221,8 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
+      - name: Reject schema drift after migration, including credential table removal
+        run: uv run alembic -c apps/api/alembic.ini check
       - name: Qualify credential migration and immutable audit on disposable PostgreSQL
         run: uv run pytest packages/credentials/tests/test_postgres.py -v
         env:
