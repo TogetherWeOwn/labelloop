@@ -407,6 +407,7 @@ def exercise_acceptance(
         "stale_final_preserved_complete_head_and_event_count": True,
         "paused_and_resumed_across_connections": True,
         "http_resumption_reloaded_changed_pipeline_scope_and_null_targets": True,
+        "http_resumption_rejected_committed_training_validation_development_final_conflicts": True,
         "http_policy_rejections_preserved_all_journals_and_registry": True,
         "unaffected_cell_and_other_recipe_unchanged": True,
         "racing_pause_winners": 1,

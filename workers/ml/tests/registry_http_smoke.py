@@ -160,9 +160,12 @@ def qualification_journals(engine):
             for table in (
                 qualification_schema.policy_event,
                 qualification_schema.acceptance_event,
+                qualification_schema.candidate_selection,
                 qualification_schema.final_test_event,
+                qualification_schema.audit_sample,
                 qualification_schema.annotation_audit,
                 qualification_schema.annotation_evidence,
+                qualification_schema.generated_label_origin,
             )
         }
 
@@ -414,6 +417,113 @@ def exercise_http_resume_policy_replays(
         assert snapshot(engine, registry.project_id) == heads
 
 
+def exercise_http_resume_group_replays(
+    engine, client, headers, registry, history, pause_ids, qualification
+):
+    from labelloop_api.final_test_store import current_qualification_context
+    from labelloop_api.schema import similarity_relation, source_asset
+
+    scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
+    with engine.begin() as connection:
+        model_id, manifest = connection.execute(
+            sa.select(model_schema.model_release.c.id, model_schema.training_run.c.input_manifest)
+            .join(model_schema.training_run)
+            .where(model_schema.model_release.c.release_key == registry.champion.release_id)
+        ).one()
+        assert (
+            current_qualification_context(connection, qualification, model_id=model_id)
+            == qualification
+        )
+    final_asset = qualification.current_final_test.dataset.release_id + "-positive"
+    development_asset = qualification.evidence.lineage.development.release_id + "-positive"
+    # These are the persisted CPU manifest's actual inputs, not declared lineage.
+    training_asset = next(
+        item["asset_id"] for item in manifest["samples"] if item["split"] == "train"
+    )
+    validation_asset = next(
+        item["asset_id"] for item in manifest["samples"] if item["split"] == "val"
+    )
+    keys = (training_asset, validation_asset, development_asset, final_asset)
+    with engine.connect() as connection:
+        identities = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                    source_asset.c.asset_key.in_(keys)
+                )
+            )
+        }
+    assert set(identities) == set(keys)
+
+    def relations():
+        with engine.connect() as connection:
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(similarity_relation).order_by(similarity_relation.c.id)
+                ).mappings()
+            )
+
+    original_relations = relations()
+    heads = snapshot(engine, registry.project_id)
+    journals = qualification_journals(engine)
+    path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
+    payload = {
+        "expected_revision": history.revision,
+        "expected_registry_revision": registry.revision,
+        "pause_ids": list(pause_ids),
+    }
+    for asset in (training_asset, validation_asset, development_asset):
+        relation_id = uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                sa.insert(similarity_relation).values(
+                    id=relation_id,
+                    left_asset_id=identities[asset],
+                    right_asset_id=identities[final_asset],
+                    reason="declared_metadata",
+                    evidence="synthetic HTTP resumption grouping conflict",
+                    algorithm_version="synthetic-v1",
+                )
+            )
+        try:
+            committed_relations = relations()
+            assert len(committed_relations) == len(original_relations) + 1
+            assert all(row in committed_relations for row in original_relations)
+            # A new connection must observe the committed grouping conflict before
+            # the real HTTP transaction attempts to consume historical qualification.
+            with engine.begin() as connection:
+                with pytest.raises(ValueError, match="merge pinned groups|cross pinned splits"):
+                    current_qualification_context(connection, qualification, model_id=model_id)
+            response = client.post(path, headers=headers, json=payload)
+            assert response.status_code == 409
+            assert response.json() == {"detail": "drift_resume_rejected"}
+            assert response.headers["cache-control"] == "no-store"
+            assert relations() == committed_relations
+            assert qualification_journals(engine) == journals
+            assert snapshot(engine, registry.project_id) == heads
+            with engine.begin() as connection:
+                assert load_acceptance(connection, **scope) == history
+        finally:
+            # Disposable fixture cleanup removes only this injected relation by its
+            # generated identity. No pre-existing canonical or journal row is edited.
+            with engine.begin() as connection:
+                deleted = connection.execute(
+                    sa.delete(similarity_relation).where(similarity_relation.c.id == relation_id)
+                )
+                assert deleted.rowcount == 1
+        assert relations() == original_relations
+        assert qualification_journals(engine) == journals
+        assert snapshot(engine, registry.project_id) == heads
+        with engine.begin() as connection:
+            assert (
+                current_qualification_context(connection, qualification, model_id=model_id)
+                == qualification
+            )
+    # The caller next submits this identical request successfully; stale revisions,
+    # bad incidents or a permanently invalid fixture cannot satisfy these controls.
+
+
 def exercise_http_resume(engine, registry, history, pause_ids, qualification):
     path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
     scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
@@ -497,6 +607,9 @@ def exercise_http_resume(engine, registry, history, pause_ids, qualification):
         with engine.begin() as connection:
             assert load_acceptance(connection, **scope) == history
         exercise_http_resume_policy_replays(
+            engine, client, headers, registry, history, pause_ids, qualification
+        )
+        exercise_http_resume_group_replays(
             engine, client, headers, registry, history, pause_ids, qualification
         )
         assert journal_rows() == before

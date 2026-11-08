@@ -6,7 +6,41 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated final-test lifecycle inspection — pending Actions
+## HTTP canonical-group resumption replay controls — pending Actions
+
+Both-recipe disposable PostgreSQL smoke commits a new canonical relation after
+remediation promotion, connecting an actual compiled training input, an actual
+compiled validation input, or a canonical development member to the final-test
+population. A fresh connection must recover the conflict and the existing current
+context guard must reject the historical qualification. The otherwise-valid admin
+HTTP resumption must then return redacted 409 with `no-store`, preserving every
+qualification table, complete recipe heads, promotion events and all relation rows.
+
+Only the generated conflict relation is removed during disposable fixture cleanup;
+all pre-existing canonical relations and every qualification row remain unchanged.
+Each control rechecks the restored valid context. The existing identical successful
+HTTP resumption follows all controls, so invalid incidents/revisions or a permanently
+broken fixture cannot satisfy rejection alone. The shared snapshot now includes
+samples, selections and exact-revision teacher origins as well as policy, drift,
+final-test, audit and measured-outcome history. No production code, migration,
+dependency, gate or second grouping engine changed. New controls await exact-head
+Actions; no local tests or builds ran. REA angle: exercise the existing canonical
+readers through the real session/resumption transaction, not another lifecycle engine.
+
+## Metadata-only final-test inspection — verified baseline
+
+Exact `35d9035f21614e9f4972273155aa4f9316c86db3`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42521793412),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42521792815) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42521792793)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42521793412/job/128856701903),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42521793412/job/128856701951),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the metadata-only lifecycle reads below, not the new
+group-replay controls, full UI/expanded restore or milestone acceptance. Totals were
+not extracted. Required Devin/fresh-context/native QA/Security gates remain.
+
+## Authenticated final-test lifecycle inspection — verified baseline
 
 `GET /projects/{project_key}/dataset-releases/{release_key}/final-test-state`
 uses the existing human-admin session boundary and scoped, project-locked journal
@@ -22,8 +56,8 @@ PostgreSQL HTTP invalidation controls now inspect state before/after committed
 adaptation and quarantine over fresh connections, require exact metadata-only
 responses, and preserve every policy/acceptance/final/audit/measured-outcome row,
 both registry heads and promotion history on reads. Missing/foreign scope and an
-injected post-load read failure are covered. These new assertions await exact-head
-Actions; no local tests or builds ran. No migration, dependency, design or second
+injected post-load read failure are covered. These assertions passed exact-head
+Actions at `35d9035`; no local tests or builds ran. No migration, dependency, design or second
 lifecycle engine. Operational UI mounting, authenticated promotion/automatic
 annotation, trusted execution/measurement provenance and expanded restore remain
 unfinished. REA angle: reuse the scoped lifecycle reader and existing invalidation
