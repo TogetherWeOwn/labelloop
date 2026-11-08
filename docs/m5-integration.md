@@ -6,7 +6,51 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Composite-key invalidation fixture repair — pending Actions
+## Authenticated scoped drift containment — pending Actions
+
+`POST /projects/{project_key}/registry/{recipe_key}/pauses` requires the existing
+human-admin session, same-origin and CSRF boundary. Strict input accepts expected
+acceptance and registry revisions, a bounded reason, and optional class/source/
+condition selectors. The service expands selectors only over the current champion's
+recorded promotion scope. It derives historical qualification identity and a new
+incident identity; callers cannot supply releases, qualifications, cells, principal,
+resume or clearing authority. The shared project lock survives through append and
+outer commit. A stale head cannot redirect containment to another champion.
+
+Historical promotion evidence is inspected for identity, not granted again. Later
+linked evaluations may extend the same release; rollback retains its original
+qualification lineage. Containment does not require the now-invalid champion to pass
+current quality/final/policy gates. Missing historical promotion provenance rejects
+rather than substituting today's policy; legacy/imported provenance is still an
+explicit service gap. No resumption, automatic acceptance or promotion grant is added.
+
+Adapter cases cover both recipes, server-expanded axes, extended report history,
+missing/substituted provenance, current-gate independence, authentication, strict
+inputs, attribution and outer-transaction rollback/redaction. Both-recipe PostgreSQL
+HTTP smoke replaces its direct operational pause with real admin HTTP after rollback.
+It covers denials/stale/foreign/unknown scope, injected post-insert failure rollback,
+reconnect, historical qualification/session actor recovery, exact scoped containment,
+unchanged historical rows/other recipe/registry events and stale replay rejection.
+These are new unverified assertions; no local tests or builds ran.
+
+No migration, dependency, second drift engine or UI design. Trusted original execution,
+measurement/score/threshold/source/condition provenance, service-owned selectors for
+promotion/acceptance/resumption and expanded restore/UI acceptance remain incomplete.
+Real null targets stay fail-closed. REA angle: reuse persisted promotion scope and the
+existing append-only acceptance journal, never a request-supplied qualification grant.
+
+## Composite-key invalidation fixture repair — verified baseline
+
+Exact `ec8d80e2091296643e7a0888fd00175d8a9c9986`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42513291908) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42513291908/job/128830806323),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42513291908/job/128830806255),
+queue PostgreSQL, migration cycles/all four parent upgrades, web-build, dev-stack and
+lint/types/import-contract. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42513291456)
+and [gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42513291436)
+also succeeded. This verifies the composite-key repair and persisted HTTP whole-test
+invalidation/replay controls, not the new containment slice or milestone acceptance.
+Totals were not extracted. Required independent/native reviews remain gates.
 
 Exact `004451c734951ffb9135dadc85144c9a80aff8c7`
 [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42511849574) failed:
@@ -22,9 +66,9 @@ The fixture now orders each journal by its actual primary key and identifies the
 new event by full-row difference, additionally requiring every prior row to remain
 unchanged. The existing failing both-recipe controls are the regression cases.
 No production store, transition, migration, dependency or gate changed. Corrected
-persisted assertions await exact-head Actions; no local tests or builds ran.
+persisted assertions passed exact-head Actions at `ec8d80e`; no local tests or builds ran.
 
-## Authenticated whole-test invalidation — pending Actions
+## Authenticated whole-test invalidation — verified baseline
 
 `POST /projects/{project_key}/dataset-releases/{release_key}/final-test-events`
 permits only human admins, using the existing session, same-origin and CSRF boundary.
@@ -44,7 +88,7 @@ HTTP. Denial/stale/foreign/duplicate controls, post-insert injected failure roll
 reconnect recovery and exact session-actor events precede retained actual registry
 and automatic-acceptance replay rejection. Frozen membership and prior assessments
 must remain identical; complete registry heads/events and acceptance history must not
-change. New assertions await exact-head Actions; no local tests ran.
+change. These assertions passed exact-head Actions at `ec8d80e`; no local tests ran.
 
 No new state machine, store, migration, dependency or UI design. Authenticated
 promotion/automatic-annotation/operational consumers, trusted original execution and

@@ -11,13 +11,15 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from labelloop_api import auth, model_schema, qualification_schema, registry_api
-from labelloop_api.acceptance_store import load_acceptance, pause_acceptance
+from labelloop_api.acceptance_store import load_acceptance
 from labelloop_api.auth_schema import principal, service_token
 from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
 from labelloop_api.final_test_store import load_final_test
 from labelloop_api.main import app
 from labelloop_api.model_store import json_record, load_registry
-from labelloop_core.qualification_wire import dumps
+from labelloop_core.qualification import QualificationContext
+from labelloop_core.qualification_data import record_sha256
+from labelloop_core.qualification_wire import dumps, loads
 
 ORIGIN = "https://testserver"
 PASSWORD = "fixture-password-only"
@@ -233,6 +235,137 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
     return expected
 
 
+def exercise_http_pause(engine, registry, history):
+    path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/pauses"
+    cell = history.pauses[0].scope[0]
+    payload = {
+        "expected_revision": history.revision,
+        "expected_registry_revision": registry.revision,
+        "class_id": cell.class_id,
+        "source_id": cell.source_id,
+        "condition": cell.condition,
+        "reason": "synthetic scoped HTTP containment control",
+    }
+    scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
+
+    def journal_rows():
+        with engine.connect() as connection:
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(qualification_schema.acceptance_event).order_by(
+                        *qualification_schema.acceptance_event.primary_key.columns
+                    )
+                ).mappings()
+            )
+
+    before = journal_rows()
+    heads = snapshot(engine, registry.project_id)
+    with authenticated_client(engine) as (client, identities, workers):
+        assert client.post(path, json=payload).status_code == 401
+        reviewer = login(client, identities["reviewer"][1])
+        assert client.post(path, headers=reviewer, json=payload).status_code == 403
+        client.cookies.clear()
+        for token in workers.values():
+            assert (
+                client.post(
+                    path, headers={"authorization": "Bearer " + token}, json=payload
+                ).status_code
+                == 403
+            )
+        headers = login(client, identities["admin"][1])
+        for denied in (
+            {},
+            headers | {"origin": "https://untrusted.invalid"},
+            headers | {"x-csrf-token": "wrong"},
+        ):
+            assert client.post(path, headers=denied, json=payload).status_code == 403
+        for extra in (
+            {"actor_id": "forged"},
+            {"qualification_id": "invented"},
+            {"scope": []},
+            {"action": "resume"},
+        ):
+            assert client.post(path, headers=headers, json=payload | extra).status_code == 422
+        for change in (
+            {"expected_revision": history.revision - 1},
+            {"expected_registry_revision": registry.revision - 1},
+            {"class_id": "missing-http-class"},
+            {"source_id": "missing-http-source"},
+            {"condition": "missing-http-condition"},
+        ):
+            assert client.post(path, headers=headers, json=payload | change).status_code == 409
+        for missing in (
+            f"/projects/missing-http-project/registry/{registry.recipe_id}/pauses",
+            f"/projects/{registry.project_id}/registry/missing-http-recipe/pauses",
+        ):
+            assert client.post(missing, headers=headers, json=payload).status_code == 404
+        assert journal_rows() == before
+        assert snapshot(engine, registry.project_id) == heads
+        injected = []
+
+        def fail_after_insert(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.startswith("INSERT INTO qualification_acceptance_event"):
+                injected.append(True)
+                raise sa.exc.SQLAlchemyError("private fixture pause failure")
+
+        sa.event.listen(engine, "after_cursor_execute", fail_after_insert)
+        try:
+            response = client.post(path, headers=headers, json=payload)
+        finally:
+            sa.event.remove(engine, "after_cursor_execute", fail_after_insert)
+        assert injected == [True]
+        assert response.status_code == 503
+        assert response.json() == {"detail": "drift_unavailable"}
+        assert journal_rows() == before
+        with engine.begin() as connection:
+            assert load_acceptance(connection, **scope) == history
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 201
+        assert response.headers["cache-control"] == "no-store"
+        with engine.begin() as connection:
+            changed = load_acceptance(connection, **scope)
+        assert response.json() == json_record(changed)
+        assert changed.revision == history.revision + 1
+        assert changed.pauses[:-1] == history.pauses
+        pause = changed.pauses[-1]
+        assert pause.scope == (cell,)
+        assert changed.is_paused(cell)
+        assert pause.release_id == registry.champion.release_id
+        assert pause.release_sha256 == record_sha256(registry.champion)
+        assert pause.reason == payload["reason"]
+        assert pause.resumed_by_qualification_id is None
+        promotion = max(
+            (
+                row
+                for row in heads[1]
+                if row["action"] == "promote"
+                and row["record"]["after"]["project_id"] == registry.project_id
+                and row["record"]["after"]["recipe_id"] == registry.recipe_id
+                and row["record"]["after"]["champion"]["release_id"] == pause.release_id
+            ),
+            key=lambda row: row["revision"],
+        )
+        original = loads(json.dumps(promotion["record"]["qualification"]), QualificationContext)
+        assert pause.qualification_id == original.evidence.qualification_id
+        for other in original.evidence.scope:
+            if other != cell:
+                assert changed.is_paused(other) == history.is_paused(other)
+        after = journal_rows()
+        assert len(after) == len(before) + 1
+        assert all(row in after for row in before)
+        added = [row for row in after if row not in before]
+        assert len(added) == 1
+        assert added[0]["actor_id"] == identities["admin"][0]
+        assert added[0]["action"] == "pause"
+        assert added[0]["qualification"] is None
+        assert added[0]["record"] == json.loads(dumps(changed))
+        assert client.post(path, headers=headers, json=payload).status_code == 409
+        assert journal_rows() == after
+        assert snapshot(engine, registry.project_id) == heads
+    return changed
+
+
 def exercise_http_rollback(engine, request):
     path = f"/projects/{request.project_id}/promotions"
     read_path = f"/projects/{request.project_id}/registry/{request.recipe_id}"
@@ -347,18 +480,7 @@ def exercise_http_rollback(engine, request):
             current = expected
         assert current.champion == original.champion
         assert current.rollback == original.rollback
-        with engine.begin() as connection:
-            paused = pause_acceptance(
-                connection,
-                project_key=request.project_id,
-                recipe_key=request.recipe_id,
-                actor_id=identities["admin"][0],
-                expected_revision=history.revision,
-                pause_id=request.recipe_id + "-http-inspection",
-                qualification_id=history.pauses[0].qualification_id,
-                scope=history.pauses[0].scope,
-                reason="synthetic persisted operational-read control",
-            )
+        paused = exercise_http_pause(engine, current, history)
         assert assert_operations_read(client, engine, current) == paused
         assert paused.is_paused(history.pauses[0].scope[0])
 

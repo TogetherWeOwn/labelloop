@@ -6,12 +6,55 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 
-from labelloop_api import acceptance_store, annotation_audit_store, final_test_store, model_store
+from labelloop_api import (
+    acceptance_store,
+    annotation_audit_store,
+    drift_service,
+    final_test_store,
+    model_store,
+)
 from labelloop_api.auth import auth_store, require_admin, require_reviewer
 from labelloop_api.auth_store import Principal
 from labelloop_core.audit import AuditObservation
 
 router = APIRouter(tags=["registry"])
+
+
+class DriftPauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0)
+    expected_registry_revision: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    class_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+    source_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+    condition: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+
+
+@router.post("/projects/{project_key}/registry/{recipe_key}/pauses", status_code=201)
+def pause_drift(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    recipe_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: DriftPauseRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = drift_service.pause_current_champion(
+                connection,
+                project_key=project_key,
+                recipe_key=recipe_key,
+                actor_id=actor.id,
+                **payload.model_dump(),
+            )
+            record = model_store.json_record(changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="drift_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="drift_pause_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="drift_unavailable") from None
+    return record
 
 
 class RollbackRequest(BaseModel):
