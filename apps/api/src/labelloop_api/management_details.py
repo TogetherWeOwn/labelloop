@@ -53,7 +53,7 @@ class ReferenceRead(Contract):
     scale: Text
     confused_with: list[Identifier]
     validity_scope: Text
-    approval: Literal["proposed", "admin_approved"]
+    approval: Literal["proposed", "admin_approved", "withdrawn"]
 
 
 class GuideRead(Contract):

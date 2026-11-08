@@ -78,7 +78,13 @@ SETUP_APPROVAL = {
     "draft_sha256": "a" * 64,
     "reason": "Reviewed scope intent",
 }
+REFERENCE_WITHDRAW = {
+    "expected_revision": 4,
+    "reference_id": "reference-a",
+    "reason": "No longer valid for the declared scope",
+}
 MUTATIONS = [
+    ("/projects/p/references/withdraw", "withdraw_reference", REFERENCE_WITHDRAW, 200),
     ("/projects/p/setup/approvals", "approve_setup_step", SETUP_APPROVAL, 200),
     ("/projects/p/references", "enroll_reference", REFERENCE, 201),
     ("/projects/p/references/accept", "accept_reference", REFERENCE_ACCEPT, 200),
@@ -174,6 +180,31 @@ MUTATIONS = [
         200,
     ),
 ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("reference_id", ""),
+        ("reason", ""),
+        ("reason", "x" * 4097),
+        ("expected_revision", True),
+        ("approved", True),
+        ("actor_id", "forged"),
+        ("base_ontology_id", "obsolete"),
+        ("assignment_version", "obsolete"),
+        ("class_id", "other"),
+    ],
+)
+def test_reference_withdrawal_refuses_identity_replacement_and_privileged_fields(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/references/withdraw",
+        json={**REFERENCE_WITHDRAW, field: value},
+        headers={"Idempotency-Key": "withdrawal"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
 
 
 @pytest.mark.parametrize(
@@ -721,8 +752,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 25
-    assert sum(len(methods) for methods in spec["paths"].values()) == 26
+    assert len(spec["paths"]) == 26
+    assert sum(len(methods) for methods in spec["paths"].values()) == 27
+    assert (
+        spec["paths"]["/projects/{project_id}/references/withdraw"]["post"]["operationId"]
+        == "withdrawReference"
+    )
+    assert "export type ReferenceWithdraw =" in client
     assert (
         spec["paths"]["/projects/{project_id}/setup/approvals"]["post"]["operationId"]
         == "approveSetupStep"

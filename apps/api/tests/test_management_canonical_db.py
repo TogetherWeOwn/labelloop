@@ -24,6 +24,7 @@ from labelloop_api.management_contracts import (
     ProjectCreate,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceWithdraw,
     ReleaseFreeze,
     ScopeDraft,
     SetupStepApprove,
@@ -1494,6 +1495,326 @@ def test_reference_acceptance_enforces_workspace_context_and_project_ownership(d
             service, other.id, payload.model_copy(update={"expected_revision": 1}), key="other-ref"
         )
     assert counts(owner, created.id)[2] == 3
+
+
+def withdraw(service, project_id, payload, actor=None, key="withdraw-reference"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "withdraw_reference", project_id, payload)
+    return service.withdraw_reference(actor, context, payload)
+
+
+def withdrawal_payload(acceptance, revision=4):
+    return ReferenceWithdraw(
+        expected_revision=revision,
+        reference_id=acceptance.reference_id,
+        reason="No longer valid for the current scope",
+    )
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_reference_withdrawal_preserves_history_and_revokes_approval(database, accepted):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    if accepted:
+        accept(service, created.id, approval)
+    payload = withdrawal_payload(approval, 4 if accepted else 3)
+    with owner.connect() as connection:
+        provenance = connection.execute(
+            select(reference_example.c.evidence_provenance).where(
+                reference_example.c.id == payload.reference_id
+            )
+        ).scalar_one()
+    result = withdraw(service, created.id, payload)
+    assert result.revision == payload.expected_revision + 1 and result.state == "draft"
+    assert withdraw(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        withdraw(service, created.id, payload.model_copy(update={"reason": "Different"}))
+    for revision in (payload.expected_revision, result.revision):
+        with pytest.raises(ManagementFailure, match="revision_conflict"):
+            withdraw(
+                service,
+                created.id,
+                payload.model_copy(update={"expected_revision": revision}),
+                key=f"again-{revision}",
+            )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.references[0].approval == "withdrawn"
+    assert detail.approved_steps == [] and detail.published_release_id is None
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        accept(
+            service,
+            created.id,
+            approval.model_copy(update={"expected_revision": result.revision}),
+            key="reactivate",
+        )
+    with owner.connect() as connection:
+        row = connection.execute(
+            select(reference_example).where(reference_example.c.id == payload.reference_id)
+        ).one()
+        assert not row.approved and row.evidence_provenance == provenance
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.withdraw_reference",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.payload["evidence"]["reference"] == detail.references[0].model_dump()
+        assert receipt.payload["evidence"]["reason"] == payload.reason
+    assert reference_count(owner, created.id) == 1
+    assert counts(owner, created.id)[2] == result.revision
+
+
+@pytest.mark.parametrize("change", ["scope", "guide", "sources", "ontology", "holdout", "pending"])
+def test_withdrawal_retires_stale_approval_without_renewing_eligibility(database, change):
+    service, owner, _ = database
+    created, source, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    revision = 4
+    if change == "scope":
+        save_scope(service, created.id, scope_payload(revision))
+        revision += 1
+    elif change == "guide":
+        save_guide(service, created.id, guide_payload(revision))
+        revision += 1
+    elif change == "sources":
+        save_sources(service, created.id, source_policy_payload(revision))
+        revision += 1
+    else:
+        with owner.begin() as connection:
+            if change == "ontology":
+                connection.execute(
+                    insert(ontology_release).values(
+                        ontology_key=str(uuid4()),
+                        project_id=created.id,
+                        version=2,
+                        classes=[
+                            {"stable_id": "package", "name": "Package", "definition": "Package"}
+                        ],
+                        class_map={"package": 0},
+                    )
+                )
+            elif change == "holdout":
+                connection.execute(
+                    insert(source_split_assignment).values(
+                        assignment_version="assignment-2",
+                        asset_id=source.id,
+                        group_id="group-1",
+                        split="test",
+                        seed=7,
+                        algorithm="union-find-grouped-stratified-v2",
+                        thresholds={"phash_max_distance": 8},
+                        reason="New holdout",
+                        locked=True,
+                    )
+                )
+            else:
+                connection.execute(
+                    insert(borderline_review).values(
+                        left_asset_id=source.id,
+                        right_asset_id=source.id,
+                        metric="phash",
+                        value="7",
+                        algorithm_version="fixture-v1",
+                        review_state="pending",
+                    )
+                )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence|revision_conflict"):
+        reads.read_project(Reader(), created.id)
+    assert (
+        withdraw(service, created.id, withdrawal_payload(approval, revision)).revision
+        == revision + 1
+    )
+    assert reads.read_project(Reader(), created.id).references[0].approval == "withdrawn"
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_reference_withdrawal_serializes_project_revision_and_retry(database, same_key):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    payload = withdrawal_payload(approval)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return withdraw(service, created.id, payload, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(5) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id)[2] == 5
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_reference_withdrawal_refuses_nonadmin(database, actor):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        withdraw(service, created.id, withdrawal_payload(approval, 3), actor=actor)
+    assert counts(owner, created.id)[2] == 3
+
+
+def test_reference_withdrawal_enforces_scope_and_context_before_replay(database):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    payload = withdrawal_payload(approval, 3)
+    withdraw(service, created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        withdraw(replace(service, workspace_id=uuid4()), created.id, payload)
+    other = create(service, key="other")
+    with pytest.raises(ManagementFailure, match="not_found"):
+        withdraw(
+            service, other.id, payload.model_copy(update={"expected_revision": 1}), key="other"
+        )
+    context = MutationContext.bind(Actor(), "withdraw", "withdraw_reference", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.withdraw_reference(Actor(), replace(context, actor_id="forged"), payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        withdraw(
+            service,
+            created.id,
+            payload.model_copy(update={"reference_id": "missing", "expected_revision": 4}),
+            key="missing",
+        )
+    assert counts(owner, created.id)[2] == 4
+
+
+@pytest.mark.parametrize(
+    "privilege",
+    [
+        "INSERT ON canonical_event",
+        "UPDATE (approved) ON reference_example",
+        "UPDATE (access_policy) ON project",
+    ],
+)
+def test_reference_withdrawal_is_atomic_on_runtime_grant_failure(database, privilege):
+    service, owner, role = database
+    created, _, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    payload = withdrawal_payload(approval)
+    before = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        withdraw(service, created.id, payload)
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+        == before
+    )
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} TO "{role}"'))
+    assert withdraw(service, created.id, payload).revision == 5
+
+
+@pytest.mark.parametrize("tamper", ["approval", "provenance", "forged-withdrawal"])
+def test_withdrawal_requires_intact_rows_and_receipt_history(database, tamper):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    payload = withdrawal_payload(approval)
+    if tamper == "forged-withdrawal":
+        withdraw(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(
+            reference_example.update()
+            .where(reference_example.c.id == payload.reference_id)
+            .values(
+                **(
+                    {"evidence_provenance": "{}"}
+                    if tamper == "provenance"
+                    else {"approved": tamper == "forged-withdrawal"}
+                )
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+    if tamper != "forged-withdrawal":
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            withdraw(service, created.id, payload)
+
+
+def test_withdrawal_clears_setup_approvals_and_qualification(database):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    save_scope(service, created.id, scope_payload(3))
+    approve_step(service, created.id, step_approval(service, created.id))
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(
+                access_policy={**row.access_policy, "auto_accept_qualification": {"id": "obsolete"}}
+            )
+        )
+    withdraw(service, created.id, withdrawal_payload(approval, 5))
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert (
+            policy["management_setup_approvals"] == {} and "auto_accept_qualification" not in policy
+        )
+
+
+def test_acceptance_and_withdrawal_cannot_both_win_the_same_revision(database):
+    service, owner, _ = database
+    created, _, approval = acceptance_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(operation):
+        barrier.wait()
+        try:
+            result = (
+                accept(service, created.id, approval)
+                if operation == "accept"
+                else withdraw(service, created.id, withdrawal_payload(approval, 3))
+            )
+            return result.revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("accept", "withdraw")))
+    assert sorted(str(item) for item in outcomes) == ["4", "revision_conflict"]
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    if detail.references[0].approval == "admin_approved":
+        withdraw(service, created.id, withdrawal_payload(approval), key="retire-winner")
+    else:
+        assert detail.references[0].approval == "withdrawn"
+    assert counts(owner, created.id)[2] in {4, 5}
+
+
+def test_withdrawn_reference_reads_are_select_only_and_do_not_enable_freeze(database):
+    service, owner, role = database
+    created, _, approval = acceptance_inputs(service, owner)
+    accept(service, created.id, approval)
+    withdraw(service, created.id, withdrawal_payload(approval))
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_project(Reader(), created.id).references[0].approval == "withdrawn"
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    assert counts(owner, created.id) == before
 
 
 def source_policy_payload(revision=1):

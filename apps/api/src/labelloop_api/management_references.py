@@ -1,4 +1,4 @@
-"""Receipt-backed reference enrollment/acceptance, not pack publication or retrieval."""
+"""Receipt-backed reference lifecycle, not pack publication or retrieval."""
 
 import hashlib
 import json
@@ -6,7 +6,12 @@ from uuid import uuid4
 
 from sqlalchemy import Connection, func, insert, select, update
 
-from .management_contracts import ManagementError, ReferenceAccept, ReferenceEnroll
+from .management_contracts import (
+    ManagementError,
+    ReferenceAccept,
+    ReferenceEnroll,
+    ReferenceWithdraw,
+)
 from .management_details import ReferenceRead
 from .management_grouping import load_grouping
 from .management_ports import ManagementFailure
@@ -215,10 +220,26 @@ def accept_reference(
     return reference.model_copy(update={"approval": "admin_approved"})
 
 
-def read_references(
-    connection: Connection, project_row, workspace_id
-) -> list[ReferenceRead] | None:
-    read_setup_approvals(connection, project_row, workspace_id)
+def withdraw_reference(
+    connection: Connection, project_row, workspace_id, payload: ReferenceWithdraw
+) -> ReferenceRead:
+    # Retiring stale evidence needs intact history, not current approval eligibility.
+    # This private history loader is never used to serve an approved public read.
+    history = _reference_history(connection, project_row, workspace_id)
+    reference = next((ref for ref, _, _ in history if ref.id == payload.reference_id), None)
+    if reference is None:
+        reject("not_found")
+    if reference.approval == "withdrawn":
+        reject("revision_conflict")
+    connection.execute(
+        update(reference_example)
+        .where(reference_example.c.id == reference.id)
+        .values(approved=False)
+    )
+    return reference.model_copy(update={"approval": "withdrawn"})
+
+
+def _reference_history(connection: Connection, project_row, workspace_id):
     rows = connection.execute(
         select(reference_example, source_asset.c.asset_key)
         .join(source_asset)
@@ -228,8 +249,9 @@ def read_references(
     ).all()
     receipts = reference_receipts(connection, project_row, workspace_id, "enroll_reference")
     approvals = reference_receipts(connection, project_row, workspace_id, "accept_reference")
-    if not rows and not receipts and not approvals:
-        return None
+    withdrawals = reference_receipts(connection, project_row, workspace_id, "withdraw_reference")
+    if not rows and not receipts and not approvals and not withdrawals:
+        return []
     if (
         len(rows) > 1000
         or len(rows) != len(receipts)
@@ -240,14 +262,18 @@ def read_references(
     approved = {
         receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in approvals
     }
+    withdrawn = {
+        receipt["evidence"]["reference"]["id"]: receipt["evidence"] for receipt in withdrawals
+    }
     if (
         len(by_id) != len(rows)
         or len(approved) != len(approvals)
+        or len(withdrawn) != len(withdrawals)
         or not approved.keys() <= by_id.keys()
+        or not withdrawn.keys() <= by_id.keys()
     ):
         reject("missing_evidence")
     result = []
-    validation_cache = {}
     for row in rows:
         evidence = by_id.get(str(row.id))
         if evidence is None:
@@ -259,7 +285,7 @@ def read_references(
             or ref.class_id != row.class_id
             or ref.validity_scope != row.validity_scope
             or ref.approval != "proposed"
-            or row.approved != (ref.id in approved)
+            or row.approved != (ref.id in approved and ref.id not in withdrawn)
             or row.crop is not None
             or row.embedding_model is not None
             or json.loads(row.evidence_provenance) != value
@@ -272,11 +298,30 @@ def read_references(
                 approval["reference"] != accepted.model_dump(mode="json")
                 or approval["ontology_id"] != evidence["ontology_id"]
                 or approval["assignment_version"] != evidence["assignment_version"]
-                or approval["context_sha256"] != reference_context_sha256(project_row)
             ):
                 reject("missing_evidence")
-            # Approval is not a permanent escape from current holdout/ontology
-            # checks. Reads stay SELECT-only within their existing snapshot.
+            ref = accepted
+        if ref.id in withdrawn:
+            ref = ref.model_copy(update={"approval": "withdrawn"})
+            if withdrawn[ref.id]["reference"] != ref.model_dump(mode="json"):
+                reject("missing_evidence")
+        result.append((ref, evidence, approved.get(ref.id)))
+    return result
+
+
+def read_references(
+    connection: Connection, project_row, workspace_id
+) -> list[ReferenceRead] | None:
+    read_setup_approvals(connection, project_row, workspace_id)
+    history = _reference_history(connection, project_row, workspace_id)
+    validation_cache = {}
+    result = []
+    for ref, evidence, approval in history:
+        if ref.approval == "admin_approved":
+            if approval["context_sha256"] != reference_context_sha256(project_row):
+                reject("missing_evidence")
+            # Only withdrawn evidence can bypass current eligibility, and it is
+            # explicitly historical, never usable as an approved reference.
             validate_reference_source(
                 connection,
                 project_row,
@@ -284,6 +329,5 @@ def read_references(
                 lock_sources=False,
                 validation_cache=validation_cache,
             )
-            ref = accepted
         result.append(ref)
-    return result
+    return result or None

@@ -198,8 +198,8 @@ Enrollment invalidates setup approvals/automatic acceptance and blocks new
 freezes pending validated publication. Existing frozen releases are unchanged.
 The mutation returns the project revision; refresh `readProject` for the
 server-issued reference ID. Real asset admission remains unbound under its
-exact-consuming-head Security condition. Pack publication, revalidation/withdrawal
-commands after changes and retrieval binding remain incomplete.
+exact-consuming-head Security condition. Pack publication, revalidation
+and retrieval binding remain incomplete; withdrawal is described below.
 
 ## Reference acceptance (unmounted)
 
@@ -219,14 +219,39 @@ unchanged. The attributed acceptance receipt binds the exact reference, ontology
 assignment, reason and current scope/guide/source-policy context. Project reads
 show `admin_approved` only when both receipts and the stored row match, and recheck
 current source evidence in their SELECT-only snapshot. Stale context/grouping or
-changed ontology fails closed; these are not automatically reapproved. A future
-explicit revalidation/withdrawal path is required to recover stale acceptance.
+changed ontology fails closed; these are not automatically reapproved. The
+withdrawal path below retires stale acceptance; revalidation remains unavailable.
 Shared grouping checks are cached only within that read snapshot, not across
 requests. No project step approval, publication, embedding, retrieval authority,
 model qualification, paid call or real asset admission is enabled. Setup
 approvals/automatic acceptance remain invalidated and new freezes remain gated.
 The disposable Actions test role alone receives the narrow approval-column grant;
 production runtime grants and final composition remain separate gated work.
+
+## Reference withdrawal (unmounted)
+
+`withdrawReference`, `POST /projects/{project_id}/references/withdraw`, retires an
+owned enrolled reference using its server-issued `reference_id`, expected project
+revision and reason. It can retire either proposed or accepted evidence. No
+replacement metadata, approval, identity or obsolete ontology/assignment pin is
+accepted. Withdrawal does not need current approval eligibility: stale scope,
+guide, source-policy, ontology, holdout or pending-pair evidence must not prevent
+revocation. The persisted row and attributed enrollment/acceptance history must
+still match. Public reads continue to recheck current eligibility for every
+unwithdrawn accepted reference; the history-only loader is private to revocation.
+
+The shared project/retry locks serialize withdrawal with enrollment, acceptance
+and setup changes. The transaction sets only the existing `approved` column to
+false, clears setup approvals/automatic acceptance, and appends an attributed
+withdrawal receipt. Enrollment provenance and past acceptance events remain
+unchanged. `readProject.references` retains the metadata with `approval: withdrawn`;
+it is not usable approval or retrieval evidence. A row/receipt mismatch fails
+closed, even for withdrawn evidence. Retries return the original result; another
+key cannot withdraw it again or reactivate it through `acceptReference`. A future
+explicit revalidation or new enrollment must validate all current evidence anew.
+No reference is deleted, no descendant release is rewritten, and no publication,
+qualification, real admission or new production grant is enabled. New freezes
+remain gated, and stale *other* accepted references still fail closed until retired.
 
 ## Remaining commands and accountable producer boundaries
 

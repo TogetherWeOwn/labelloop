@@ -23,6 +23,7 @@ from .management_contracts import (
     RecipeId,
     ReferenceAccept,
     ReferenceEnroll,
+    ReferenceWithdraw,
     ReleaseFreeze,
     Resource,
     ResourceKind,
@@ -260,6 +261,23 @@ def management_router(
             actor, idempotency_key, "accept_reference", project_id, payload
         )
         return invoke(lambda: service.accept_reference(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/references/withdraw",
+        response_model=Resource,
+        operation_id="withdrawReference",
+    )
+    def withdraw_reference(
+        project_id: Identifier,
+        payload: ReferenceWithdraw,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "withdraw_reference", project_id, payload
+        )
+        return invoke(lambda: service.withdraw_reference(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/assets",

@@ -162,6 +162,11 @@ class ReferenceAccept(Mutation):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
+class ReferenceWithdraw(Mutation):
+    reference_id: Identifier
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[
