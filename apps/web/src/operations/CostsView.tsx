@@ -11,25 +11,27 @@ export function CostsView({ state, readId, role, scope, commands, onRefresh }: {
 }) {
   return <section className="operations"><header className="phead"><div><h1>Costs. <span>Nothing paid runs without an estimate.</span></h1>
     {role === 'reviewer' && <p>Read-only. Only an admin can manage spending policy.</p>}</div></header>
-    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, readId])} record={record} role={role} scope={scope} stale={stale} commands={commands} onRefresh={onRefresh} />}</ViewBoundary>
+    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, role])} record={record} readId={readId} role={role} scope={scope} stale={stale} commands={commands} onRefresh={onRefresh} />}</ViewBoundary>
   </section>;
 }
 
 function BudgetMeter({ label, used, limit }: { label: string; used: number; limit: number | null }) {
   const exhausted = limit !== null && used >= limit;
   const percent = limit === null ? null : limit === 0 ? 100 : used / limit * 100;
-  const percentLabel = percent === null ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(Math.floor(percent * 10) / 10);
+  // Truncate exact integer tenths before conversion; floating division can turn 29 into 28.9.
+  const displayPercent = limit === null ? null : limit === 0 ? 100 : Number(BigInt(used) * 1000n / BigInt(limit)) / 10;
+  const percentLabel = displayPercent === null ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(displayPercent);
   const tone = exhausted ? 'danger' : percent !== null && percent > 80 ? 'warn' : '';
   return <div className="tile"><span className="label">{label}</span><strong className="value">{usd(used)}{limit !== null && <> / {usd(limit)}</>}</strong>
     {percent !== null ? <><div className={`meter ${tone}`} role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(percent, 100)} aria-valuetext={`${percentLabel}% of limit; ${usd(used)} against ${usd(limit ?? 0)}`}><span style={{ width: `${Math.min(percent, 100)}%` }} /></div>
       {percent > 80 && <p>{exhausted ? 'At or above the limit.' : `You've used ${percentLabel}% of this limit.`}</p>}</> : <p>Limit not set · paid steps unavailable.</p>}</div>;
 }
 
-function CostsContent({ record, role, scope, stale, commands, onRefresh }: {
-  record: CostsRecord; role: Role; scope: CostScope; stale: boolean; commands?: CostCommands; onRefresh: () => void;
+function CostsContent({ record, readId, role, scope, stale, commands, onRefresh }: {
+  record: CostsRecord; readId: string | number; role: Role; scope: CostScope; stale: boolean; commands?: CostCommands; onRefresh: () => void;
 }) {
   const [kind, setKind] = useState<OperationKind | null>(null);
-  const command = useCostCommand(stale, commands, onRefresh);
+  const command = useCostCommand(readId, stale, commands, onRefresh);
   const monthly = record.entries.filter((entry) => entry.project_id === record.project_id && entry.month === record.month);
   const month = totals(monthly);
   const iteration = totals(record.entries.filter((entry) => entry.project_id === record.project_id && entry.iteration_id === record.iteration_id));
@@ -45,7 +47,7 @@ function CostsContent({ record, role, scope, stale, commands, onRefresh }: {
     <div className="cost-layout">
       <aside className="card policy" aria-label="Budget and policy"><h2>Spending policy</h2>
         <p>Limits are checked against estimates, not caps on actual billing. Actual billing can come in above an estimate.</p>
-        {role === 'admin' ? <PolicyEditor record={record} command={command} commands={commands} onRefresh={onRefresh} /> : <Facts items={[
+        {role === 'admin' ? <PolicyEditor key={command.editorGeneration} record={record} command={command} commands={commands} onRefresh={onRefresh} /> : <Facts items={[
           ['Spend without asking', record.policy.autonomous_spend ? 'On' : 'Off'],
           ['Monthly limit', record.policy.monthly_limit === null ? 'Not set' : usd(record.policy.monthly_limit)],
           ['Per iteration', record.policy.iteration_limit === null ? 'Not set' : usd(record.policy.iteration_limit)],
@@ -64,10 +66,21 @@ function CostsContent({ record, role, scope, stale, commands, onRefresh }: {
   </div>;
 }
 
-function useCostCommand(stale: boolean, commands: CostCommands | undefined, onRefresh: () => void) {
+function useCostCommand(readId: string | number, stale: boolean, commands: CostCommands | undefined, onRefresh: () => void) {
   const [pending, setPending] = useState(false);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [message, setMessage] = useState('');
+  const [lastReadId, setLastReadId] = useState(readId);
+  const [editorGeneration, setEditorGeneration] = useState(0);
+  if (lastReadId !== readId) {
+    setLastReadId(readId);
+    // Ordinary unchanged-record reads retain the editor, filter and focused DOM.
+    if (needsRefresh) {
+      setNeedsRefresh(false);
+      setMessage('');
+      setEditorGeneration(editorGeneration + 1);
+    }
+  }
   const disabled = stale || pending || needsRefresh || commands === undefined;
   const execute = async (action: () => Promise<void>) => {
     if (disabled) return;
@@ -76,7 +89,7 @@ function useCostCommand(stale: boolean, commands: CostCommands | undefined, onRe
     catch { setMessage('The change was not confirmed. Refresh records before trying again.'); setNeedsRefresh(true); }
     finally { setPending(false); }
   };
-  return { disabled, execute, message, setMessage, needsRefresh };
+  return { disabled, execute, message, setMessage, needsRefresh, editorGeneration };
 }
 
 function PolicyEditor({ record, command, commands, onRefresh }: { record: CostsRecord; command: ReturnType<typeof useCostCommand>; commands?: CostCommands; onRefresh: () => void }) {

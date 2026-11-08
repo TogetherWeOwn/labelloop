@@ -34,9 +34,13 @@ writes, require a refresh rather than automatic retry. Policy writes carry the
 expected revision; autonomous spending requires an in-place confirmation of the
 exact draft limits. The server still checks every invariant and permission.
 `CostsView.readId` identifies a successful authoritative read, not a record revision:
-advance it after each successful read, including unchanged revisions. This resets
-failed-command recovery and drafts without remounting the whole view. Do not advance
-it on a failed read or merely to retry a command.
+advance it after each successful read, including unchanged revisions. Ordinary reads
+of the same project/revision preserve dirty drafts, focus and the ledger filter.
+Only a read following a confirmed or uncertain command clears its recovery gate and
+resets the editor to authoritative values. Project, revision or role changes reset
+the record-bound content; writes remain revision-pinned. Do not advance `readId` on
+a failed read or merely to retry a command. Background reads must retain the ready
+record rather than replace it with the initial loading boundary.
 
 Audit pagination/results and pending exports belong to one port, role and freshness
 lifetime. Replacing a port (including a project/session authorization change),
@@ -44,7 +48,12 @@ advancing `updatedAt`, or changing stale status restarts that lifetime before ol
 rows can render under new freshness. Keep the port stable within a scope; replace
 it whenever its authorization/project scope changes. Filters survive a lifetime
 change, but cursors, rows, export status and pending query/export work do not.
-The server must still reject revoked scopes/cursors independently.
+The server must still reject revoked scopes/cursors independently. Within a lifetime,
+next-page requests retain accumulated rows and the mounted pagination control;
+`aria-disabled` plus an activation guard prevents repeat requests without dropping
+keyboard focus. Page errors retain those rows and offer an explicit retry of the
+same cursor, never an automatic retry. Initial-query errors still use the full error
+boundary.
 
 ## Not delivered: authenticated integration
 
@@ -80,13 +89,15 @@ shell/auth work are untouched. `vite.operations.config.ts` produces a separate
 
 Query options: `view=costs|audit|models`,
 `state=ready|loading|empty|error|stale|readonly`; Costs additionally supports
-`scope=iteration|run|review_batch`, `state=unset|editable|command-error`.
+`scope=iteration|run|review_batch`, `state=unset|editable|command-error|background-refresh`.
 `editable` simulates policy changes in React memory only, with no provider, API,
 credential or persistent configuration writes. Every page says it is a fixture.
 Fictional people, records, hashes and sample counts are licence-clean invented
 values adapted from the accepted mockups, not evidence of real qualification.
-Audit `state=scope-swap|freshness-refresh` supplies deterministic deferred ports for
-mounted lifecycle regressions, not new product controls. Both recipes evaluate the
+Audit `state=scope-swap|freshness-refresh|deferred-page` supplies deterministic deferred
+ports for mounted lifecycle and long-table pagination regressions, not new product
+controls. Costs `background-refresh` completes an unchanged-revision read without
+moving focus; `command-error` retains the separate uncertain-command recovery case. Both recipes evaluate the
 same complete source ground truth (780 objects); Almond milk is absent and unsupported
 in both. The 640 fixture's qualified claim explicitly excludes that class.
 

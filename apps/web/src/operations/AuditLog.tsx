@@ -37,10 +37,15 @@ function AuditSession({ port, role, updatedAt, stale = false, query, onQuery }: 
     }).catch(() => { if (!controller.signal.aborted) setFailed(key); });
     return () => controller.abort();
   }, [port, query, cursor, key]);
-  const state: ViewState<AuditPage> = failed === key ? { status: 'error', retry: () => setAttempt(attempt + 1) } : result?.key === key ? { status: 'ready', data: result.page, updatedAt, stale } : { status: 'loading' };
+  const paging = cursor !== null && result !== null && result.key !== key;
+  const pageFailed = paging && failed === key;
+  const pagePending = paging && !pageFailed;
+  const retry = () => setAttempt((value) => value + 1);
+  const state: ViewState<AuditPage> = result !== null && (result.key === key || paging) ? { status: 'ready', data: result.page, updatedAt, stale } : failed === key ? { status: 'error', retry } : { status: 'loading' };
   return <AuditView state={state} query={query} role={role} message={message}
     onQuery={(next) => { setCursor(null); setResult(null); onQuery(next); }}
-    onMore={() => { if (result?.page.next_cursor) setCursor(result.page.next_cursor); }}
+    onMore={() => { if (!paging && result?.page.next_cursor) setCursor(result.page.next_cursor); }}
+    pagePending={pagePending} pageFailed={pageFailed} onPageRetry={retry}
     exporting={exporting}
     onExport={() => {
       if (exporting || stale || state.status !== 'ready') return;
@@ -55,9 +60,10 @@ function AuditSession({ port, role, updatedAt, stale = false, query, onQuery }: 
     }} />;
 }
 
-export function AuditView({ state, role, query, onQuery, onMore, onExport, exporting = false, message = '' }: {
+export function AuditView({ state, role, query, onQuery, onMore, onExport, exporting = false, message = '', pagePending = false, pageFailed = false, onPageRetry }: {
   state: ViewState<AuditPage>; role: Role; query: AuditQuery;
   onQuery: (query: AuditQuery) => void; onMore: () => void; onExport: () => void; exporting?: boolean; message?: string;
+  pagePending?: boolean; pageFailed?: boolean; onPageRetry?: () => void;
 }) {
   const id = useId();
   const toggleKind = (kind: AuditKind) => onQuery({ ...query, kinds: query.kinds.includes(kind) ? query.kinds.filter((k) => k !== kind) : [...query.kinds, kind] });
@@ -76,7 +82,9 @@ export function AuditView({ state, role, query, onQuery, onMore, onExport, expor
         <td className="audit-extra">{event.kind}</td><td><span className={event.refused ? 'danger-text' : ''}>{event.sentence}</span><span className="audit-folded secondary">{event.kind} · <RecordLink record={event.record} /></span></td><td className="audit-extra"><RecordLink record={event.record} /></td>
       </tr>)}</tbody></table></TableRegion>}
       <p className="label">{page.events.length} of {page.total} events</p>
-      {page.next_cursor !== null && <button className="pill ghost audit-more" disabled={disabled} onClick={onMore}>Show 50 more</button>}
+      {page.next_cursor !== null && <button className="pill ghost audit-more" aria-disabled={disabled || pagePending || pageFailed} onClick={() => { if (!disabled && !pagePending && !pageFailed) onMore(); }}>Show 50 more</button>}
+      {pagePending && <p role="status">Loading more events…</p>}
+      {pageFailed && <Notice tone="danger"><p role="alert">More events could not be loaded. Existing events are retained.</p><button className="pill ghost" disabled={disabled} onClick={onPageRetry}>Retry loading more events</button></Notice>}
     </>}</ViewBoundary>
     <button className="linkbtn" disabled={disabled || exporting} onClick={onExport}>Export JSON lines</button><p role="status">{message}</p>
   </section>;

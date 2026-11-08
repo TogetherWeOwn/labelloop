@@ -112,7 +112,7 @@ describe('operational screen states', () => {
     }
   });
   it('formats budget percentages without floating-point noise or premature exhaustion', () => {
-    for (const [used, expected] of [[3_240_000, '8.1'], [33_640_000, '84.1'], [39_999_999, '99.9'], [40_000_000, '100']] as const) {
+    for (const [used, expected] of [[3_240_000, '8.1'], [11_600_000, '29'], [33_640_000, '84.1'], [39_999_999, '99.9'], [40_000_000, '100']] as const) {
       const record = { ...costsFixture, entries: [{ ...costsFixture.entries[0], state: 'reserved' as const, estimate: used }] };
       const html = renderToStaticMarkup(<CostsView readId={0} state={ready(record)} role="reviewer" scope={{ kind: 'project', id: 'shelf-demo' }} onRefresh={() => undefined} />);
       expect(html).toContain(`aria-valuetext="${expected}% of limit;`);

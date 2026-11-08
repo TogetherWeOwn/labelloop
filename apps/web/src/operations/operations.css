@@ -36,8 +36,8 @@
 .operations .ledger { grid-column: 1; grid-row: 1; }
 .operations .pill { display: inline-flex; align-items: center; justify-content: center; gap: var(--two-space-2); min-height: var(--two-size-control-md); padding: 0 var(--two-space-5); border-radius: var(--two-radius-pill); border: 0; background: var(--two-color-accent-default); color: var(--two-color-text-on-accent); font-size: var(--two-font-size-small); font-weight: var(--two-font-weight-semibold); cursor: pointer; }
 .operations .pill.ghost { background: transparent; color: var(--two-color-text-primary); box-shadow: inset 0 0 0 1px var(--two-color-line-hairline-strong); }
-.operations button:disabled { cursor: not-allowed; }
-.operations .pill:disabled { background: var(--two-color-bg-raised); color: var(--two-color-text-tertiary); }
+.operations button:is(:disabled,[aria-disabled="true"]) { cursor: not-allowed; }
+.operations .pill:is(:disabled,[aria-disabled="true"]) { background: var(--two-color-bg-raised); color: var(--two-color-text-tertiary); }
 .operations .linkbtn { background: none; border: 0; padding: var(--two-space-2) 0; font-size: var(--two-font-size-small); text-decoration: underline; cursor: pointer; }
 .operations .tag { display: inline-flex; padding: var(--two-space-inset-tag-y) var(--two-space-inset-tag-x); border-radius: var(--two-radius-s); font: var(--two-font-size-label) var(--two-font-data); text-transform: uppercase; color: var(--two-color-text-secondary); box-shadow: inset 0 0 0 1px var(--two-color-line-hairline-strong); }
 .operations .tag.warn { color: var(--two-color-state-warn); }
