@@ -228,9 +228,16 @@ class CanonicalLocalTrainingWorker:
                         preprocessing_recipe.c.policy,
                         preprocessing_recipe.c.immutable,
                     )
-                    .join(canonical_dataset_release)
-                    .join(project)
-                    .join(preprocessing_recipe)
+                    .select_from(yolo_dataset_variant)
+                    .join(
+                        canonical_dataset_release,
+                        yolo_dataset_variant.c.release_id == canonical_dataset_release.c.id,
+                    )
+                    .join(project, project.c.id == canonical_dataset_release.c.project_id)
+                    .join(
+                        preprocessing_recipe,
+                        preprocessing_recipe.c.id == yolo_dataset_variant.c.recipe_id,
+                    )
                     .where(
                         yolo_dataset_variant.c.id == UUID(inputs["variant_id"]),
                         project.c.workspace_id == self.workspace_id,
