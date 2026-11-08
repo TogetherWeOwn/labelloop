@@ -46,6 +46,7 @@ from labelloop_api.schema import (
     preprocessing_recipe,
     project,
     source_asset,
+    source_split_assignment,
     yolo_dataset_variant,
 )
 from labelloop_core.audit import AuditObservation
@@ -199,6 +200,76 @@ def fixture_change_registry(connection, **kwargs):
     return change_registry(connection, **kwargs)
 
 
+def compiled_fixture_members(manifest, release):
+    """Keep actual CPU source lineage separate from synthetic audit controls."""
+    members = {sample.asset.asset_id: sample for sample in release.samples}
+    assert manifest["split_assignment_version"] == release.assignment.assignment_version
+    assert manifest["class_map"] == release.ontology.class_map
+    assert manifest["samples"]
+    for compiled in manifest["samples"]:
+        source = members[compiled["asset_id"]]
+        assert (
+            compiled["revision"],
+            compiled["source_sha256"],
+            compiled["group_id"],
+            compiled["split"],
+        ) == (source.revision.revision, source.asset.sha256, source.group_id, source.split)
+    return members
+
+
+def seed_compiled_sources(connection, project_id, manifest):
+    from load_canonical import FixtureDomain
+
+    release = FixtureDomain("cc0-interface").release
+    members = compiled_fixture_members(manifest, release)
+    for key, sample in members.items():
+        asset = sample.asset
+        connection.execute(
+            insert(source_asset)
+            .values(
+                project_id=project_id,
+                asset_key=key,
+                sha256=asset.sha256,
+                object_key=asset.object_key,
+                width=asset.width,
+                height=asset.height,
+                exif_orientation=asset.exif_orientation,
+                source_uri=asset.source_uri,
+            )
+            .on_conflict_do_nothing()
+        )
+        asset_id = connection.execute(
+            sa.select(source_asset.c.id).where(
+                source_asset.c.project_id == project_id, source_asset.c.asset_key == key
+            )
+        ).scalar_one()
+        revision = asdict(sample.revision)
+        revision["objects"] = [
+            asdict(obj) | {"box": list(asdict(obj.box).values())} for obj in sample.revision.objects
+        ]
+        connection.execute(
+            insert(annotation_revision)
+            .values(asset_id=asset_id, actor_id="fixture-canonical-reviewer", **revision)
+            .on_conflict_do_nothing()
+        )
+        connection.execute(
+            insert(source_split_assignment)
+            .values(
+                assignment_version=release.assignment.assignment_version,
+                asset_id=asset_id,
+                group_id=sample.group_id,
+                split=sample.split,
+                seed=release.assignment.seed,
+                algorithm=release.assignment.algorithm,
+                thresholds={},
+                reason=release.assignment.reasons[key],
+                locked=True,
+            )
+            .on_conflict_do_nothing()
+        )
+    return {key: sample.revision.revision for key, sample in members.items()}
+
+
 def seed_variant(connection, request, manifest, *, asset_suffix=""):
     connection.execute(
         insert(project)
@@ -228,9 +299,10 @@ def seed_variant(connection, request, manifest, *, asset_suffix=""):
     ontology_id = connection.execute(
         sa.select(ontology_release.c.id).where(ontology_release.c.project_id == project_id)
     ).scalar_one()
-    # Explicit synthetic canonical rows exercise persisted audit lineage only;
-    # these are not the actual image labels or domain gold of the CPU run.
-    membership = {}
+    membership = seed_compiled_sources(connection, project_id, manifest)
+    # Extra synthetic members exercise the veto's conservative whole-release
+    # lineage. They are not compiled CPU inputs, actual image labels or domain gold.
+    ordinary_membership = {}
     # The paired ordinary sources are correlated; unrelated lineage-control
     # sources must not claim the same pixel digest as the audited population.
     source_digest = hashlib.sha256((request.project_id + asset_suffix).encode()).hexdigest()
@@ -277,22 +349,28 @@ def seed_variant(connection, request, manifest, *, asset_suffix=""):
             )
             .on_conflict_do_nothing()
         )
-        membership[asset_key] = 1
-    connection.execute(
-        insert(canonical_dataset_release)
-        .values(
-            release_key=request.dataset_release_id,
-            project_id=project_id,
-            ontology_id=ontology_id,
-            assignment_version=request.split_assignment_version,
-            sample_revisions=membership,
-            ontology_hash="a" * 64,
-            excluded_asset_ids=[],
-            hashes={},
-            frozen=True,
+        ordinary_membership[asset_key] = 1
+    # The tiny audit population remains explicitly synthetic and separate from
+    # the CPU sources; its exact revisions also appear in training-release lineage.
+    for key, revisions in (
+        (request.dataset_release_id, membership | ordinary_membership),
+        (request.dataset_release_id + "-ordinary-audit", ordinary_membership),
+    ):
+        connection.execute(
+            insert(canonical_dataset_release)
+            .values(
+                release_key=key,
+                project_id=project_id,
+                ontology_id=ontology_id,
+                assignment_version=request.split_assignment_version,
+                sample_revisions=revisions,
+                ontology_hash="a" * 64,
+                excluded_asset_ids=[],
+                hashes={},
+                frozen=True,
+            )
+            .on_conflict_do_nothing()
         )
-        .on_conflict_do_nothing()
-    )
     release_id = connection.execute(
         sa.select(canonical_dataset_release.c.id).where(
             canonical_dataset_release.c.release_key == request.dataset_release_id
@@ -459,9 +537,22 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             assert replace(promoted.champion, evaluation_run_ids=model.evaluation_run_ids) == model
             initial_model = model  # Immutable initial payload, before append-only evaluation links.
             model = promoted.champion
-        # A new connection must recover the whole immutable release, not in-memory state.
-        with engine.connect() as connection:
+        # A new connection must recover the whole release and actual compiled groups.
+        from labelloop_api.training_group_store import model_training_groups
+
+        with engine.begin() as connection:
             assert load_registry(connection, request.project_id, request.recipe_id) == promoted
+            project_id = lock_project(connection, request.project_id)
+            model_id = connection.execute(
+                sa.select(db.model_release.c.id).where(
+                    db.model_release.c.release_key == model.release_id
+                )
+            ).scalar_one()
+            assert model_training_groups(
+                connection, project_id=project_id, model_id=model_id
+            ) == tuple(
+                sorted({row["group_id"] for row in manifest["samples"] if row["split"] == "train"})
+            )
 
         def compete(suffix):
             try:
@@ -762,7 +853,10 @@ def exercise_annotation_veto(engine, request, common, gate):
     from teacher_origin_smoke import exercise_teacher_origins
 
     teacher_origins = exercise_teacher_origins(engine, request)
-    sampling = exercise_audit_sampling(engine, request)
+    audit_request = replace(
+        request, dataset_release_id=request.dataset_release_id + "-ordinary-audit"
+    )
+    sampling = exercise_audit_sampling(engine, audit_request)
     actor = "fixture-independent-auditor"
     positive = f"{request.project_id}-synthetic-ordinary-positive"
     negative = f"{request.project_id}-synthetic-ordinary-negative"
@@ -770,7 +864,7 @@ def exercise_annotation_veto(engine, request, common, gate):
     missed_object = AuditObservation(negative, 1, actor, True, True, False)
     audit_args = dict(
         project_key=request.project_id,
-        release_key=request.dataset_release_id,
+        release_key=audit_request.dataset_release_id,
         actor_id=actor,
         sample_key=sampling["sample_id"],
     )

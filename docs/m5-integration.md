@@ -32,7 +32,13 @@ acceptance/score/threshold and independent measurements still require authoritat
 integration. Historical missing provenance and cross-project imports are not inferred.
 This preflight is not an authenticated route or an acceptance grant; direct trusted
 registry consumers still own complete lineage. No endpoint, migration or dependency
-is added. Fifteen additional adapter assertions await new-head Actions.
+is added. At inherited-group head `a80eef7`, [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42475242880)
+failed with **2 failed, 1403 passed, 80 skipped**; the 15 added adapter cases passed.
+Only the global migration-head assertions failed in unit. ML smoke, queue and
+dev-stack stopped at multiple-head migration setup, before PostgreSQL assertions.
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42475242501), lint,
+types and import-contract passed; web-build was path-skipped. This is not an overall
+CI or PostgreSQL acceptance PASS.
 
 Selected-run head `3d49e96` completed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42473468132)
 with **2 failed, 1388 passed, 80 skipped**: only the two global migration-head
@@ -42,13 +48,22 @@ not run. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/424734
 lint, types and import-contract passed. Unlike the previous head's MinIO HTTP 503,
 this dev-stack failure is the migration gate. No overall CI or acceptance PASS.
 
-Static fixture inspection also found that `registry_smoke.seed_variant` seeds only
+Static fixture inspection found that `registry_smoke.seed_variant` seeded only
 synthetic ordinary-label canonical members while retaining the CPU manifest's source
-IDs. The stricter compiled-input reader cannot accept that fixture as authoritative
-canonical lineage. Disposable PostgreSQL fixture alignment and explicit inherited
-training-group acceptance remain owned integration work; no guard will be relaxed
-or mock substituted for that evidence. This issue is not established by an executed
-PostgreSQL failure because migration setup still prevents those assertions.
+IDs. The smoke now seeds actual licence-clean fixture pixels' identities, dimensions,
+exact annotation revisions and split assignments from the existing canonical fixture
+adapter. Before writes it checks every compiled source/revision/hash/group/split
+against that adapter. The original CPU manifest and its digest remain unchanged.
+
+Synthetic ordinary members remain extra whole-release lineage controls, not claimed
+CPU training inputs. Their separate audit-only release preserves the explicit tiny
+synthetic population and shared-group controls; the veto still follows those exact
+revisions through training-release membership. A reconnect assertion on both recipes
+requires the real production reader to recover exactly the compiled train groups,
+not validation/test groups or invented audit groups. Nine fixture substitution and
+positive adapter cases are added. These changes await exact-head Actions; no local
+test or PostgreSQL PASS is claimed. Migration composition still gates the database
+exercise. No production reader, guard, migration or trigger was relaxed or mocked.
 
 At previous `4a03da8`, [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397)
 failed. [Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42471974397/job/128704659677)
