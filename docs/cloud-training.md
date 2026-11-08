@@ -14,8 +14,9 @@ approved base-model ID/URI and digest, recipe, explicit GPU and pinned price.
 The complete plan, configuration digest, original `TrainingRequest` and
 `SpendRequest` are saved together. The estimate reserves at least 900 seconds in
 integer micro-USD, rounding up. No model output selects these values. The model
-slug is a deterministic exact-lookup key; the API does **not** have an idempotency
-key. A new warm-start experiment requires a new run ID, checkpoint digest, parent
+slug hashes the application project ID and run ID as a structured pair, so separate
+projects can reuse run IDs in a shared provider project. It is a deterministic
+exact-lookup key; the API does **not** have an idempotency key. A new warm-start experiment requires a new run ID, checkpoint digest, parent
 run ID and reservation. An unchanged operation is reconciliation, not a restart.
 
 `train_arguments()` pins the full baseline from the delivered training request,
@@ -42,10 +43,17 @@ The start receipt retains `estimatedCost` (price/memory) and `billing` (estimate
 total/balance), normalized to typed integer amounts by the HTTP adapter. These are
 never actuals. A receipt exceeding the authorized estimate (including its hourly
 rate applied to the reserved duration) is retained durably and pauses further paid
-stages through the budget port. It is not settled as a charge. A transaction bound
+stages through the budget port. It is not settled as a charge. Lost, invalid or
+unpersisted start pricing instead leaves a durable `pricing_unconfirmed` marker;
+`pause_pricing_uncertain` fails closed on further paid work without inventing a
+price/actual. The pause is attempted even on a receipt-save exception and retried
+on recovery. Readback cannot resolve pricing, and there is no automatic resume.
+A transaction bound
 to both model and provider run ID supplies the actual, with charge attribution and
-settlement stored atomically. Recovery reads that durable attribution before asking
-the provider again. Until attribution, the ledger retains the reservation estimate
+settlement stored atomically. Recovery restores that durable attribution before
+model readback, even during a model-endpoint outage. A replacement provider job
+is quarantined as `identity_mismatch`, while late billing for the original bound
+job remains independently reconcilable. Replacement checkpoints are never downloaded. Until attribution, the ledger retains the reservation estimate
 even when training failed or was cancelled. Downloaded `best.pt` is bounded and hashed by
 the application, then placed in the injected content-addressed artifact store.
 No vendor hash is assumed. Provider initialization digest, package versions,
@@ -60,8 +68,15 @@ There is no mutable enable flag or `authorized: true` request field.
 - `SecretPort` authenticates/authorizes the service and workspace/project/operation
   binding and configures credentials out of band. The grant contains no key.
 - `BudgetPort` durably reserves, authenticates approval/autonomous limits, performs
-  atomic single-use dispatch, rechecks current pause/authority before start,
-  attributes actuals, and pauses every project paid stage on 402. Merely invoking
+  atomic single-use dispatch, and exposes a separate `authorize_start` gate that
+  rechecks current pause/authority/limits and the trusted application's current UTC
+  month immediately before a first paid start. A stale month is rejected with
+  `dispatch_month_mismatch`: the integration must cancel the provably unsent
+  operation and obtain a new ID/reservation/approval, never rewrite its month.
+  Cancellation of an already-dispatched ledger marker requires fenced proof that
+  no paid start intent exists; this module does not bypass `BudgetGate.cancel`.
+  Historical/uncertain starts only reconcile in their original month. The port
+  attributes actuals and pauses every project paid stage on 402 or uncertain pricing. Merely invoking
   the pure `BudgetGate.reserve` idempotent fast path is **not** sufficient to
   reauthorize an already-dispatched operation.
 - `RunStore` fences competing writers for the bounded advance and commits intent
@@ -87,6 +102,10 @@ dispatch, or a crash just after its ledger commit, recovers from authoritative
 ledger state; no provider call is possible in this phase. Definitive preflight
 refusals durably release only reservations known never to have dispatched. Release
 is idempotent, including after a crash between terminal-state and ledger writes.
+If GPU availability disappears after free model creation, the run stays in
+`model_created` with `gpu_unavailable`, retaining its conservative hold but a real
+recovery path. A later authorized first start reuses that model and reservation;
+there is no second create and no release of an uncertain paid start.
 
 Mutation intent is durable **before** create/start. A timeout, 409, 429, malformed receipt,
 or other uncertain response only allows read-only reconciliation. Missing

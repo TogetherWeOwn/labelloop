@@ -28,7 +28,7 @@ jobs:
           zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           detect --source /repo --redact --exit-code 1
           --report-format json --report-path /reports/gitleaks.json
-      - name: Show finding locations without secret values
+      - name: Show finding count without report metadata
         if: failure()
         run: |
           python3 -I - <<'PY'
@@ -38,10 +38,8 @@ jobs:
 
           report = Path(os.environ["RUNNER_TEMP"]) / "gitleaks.json"
           if report.exists():
-              for finding in json.loads(report.read_text()):
-                  # Never print Match, Secret, or the full report; no artifact upload.
-                  location = {key: finding.get(key) for key in (
-                      "RuleID", "File", "StartLine", "Commit"
-                  )}
-                  print(json.dumps(location, ensure_ascii=True))
+              # All report fields, including filenames, are untrusted. Emit only
+              # a computed count; never report metadata, matches or an artifact.
+              findings = json.loads(report.read_text())
+              print(json.dumps({"finding_count": len(findings)}))
           PY

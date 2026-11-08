@@ -60,8 +60,21 @@ class BudgetPort(Protocol):
 
         Idempotent for an identical request; reject changed bindings. Recheck current
         limits, pauses and authenticated authority even for an existing dispatched
-        entry (the backend calls again immediately before start). Do not merely
+        entry (including dispatch-commit recovery). Do not merely
         delegate to BudgetGate.reserve, whose idempotent fast path skips these checks.
+        """
+        ...
+
+    def authorize_start(self, request: SpendRequest) -> LedgerEntry:
+        """Recheck limits, pauses and authority immediately before a first paid start.
+
+        Also require request.month to equal the current UTC month from trusted
+        application time. Reject with dispatch_month_mismatch across month-end:
+        cancel the definitively unsent operation and require a new operation ID,
+        current-month reservation and authenticated approval. Never rewrite the
+        old request/month or apply this gate to uncertain/historical reconciliation.
+        A dispatched ledger marker alone is not evidence a paid start was sent;
+        cancellation requires the fenced run-store's proof of no start intent.
         """
         ...
 
@@ -82,6 +95,14 @@ class BudgetPort(Protocol):
 
         Idempotent and independent of current dispatch authority. Preserve any
         stronger existing pause (including insufficient credits).
+        """
+        ...
+
+    def pause_pricing_uncertain(self, request: SpendRequest) -> None:
+        """Durably pause further paid work when a start has no persisted valid price.
+
+        Idempotent, independent of dispatch authority and never a synthetic actual
+        or automatic resume. Preserve stronger pauses, especially insufficient credits.
         """
         ...
 

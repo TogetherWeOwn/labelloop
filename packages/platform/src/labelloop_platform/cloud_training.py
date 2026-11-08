@@ -106,7 +106,8 @@ class CloudPlan:
     @property
     def model_slug(self) -> str:
         # A supported resource lookup key, NOT a vendor idempotency key.
-        digest = hashlib.sha256(self.request.run_id.encode()).hexdigest()
+        binding = json.dumps([self.request.project_id, self.request.run_id], separators=(",", ":"))
+        digest = hashlib.sha256(binding.encode()).hexdigest()
         return "ll-" + digest[:32]
 
     @property
@@ -169,6 +170,7 @@ class CloudRun:
     dataset_version: int | None = None
     dataset_content_hash: str | None = None
     receipt: StartReceipt | None = None
+    pricing_unconfirmed: bool = False
     mismatched_keys: tuple[str, ...] = ()
     resolved_arguments: tuple[tuple[str, object], ...] = ()
     checkpoint: CloudCheckpoint | None = None
@@ -245,7 +247,15 @@ class PlatformTrainingBackend:
                 run = CloudRun(request, self.plan.configuration_sha256, spend, self.plan)
                 session.save(run)
             self._observe_estimate(run)
+            # Ledger attribution is independent of the mutable model endpoint.
+            if run.provider_run_id and (
+                run.provider_state in _TERMINAL_PROVIDER
+                or self.budget.settled_charge(run.spend) is not None
+            ):
+                run = self._settle(session, run, grant)
             if run.phase == "terminal":
+                if run.state == "identity_mismatch" and run.provider_run_id:
+                    run = self._settle(session, run, grant)
                 self._release_undispatched(run)
                 if run.state == "insufficient_credits":
                     self.budget.pause_insufficient_credits(run.spend)
@@ -264,6 +274,10 @@ class PlatformTrainingBackend:
 
     def _observe_estimate(self, run: CloudRun) -> None:
         assert self.budget is not None
+        if run.pricing_unconfirmed:
+            # Readback has no authoritative pricing. Keep further paid work paused
+            # even when the accepted start response or its durable save was lost.
+            self.budget.pause_pricing_uncertain(run.spend)
         if run.receipt is not None:
             rate_estimate = (
                 run.receipt.price_per_hour_microusd * self.plan.estimated_seconds + 3599
@@ -367,22 +381,37 @@ class PlatformTrainingBackend:
                 session, run, phase="model_created", state="model_created", model_id=model.model_id
             )
         if run.phase == "model_created":
-            # Revalidate current authorization/limits immediately before paid start.
-            entry = self.budget.reserve_and_authorize(run.spend)
-            self._validate_entry(entry, run.spend, "dispatched")
             try:
                 available = self.transport.gpu_available(grant, self.plan.gpu_type)
             except Exception:
                 return self._save(session, run, error_code="availability_unconfirmed")
             if available is not True:
-                return self._save(session, run, phase="terminal", state="gpu_unavailable")
-            run = self._save(session, run, phase="start_intent", state="uncertain_start")
-            body = {
-                "modelId": run.model_id,
-                "gpuType": self.plan.gpu_type,
-                "captureDatasetVersion": True,
-                "trainArgs": self.plan.train_arguments(),
-            }
+                # No paid start intent exists. Keep a recoverable model, not a
+                # terminal operation with a permanently stranded dispatched hold.
+                return self._save(session, run, state="gpu_unavailable")
+            # Trusted application clock/authority, not the frozen plan, decides
+            # whether this first paid start still belongs to the reserved month.
+            entry = self.budget.authorize_start(run.spend)
+            self._validate_entry(entry, run.spend, "dispatched")
+            run = self._save(
+                session,
+                run,
+                phase="start_intent",
+                state="uncertain_start",
+                pricing_unconfirmed=True,
+            )
+            return self._start(session, run, grant)
+        return self._reconcile(session, run, grant)
+
+    def _start(self, session: RunSession, run: CloudRun, grant: ConnectionGrant) -> CloudRun:
+        assert self.transport is not None
+        body = {
+            "modelId": run.model_id,
+            "gpuType": self.plan.gpu_type,
+            "captureDatasetVersion": True,
+            "trainArgs": self.plan.train_arguments(),
+        }
+        try:
             try:
                 receipt = self.transport.start(grant, body)
             except Exception as error:
@@ -398,11 +427,21 @@ class PlatformTrainingBackend:
             ):
                 if type(amount) is not int or amount < 0:
                     return self._save(session, run, error_code="invalid_receipt")
-            run = self._save(session, run, phase="started", state="accepted", receipt=receipt)
-            self._observe_estimate(run)
+            run = self._save(
+                session,
+                run,
+                phase="started",
+                state="accepted",
+                receipt=receipt,
+                pricing_unconfirmed=False,
+                error_code=None,
+            )
             # Accepted is distinct from active; readback occurs on the next advance.
             return run
-        return self._reconcile(session, run, grant)
+        finally:
+            # Also fail closed when receipt persistence raises. If the process
+            # dies first, durable start_intent triggers the same pause on recovery.
+            self._observe_estimate(run)
 
     def _mutation_error(self, session: RunSession, run: CloudRun, error: Exception) -> CloudRun:
         assert self.budget is not None
@@ -429,7 +468,10 @@ class PlatformTrainingBackend:
         except Exception:
             return self._save(session, run, error_code="reconcile_unavailable")
         if not self._identity(model, run):
-            return self._save(session, run, phase="terminal", state="identity_mismatch")
+            run = self._save(session, run, phase="terminal", state="identity_mismatch")
+            # Quarantine replacement artifacts, but still bill only the original
+            # bound job. Its charge endpoint is independent of model readback.
+            return self._settle(session, run, grant) if run.provider_run_id else run
         if model.state == "untrained":
             return run  # Including a 409 cancelled-before-start: NEVER repeat start.
         run = self._save(
