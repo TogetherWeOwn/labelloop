@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from audit_sample_smoke import exercise_audit_sampling
 from final_test_smoke import exercise_final_test
 from qualification_fixture import qualification_context, synthetic_final
 from sqlalchemy.dialects.postgresql import insert
@@ -727,6 +728,7 @@ def seed_checkpoint_descendants(connection, result, exported, manifest, model, r
 
 def exercise_annotation_veto(engine, request, common, gate):
     """Adverse ordinary labels veto actual persisted heads, not just a pure verdict."""
+    sampling = exercise_audit_sampling(engine, request)
     actor = "fixture-independent-auditor"
     positive = f"{request.project_id}-synthetic-ordinary-positive"
     negative = f"{request.project_id}-synthetic-ordinary-negative"
@@ -891,6 +893,7 @@ def exercise_annotation_veto(engine, request, common, gate):
         )
     return {
         "scope": "synthetic ordinary-label audit mechanics, not domain quality",
+        "canonical_sampling": sampling,
         "wrong_identity_and_missed_object_persisted": True,
         "clean_replacement_sample_did_not_clear_veto": True,
         "clean_data_checkpoint_descendants_vetoed_both_recipes": True,

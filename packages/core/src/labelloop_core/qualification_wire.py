@@ -10,6 +10,7 @@ import types
 from dataclasses import fields, is_dataclass
 from typing import Any, Literal, Union, cast, get_args, get_origin, get_type_hints
 
+from .audit import AuditSample
 from .drift import AcceptanceState
 from .evaluation_lifecycle import CandidateSelection, FinalTestState
 from .qualification import QualificationContext, QualificationEvidence
@@ -18,6 +19,7 @@ from .qualification_data import canonical_record
 SCHEMA = "labelloop.qualification.v1"
 MAX_RECORD_BYTES = 2_000_000
 _ROOTS = (
+    AuditSample,
     AcceptanceState,
     CandidateSelection,
     FinalTestState,
@@ -25,7 +27,8 @@ _ROOTS = (
     QualificationEvidence,
 )
 type QualificationRecord = (
-    AcceptanceState
+    AuditSample
+    | AcceptanceState
     | CandidateSelection
     | FinalTestState
     | QualificationContext
@@ -118,6 +121,7 @@ def _decode(value: object, annotation: Any) -> Any:
 
 def loads[
     Record: (
+        AuditSample,
         AcceptanceState,
         CandidateSelection,
         FinalTestState,

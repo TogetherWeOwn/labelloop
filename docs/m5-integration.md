@@ -213,6 +213,54 @@ reported **39 passed**. Migration round trips, dev-stack and lint/types/import-c
 passed; web-build was path-filter skipped. This verifies the previous drift/journal
 mechanics, not this new registry change, HTTP/UI/restore acceptance or domain quality.
 
+## Canonical audit population and durable sample — new assertions pending Actions
+
+`audit_sample_store` loads **every** exact annotation revision named by a frozen
+canonical release, its frozen ontology, original actor and earlier review actors,
+and source groups from the release's pinned assignment version. Missing source,
+revision or group rows reject the entire population rather than shrinking it to
+successful joins. Unsupported classes, invalid geometry, incomplete/draft labels
+and excluded members fail closed. Later source revisions are not substituted.
+
+It reuses the existing deterministic blind sampler, including ordinary positives
+and negatives without a confidence filter. The new append-only
+`qualification_audit_sample` table retains the complete canonical population,
+selected membership, seed, actor and group snapshot with a content fingerprint.
+Recovery reproduces selection and rejects a mismatched snapshot. Correlated images
+retain one group identity and cannot inflate independent support. This is an
+asset-level, positive/negative-stratified software sampler, **not** a claim of
+independent random group draws or an unbiased population error estimate.
+
+Migration `qualification_0004` follows the existing joined `m5_jobs_0001` history;
+it changes no prior DDL. Restore must inventory this table. Actions PostgreSQL
+smoke now covers missing canonical groups/members, frozen revision recovery,
+pinned-versus-other assignment versions, correlated support, foreign scope,
+immutable update/delete/truncate, same-identity races and failed-insert rollback.
+New unit cases cover canonical decoding, exact-root codec and sample substitution.
+These assertions have not yet run on the new head.
+
+The service still owns authorized sampling policy and pipeline identity; attaching
+a pipeline ID to a population is **not** proof that each original acceptance used
+that pipeline. Source/condition provenance, independent audit truth/measurements,
+score/threshold provenance, current group-relation revalidation, observation-to-sample
+binding, authoritative qualification loading and authenticated HTTP consumption are
+still required. A saved sample alone never qualifies a clean release or overrides
+any durable adverse audit. No endpoint or paid operation is introduced here.
+
+Previous exact head `56617387b69effaae71a76d2dcd3ee2ee2a9784f` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42450706107) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42450705810).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42450706107/job/128639124578)
+reported **965 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42450706107/job/128639124424)
+reported **19 passed**, plus **24 passed** in the separate budget step.
+[Queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42450706107/job/128639124438)
+reported **39 passed**. Migration cycles, dev-stack, lint/types/import-contract,
+gitleaks and standards passed; web-build was path-skipped. This verifies previous
+registry current-final enforcement, not the new sampler, HTTP/UI/restore acceptance,
+independent domain quality or final milestone delivery. Devin and native reviews
+remain gates; the PR stays draft.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

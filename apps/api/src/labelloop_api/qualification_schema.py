@@ -6,6 +6,21 @@ from sqlalchemy.dialects.postgresql import UUID
 from labelloop_api.schema import canonical_dataset_release, preprocessing_recipe, project
 
 metadata = sa.MetaData()
+audit_sample = sa.Table(
+    "qualification_audit_sample",
+    metadata,
+    sa.Column("project_id", UUID, sa.ForeignKey(project.c.id), primary_key=True),
+    sa.Column("sample_key", sa.String, primary_key=True),
+    sa.Column("release_id", UUID, sa.ForeignKey(canonical_dataset_release.c.id), nullable=False),
+    sa.Column("actor_id", sa.String, nullable=False),
+    sa.Column("population_sha256", sa.String(64), nullable=False),
+    sa.Column("record", sa.JSON, nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    ),
+    sa.CheckConstraint("length(trim(actor_id)) > 0 AND length(trim(sample_key)) > 0"),
+    sa.CheckConstraint("population_sha256 ~ '^[0-9a-f]{64}$'"),
+)
 acceptance_event = sa.Table(
     "qualification_acceptance_event",
     metadata,
