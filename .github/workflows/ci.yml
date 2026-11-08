@@ -105,6 +105,14 @@ jobs:
           version: "0.13.6"
           enable-cache: false
       - run: uv sync --frozen
+      - name: Generate management contract artifacts
+        run: uv run python -m labelloop_api.management_codegen --output-dir "$RUNNER_TEMP/management-contract"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: management-contract
+          path: ${{ runner.temp }}/management-contract/
+          if-no-files-found: error
+          retention-days: 7
       - run: uv run pytest
       - run: uv run python scripts/check-fixtures.py
 
