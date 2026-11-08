@@ -9,8 +9,9 @@ from alembic.script import ScriptDirectory
 
 def test_qualification_auth_merge_is_the_single_head():
     scripts = ScriptDirectory(str(Path(__file__).parents[1] / "migrations"))
-    assert scripts.get_heads() == ["m5_auth_0001"]
-    merged = scripts.get_revision("head")
+    assert scripts.get_heads() == ["qualification_0008"]
+    assert scripts.get_revision("head").down_revision == "m5_auth_0001"
+    merged = scripts.get_revision("m5_auth_0001")
     assert merged is not None
     assert merged.down_revision == ("qualification_0007", "auth_jobs_0001")
     revisions = {revision.revision for revision in scripts.walk_revisions()}

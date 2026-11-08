@@ -263,7 +263,8 @@ def append_review(
                 actor_id=actor_id,
                 decision="apply_revision",
                 expected_revision=expected_revision,
-                correction={"new_revision": expected_revision + 1},
+                correction={"new_revision": expected_revision + 1}
+                | ({"proposal_run_keys": sorted(proposal_run_keys)} if proposal_run_keys else {}),
                 reason="expected-revision guarded",
             )
         )

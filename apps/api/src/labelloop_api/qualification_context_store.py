@@ -1,8 +1,8 @@
 """Assemble current persisted qualification inputs, never HTTP/model claims.
 
-This read port validates compiled inputs and recorded ancestor selection/calibration
-against canonical groups, not original pipeline execution, measurement truth or
-complete reference/external influence.
+This read port validates compiled inputs, recorded ancestor selection/calibration
+and linked proposal references against canonical groups, not original pipeline
+execution, measurement truth or complete historical/external influence.
 The authorized service must derive the remaining lineage and outcome selectors from
 trusted producers. No production route may treat caller-supplied lineage as that
 producer. The outer transaction and locks must survive through the decision.

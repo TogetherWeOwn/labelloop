@@ -51,13 +51,18 @@ def test_compiled_selection_includes_reachable_ancestors_not_tests_or_unrelated_
     assert "test-group" not in (*inputs.training, *inputs.selection)
     assert all("unrelated" not in call.kwargs["asset_keys"] for call in current.call_args_list)
     assert connection.execute.call_count == 2  # One ancestry read, not one graph per use.
-    training_group_store._recorded_selection_groups.assert_called_once_with(
-        connection,
-        "project",
+    reachable = (
         {"run"}
         | ({"parent"} if edge in {"checkpoint", "mixed-cycle"} else set())
-        | ({"teacher"} if edge in {"teacher", "mixed-cycle"} else set()),
+        | ({"teacher"} if edge in {"teacher", "mixed-cycle"} else set())
     )
+    training_group_store._recorded_selection_groups.assert_called_once_with(
+        connection, "project", reachable
+    )
+    references = training_group_store._recorded_reference_groups
+    references.assert_called_once()
+    assert references.call_args.args[:2] == (connection, "project")
+    assert {item["id"] for item in references.call_args.args[2]} == reachable
 
 
 @pytest.mark.parametrize("side", [320, 640])

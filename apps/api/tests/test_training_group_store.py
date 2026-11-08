@@ -33,6 +33,7 @@ def fixture(monkeypatch):
     monkeypatch.setattr(store, "current_release_groups", current)
     monkeypatch.setattr(store, "label_teacher_runs", MagicMock(return_value={}))
     monkeypatch.setattr(store, "_recorded_selection_groups", MagicMock(return_value=()))
+    monkeypatch.setattr(store, "_recorded_reference_groups", MagicMock(return_value=()))
     return connection, row, current
 
 

@@ -6,7 +6,59 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Recorded selection and calibration isolation — pending Actions
+## Recorded proposal reference isolation — pending Actions
+
+Annotation review events now retain every supplied completed proposal run in their
+existing correction JSON, atomically with the revision and teacher origins. The
+shared completed-proposal reader checks job/project/source/expected revision,
+application generation, result/stage hashes and immutable inputs once per read port.
+Reference assets come from all pinned job references, including unused alternatives,
+not a new caller-supplied reference-group declaration. Empty reference collections
+are explicit; missing collections and substituted result identities fail closed.
+
+The existing checkpoint/teacher run closure now recovers reference influence from
+these events at or after the exact annotation revision. Later corrections retain
+influence; earlier frozen revisions and unrelated runs do not acquire it. Canonical
+group membership is rechecked for each reachable assignment version through the
+existing transitive-group reader. Qualification assembly and actual registry,
+automatic-acceptance and drift consumers reject omitted reference groups and their
+reuse as evaluation holdouts or fresh canary evidence. This is not proof of reference
+approval, original reference-pack execution or completeness of historical lineage.
+Unlinked historical reviews, external detectors/imports and omitted contributing
+proposals remain explicit trusted-producer gaps, never inferred teacher/reference-free.
+
+Inspection found review events were append-only in the service, but not protected
+against database update/delete/truncate. New reversible migration `qualification_0008`
+follows `m5_auth_0001` and adds those guards without changing historical rows or any
+table shape. The reference read takes a global `SHARE ROW EXCLUSIVE` review-event
+lock through outer commit. Validators serialize because automatic acceptance appends
+an event later; a shared-lock upgrade across projects could deadlock. Keep these
+transactions short. No new table, endpoint, codec or dependency is introduced.
+
+New adapter cases cover completed-input substitution, empty/duplicate references,
+revision boundaries, multiple proposals, assignment versions, current conflicts,
+omitted lineage and both-recipe assembly/consumer replay. Both-recipe PostgreSQL
+controls journal a real annotation write, reject event mutation, retain the earlier
+compiled-revision boundary, and introduce a clearly synthetic revision-2 ancestor
+through the existing teacher graph. Omitted/canary-reused reference groups must be
+rejected by assembly and actual registry/acceptance with unchanged complete heads
+and event count. Copied synthetic model metrics are mechanics, not retraining,
+inference execution, independent truth or domain gold. Assertions await Actions.
+
+Prior exact `3d83e402d794a64bac884ff1cbe2bebd40e60804`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42492177136) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42492176878) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42492177136/job/128766756899),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42492177136/job/128766756811),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42492177136/job/128766756856),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract. This verifies recorded selection isolation, not this new reference
+slice or HTTP/UI/expanded-restore acceptance. Real null targets remain fail-closed;
+trusted original acceptance/pipeline/score/threshold, source/condition and independent
+measurement producers plus authenticated consumers remain unfinished. The fixed
+2026-11-09T12:00:00Z checkpoint and Engineering Lead's owned fallback are unchanged.
+
+## Recorded selection and calibration isolation — historical preparation
 
 The existing compiled-input ancestry closure now also selects persisted candidate
 selection journals for every registered checkpoint of each reachable run. Complete

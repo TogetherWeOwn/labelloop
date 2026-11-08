@@ -242,6 +242,16 @@ def test_multiple_proposals_resolve_all_runs_and_atomically_retain_distinct_teac
         assert connection.begin_nested.return_value.__exit__.call_args.args[0] is ValueError
     else:
         assert revision_store.append_review(connection, **args) == 2
+        event = next(
+            call.args[0]
+            for call in connection.execute.call_args_list
+            if getattr(call.args[0], "is_insert", False)
+            and call.args[0].table.name == "review_event"
+        )
+        assert event.compile().params["correction"] == {
+            "new_revision": 2,
+            "proposal_run_keys": ["proposal-a", "proposal-b"],
+        }
     assert teacher.call_count == 2
     assert events == ["project", "proposal-a", "proposal-b"] + (
         [] if failure == "lookup" else ["asset"]

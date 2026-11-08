@@ -1,8 +1,8 @@
 """Current compiled input groups across stored checkpoint and teacher ancestors.
 
-Recorded selection/calibration contributes influence even when not in a compiled
-variant. Reference use and missing external/imported lineage still need trusted
-producers. The caller retains project and canonical group locks through its decision.
+Recorded selection/calibration and linked proposal references contribute influence
+outside compiled variants. Missing historical/external/imported lineage still needs
+trusted producers. The caller retains project and canonical locks through its decision.
 """
 
 import json
@@ -12,14 +12,20 @@ import sqlalchemy as sa
 
 from labelloop_api import model_schema, qualification_schema
 from labelloop_api.annotation_audit_store import training_ancestor_runs
-from labelloop_api.generated_label_store import label_teacher_runs
+from labelloop_api.generated_label_store import label_teacher_runs, proposal_reference_assets
 from labelloop_api.model_store import load_release, stored_report
 from labelloop_api.qualification_store import release_membership
-from labelloop_api.schema import canonical_dataset_release, yolo_dataset_variant
+from labelloop_api.schema import (
+    canonical_dataset_release,
+    project,
+    review_event,
+    source_asset,
+    yolo_dataset_variant,
+)
 from labelloop_api.source_group_store import current_release_groups
 from labelloop_core.evaluation_lifecycle import CandidateSelection, select_candidate
 from labelloop_core.qualification import QualificationEvidence
-from labelloop_core.qualification_data import require_name
+from labelloop_core.qualification_data import require_count, require_name, require_names
 from labelloop_core.qualification_wire import loads
 
 
@@ -28,8 +34,20 @@ class ModelInputGroups:
     training: tuple[str, ...]
     selection: tuple[str, ...]
     recorded_selection: tuple[str, ...] = ()
+    references: tuple[str, ...] = ()
 
     def require_isolated(self, evidence: QualificationEvidence) -> None:
+        if not set(self.references) <= set(evidence.lineage.reference_group_ids):
+            raise ValueError("qualification lineage omits recorded proposal reference groups")
+        evaluation = set(evidence.final_test.dataset.group_ids) | set(
+            evidence.lineage.development.group_ids
+        )
+        if evidence.lineage.calibration is not None:
+            evaluation.update(evidence.lineage.calibration.group_ids)
+        if set(self.references) & evaluation:
+            raise ValueError("recorded proposal references overlap evaluation holdouts")
+        if set(self.references) & {source.group_id for source in evidence.canary_audit.sources}:
+            raise ValueError("canary groups overlap recorded proposal references")
         if not set(self.training) <= set(evidence.lineage.training_group_ids):
             raise ValueError("qualification lineage omits compiled training groups")
         if set(self.selection) & set(evidence.final_test.dataset.group_ids):
@@ -103,7 +121,88 @@ def model_input_groups(
         tuple(sorted({group for groups in compiled for group in groups.training})),
         tuple(sorted({group for groups in compiled for group in groups.selection})),
         _recorded_selection_groups(connection, project_id, ancestors),
+        _recorded_reference_groups(
+            connection,
+            project_id,
+            tuple(inputs[ancestor] for ancestor in sorted(ancestors, key=str)),
+        ),
     )
+
+
+def _recorded_reference_groups(connection, project_id, inputs):
+    # Preserve exact revision boundaries, then union influence across the existing
+    # run closure. New human corrections do not erase an earlier proposal's references.
+    # Serialize validators because automatic acceptance appends an event later in
+    # this transaction; shared-lock upgrades across projects would deadlock.
+    connection.execute(sa.text("LOCK TABLE review_event IN SHARE ROW EXCLUSIVE MODE"))
+    rows = (
+        connection.execute(
+            sa.select(
+                project.c.project_key,
+                source_asset.c.asset_key,
+                review_event.c.expected_revision,
+                review_event.c.correction,
+            )
+            .select_from(review_event.join(source_asset).join(project))
+            .where(
+                source_asset.c.project_id == project_id, review_event.c.decision == "apply_revision"
+            )
+        )
+        .mappings()
+        .all()
+    )
+    populations = [
+        (row["assignment_version"], release_membership(row["sample_revisions"])) for row in inputs
+    ]
+    references = {}
+    resolved = {}
+    for row in rows:
+        versions = {
+            version
+            for version, members in populations
+            if row["asset_key"] in members and row["expected_revision"] < members[row["asset_key"]]
+        }
+        correction = row["correction"]
+        if (
+            not versions
+            or not isinstance(correction, dict)
+            or "proposal_run_keys" not in correction
+        ):
+            continue
+        require_count(row["expected_revision"], minimum=1)
+        if (
+            type(correction.get("new_revision")) is not int
+            or correction["new_revision"] != row["expected_revision"] + 1
+        ):
+            raise ValueError("recorded proposal reference revision mismatch")
+        keys = correction["proposal_run_keys"]
+        if not isinstance(keys, list):
+            raise ValueError("recorded proposal runs must be an immutable JSON collection")
+        require_names(tuple(keys))
+        for key in sorted(keys):
+            identity = (row["asset_key"], row["expected_revision"], key)
+            if identity not in resolved:
+                resolved[identity] = proposal_reference_assets(
+                    connection,
+                    project_key=row["project_key"],
+                    asset_key=row["asset_key"],
+                    expected_revision=row["expected_revision"],
+                    proposal_run_key=key,
+                )
+            for version in versions:
+                references.setdefault(version, set()).update(resolved[identity])
+    groups = set()
+    for version, assets in sorted(references.items()):
+        if assets:
+            groups.update(
+                current_release_groups(
+                    connection,
+                    project_id=project_id,
+                    assignment_version=version,
+                    asset_keys=frozenset(assets),
+                ).values()
+            )
+    return tuple(sorted(groups))
 
 
 def _recorded_selection_groups(connection, project_id, ancestors):

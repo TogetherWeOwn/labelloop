@@ -112,7 +112,8 @@ def test_qualification_and_proposal_histories_have_one_head_without_rewriting_dd
     config = Config()
     config.set_main_option("script_location", str(directory))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["m5_auth_0001"]
+    assert scripts.get_heads() == ["qualification_0008"]
+    assert scripts.get_revision("qualification_0008").down_revision == "m5_auth_0001"
     assert scripts.get_revision("m5_auth_0001").down_revision == (
         "qualification_0007",
         "auth_jobs_0001",

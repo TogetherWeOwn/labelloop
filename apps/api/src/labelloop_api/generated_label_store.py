@@ -33,6 +33,34 @@ def proposal_teacher(
     # Registry veto loading imports this module, so load the codec only at use.
     from labelloop_api.model_store import json_record, load_release
 
+    project_id, record, inputs = _completed_proposal(
+        connection,
+        project_key=project_key,
+        asset_key=asset_key,
+        expected_revision=expected_revision,
+        proposal_run_key=proposal_run_key,
+    )
+    teacher = record["teacher"]
+    if teacher is None or teacher != inputs["registry"]["champion"]:
+        raise ValueError("proposal differs from its completed pinned job or annotation revision")
+    model_id = connection.execute(
+        sa.select(model_schema.model_release.c.id).where(
+            model_schema.model_release.c.project_id == project_id,
+            model_schema.model_release.c.release_key == teacher["release_id"],
+        )
+    ).scalar_one()
+    release = load_release(connection, model_id)
+    if (
+        release is None
+        or json_record(release) != teacher
+        or release.project_id != project_key
+        or record["checkpoint_sha256"] != release.weights_sha256
+    ):
+        raise ValueError("proposal teacher differs from its complete registered release")
+    return release.release_id
+
+
+def _completed_proposal(connection, *, project_key, asset_key, expected_revision, proposal_run_key):
     for value in (project_key, asset_key, proposal_run_key):
         require_name(value)
     require_count(expected_revision, minimum=1)
@@ -56,7 +84,6 @@ def proposal_teacher(
     record, inputs = row["record"], row["input"]
     digest = hashlib.sha256(canonical_json(record)).hexdigest()
     binding = record["binding"]
-    teacher = record["teacher"]
     if (
         digest != row["sha256"]
         or digest != row["stage_sha256"]
@@ -70,25 +97,47 @@ def proposal_teacher(
         or binding["source"]["asset_id"] != asset_key
         or type(binding["expected_revision"]) is not int
         or binding["expected_revision"] != expected_revision
-        or teacher is None
-        or teacher != inputs["registry"]["champion"]
     ):
         raise ValueError("proposal differs from its completed pinned job or annotation revision")
-    model_id = connection.execute(
-        sa.select(model_schema.model_release.c.id).where(
-            model_schema.model_release.c.project_id == project_id,
-            model_schema.model_release.c.release_key == teacher["release_id"],
-        )
-    ).scalar_one()
-    release = load_release(connection, model_id)
-    if (
-        release is None
-        or json_record(release) != teacher
-        or release.project_id != project_key
-        or record["checkpoint_sha256"] != release.weights_sha256
-    ):
-        raise ValueError("proposal teacher differs from its complete registered release")
-    return release.release_id
+    return project_id, record, inputs
+
+
+def proposal_reference_assets(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    asset_key: str,
+    expected_revision: int,
+    proposal_run_key: str,
+) -> frozenset[str]:
+    """Recover historical reference influence, not present-day retrieval permission.
+
+    The immutable job pins every reference, including unused alternatives. Retain
+    them conservatively even for negative/partial proposals. This does not attest
+    reference-pack approval or recover omitted/unrecorded review runs.
+    """
+    _, record, inputs = _completed_proposal(
+        connection,
+        project_key=project_key,
+        asset_key=asset_key,
+        expected_revision=expected_revision,
+        proposal_run_key=proposal_run_key,
+    )
+    references = inputs.get("references")
+    if not isinstance(references, list) or any(not isinstance(ref, dict) for ref in references):
+        raise ValueError("proposal requires its complete pinned reference inputs")
+    identities = []
+    assets = set()
+    for reference in references:
+        for key in ("reference_id", "asset_id", "class_id"):
+            require_name(reference.get(key))
+        if reference.get("approved") is not True:
+            raise ValueError("proposal reference was not approved in the pinned job")
+        identities.append(reference["reference_id"])
+        assets.add(reference["asset_id"])
+    if len(set(identities)) != len(identities) or record.get("evidence_ids") != sorted(identities):
+        raise ValueError("proposal reference identities differ from its pinned job")
+    return frozenset(assets)
 
 
 def record_generated_label_origin(

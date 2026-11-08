@@ -204,7 +204,7 @@ def _outcome(
     return AnnotationOutcomeRef(prefix, prefix, prefix)
 
 
-def _proposal_origin_fixture(connection, release, asset_key, revision, suffix=""):
+def _proposal_origin_fixture(connection, release, asset_key, revision, suffix="", references=()):
     """Synthetic completed producer rows; not a claim of inference execution."""
     import hashlib
     import json
@@ -230,8 +230,11 @@ def _proposal_origin_fixture(connection, release, asset_key, revision, suffix=""
         scope_completeness="unreviewed",
         training_eligible=False,
         gold_eligible=False,
+        evidence_ids=sorted(reference["reference_id"] for reference in references),
     )
-    inputs = dict(run_id=run_key, request=binding, registry={"champion": teacher})
+    inputs = dict(
+        run_id=run_key, request=binding, registry={"champion": teacher}, references=list(references)
+    )
     digest = hashlib.sha256(canonical_json(record)).hexdigest()
     parameters = dict(
         key=run_key,
@@ -780,6 +783,11 @@ def exercise_context_assembly(engine, release, final, context, actor):
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
         assert loaded.evidence.canary_audit != context.evidence.canary_audit
         _exercise_recorded_selection(
+            connection, release, final, loaded, arguments, actor, before, count
+        )
+        from proposal_reference_smoke import exercise_recorded_references
+
+        exercise_recorded_references(
             connection, release, final, loaded, arguments, actor, before, count
         )
         with pytest.raises(ValueError, match="differ from current canonical membership"):
