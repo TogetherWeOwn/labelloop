@@ -65,7 +65,8 @@ and system-qualified acceptance. All training references require accepted comple
 non-gold revisions; positive crops must contain a complete labeled class instance.
 Gold enrollment requires its source group to be quarantined in the authoritative
 scope first, so another revision or pack cannot retrieve the same evaluation pixels.
-It also requires a `GoldAdjudication` bound to the exact source/revision: real-image
+It also requires a `GoldAdjudication` bound to the exact project/source/revision:
+missing or foreign project identity is rejected even if asset/revision IDs collide. Real-image
 pixels, blind human truth and an adjudicator distinct from **every** prior annotator
 and reviewer. Public labels may seed review but are not gold truth. Constructive
 synthetic and seeded-perturbation truth cannot qualify for gold, even when the
@@ -75,14 +76,27 @@ that history or authenticate a principal. Canonical human/adjudicated states mus
 created by that authenticated producer, never by a synthetic-truth generator.
 Provenance, validity scope/tags, scene, diversity cluster, utility and positive versus confusion
 negative kind survive enrollment. Gold can remain in a pack for accounting but is
-never retrieved. `collection_distributions` reports object class/size/occlusion and
-example teacher/scene counts separately for all three collections, with explicit
-source-pixel size thresholds.
+never retrieved. `collection_distributions` reports unique represented source-label
+support separately for all three collections. Object class/size/occlusion counts
+include only complete boxes contained in an enrolled crop (all objects for a full-frame
+entry), across all visible classes rather than just the advertised reference class.
+Partial boxes and off-crop objects are excluded. Counts deduplicate
+(project, source asset, revision, object ID) within each collection, so overlapping or
+repeated references do not inflate object support. Different revisions are distinct
+versioned evidence, not a claim of independent physical objects. Size uses explicit
+source-pixel thresholds, not resized crop dimensions. `examples`, teacher and scene
+counts instead count enrolled reference entries, including repeated-source crops;
+these entry counts are not unique image or label support. No weighted-occurrence or
+unrepresented full-source statistics are inferred.
 
 `retrieve_references` only returns approved, query-compatible entries within explicit
 item/class/cluster budgets. Before filling optional high-utility slots, a deterministic
 class-to-cluster augmenting assignment reserves one reference per requested class;
 flexible classes can move to an alternative cluster to preserve scarce coverage.
+Retrieval intentionally favors source diversity: at most one reference per project,
+source asset and target class is returned, even when distinct positive and
+confusion-negative crops are eligible. Kind coverage and returning every eligible
+crop are not guaranteed; the selected reference retains its kind.
 Empty or unsupported class coverage is insufficient
 evidence, not a successful empty retrieval. Local packs must use the current pinned
 scope. Cross-project reuse requires one approved `ReferenceImport` binding a named
@@ -102,8 +116,11 @@ Every graph node needs typed metadata. Missing metadata and reconstructed cycles
 fail closed. The graph must be the complete project dependency closure supplied by
 persistence; the planner cannot discover omitted external records.
 
-`plan_invalidation` traces all paths from bad source revisions/references and emits
-immutable marks: review, rebuild, retrain, or adjudication-required. Human-reviewed
+`plan_invalidation` traces all paths from bad source revisions/references, including
+revision-bearing `generated_annotation` roots from older teachers, and emits
+immutable marks: review, rebuild, retrain, or adjudication-required. Generated labels
+that feed later canonical releases invalidate those later variants/runs/models without
+relabelling the root artifact or invalidating its unaffected ancestors. Human-reviewed
 and adjudicated annotation revisions receive only adjudication-required marks with
 expected revision numbers, never an automated replacement. Root causes are retained
 for each mark, including multiple bad ancestors. Unrelated records remain untouched.

@@ -78,7 +78,7 @@ def plan_invalidation(
     if not nodes <= records.keys() or not bad_evidence_ids <= records.keys():
         raise ValueError("incomplete lineage inventory cannot certify affected descendants")
     for root in bad_evidence_ids:
-        if records[root].kind not in {"source_label", "reference"}:
+        if records[root].kind not in {"source_label", "reference", "generated_annotation"}:
             raise ValueError("bad evidence must identify a source revision or reference")
     # Validate even graphs reconstructed directly from persisted mappings.
     for child, parents in graph.parents.items():

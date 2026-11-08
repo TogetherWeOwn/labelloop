@@ -32,8 +32,11 @@ class GoldAdjudication:
     annotator_ids: frozenset[str]
     reviewer_ids: frozenset[str]
     blind: bool
+    project_id: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.project_id, str) or not self.project_id.strip():
+            raise ValueError("gold adjudication requires source project identity")
         if (
             not self.evidence_id.strip()
             or not self.asset_id.strip()
@@ -89,7 +92,8 @@ class MemoryExample:
             if self.gold_adjudication is None:
                 raise ValueError("gold collection requires independent adjudication provenance")
             if (
-                self.gold_adjudication.asset_id != self.reference.asset_id
+                self.gold_adjudication.project_id != self.revision.project_id
+                or self.gold_adjudication.asset_id != self.reference.asset_id
                 or self.gold_adjudication.revision != self.revision.revision
             ):
                 raise ValueError("gold adjudication must bind the exact source and revision")
@@ -359,6 +363,8 @@ def retrieve_references(
 
 @dataclass(frozen=True, slots=True)
 class CollectionDistribution:
+    """Entry teacher/scene counts; unique represented source-revision object counts."""
+
     collection: Collection
     examples: int
     class_counts: dict[str, int]
@@ -377,7 +383,18 @@ def collection_distributions(
     collections: tuple[Collection, ...] = ("anchor", "auto_expanded", "gold")
     for collection in collections:
         examples = [item for item in pack.examples if item.collection == collection]
-        objects = [obj for item in examples for obj in item.revision.objects]
+        represented = {
+            (
+                item.revision.project_id,
+                item.revision.asset_id,
+                item.revision.revision,
+                obj.object_id,
+            ): obj
+            for item in examples
+            for obj in item.revision.objects
+            if item.reference.crop is None or obj.box.intersect(item.reference.crop) == obj.box
+        }
+        objects = represented.values()
         scales: Counter[str] = Counter()
         for obj in objects:
             side = min(obj.box.x_max - obj.box.x_min, obj.box.y_max - obj.box.y_min)

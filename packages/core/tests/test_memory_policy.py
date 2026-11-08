@@ -387,6 +387,7 @@ def adjudication_for(asset_id: str) -> GoldAdjudication:
         frozenset({"annotator"}),
         frozenset({"reviewer"}),
         True,
+        project_id="office",
     )
 
 
@@ -417,6 +418,36 @@ def test_gold_requires_bound_independent_blind_human_provenance() -> None:
             replace(anchor, collection="gold", revision=revision, gold_adjudication=unbound)
     gold = replace(anchor, collection="gold", revision=revision, gold_adjudication=evidence)
     assert ReferencePack("gold", "1", scope, (gold,)).examples == (gold,)
+
+
+@pytest.mark.parametrize("project_id", ["", "  ", None])
+def test_gold_audit_requires_project_identity(project_id: str | None) -> None:
+    with pytest.raises(ValueError, match="project"):
+        replace(adjudication_for("holdout"), project_id=project_id)
+
+
+def test_gold_audit_cannot_cross_projects_with_colliding_asset_and_revision() -> None:
+    source = scope_for()
+    target = scope_for("wildlife", "ibis")
+    source_gold = memory_for(source, "holdout")
+    target_gold = memory_for(target, "holdout")
+    assert source_gold.revision.asset_id == target_gold.revision.asset_id
+    assert source_gold.revision.revision == target_gold.revision.revision
+    evidence = adjudication_for("holdout")
+    with pytest.raises(ValueError, match="bind"):
+        replace(
+            target_gold,
+            collection="gold",
+            revision=replace(target_gold.revision, gold_eligible=True),
+            gold_adjudication=evidence,
+        )
+    matching = replace(
+        target_gold,
+        collection="gold",
+        revision=replace(target_gold.revision, gold_eligible=True),
+        gold_adjudication=replace(evidence, project_id=target.ontology.project_id),
+    )
+    assert ReferencePack("gold", "1", target, (matching,)).examples == (matching,)
 
 
 def test_reference_enrollment_preserves_collections_teacher_and_distributions() -> None:
@@ -451,6 +482,81 @@ def test_reference_enrollment_preserves_collections_teacher_and_distributions() 
         )
         == retrieved
     )
+
+
+def test_distributions_count_only_unique_objects_represented_by_enrolled_crops() -> None:
+    scope = scope_for()
+    scope = replace(
+        scope,
+        ontology=replace(
+            scope.ontology,
+            classes=(
+                *scope.ontology.classes,
+                ClassDefinition("mouse", "Mouse", "physical mouse"),
+            ),
+            class_map={**scope.ontology.class_map, "mouse": 1},
+        ),
+    )
+    anchor = memory_for(scope)
+    keyboard = replace(anchor.revision.objects[0], occluded=False)
+    mouse = DatasetObject("mouse", "mouse", Box(50, 30, 90, 75), occluded=True)
+    revision = replace(anchor.revision, objects=(keyboard, mouse))
+    cropped = replace(
+        anchor,
+        revision=revision,
+        reference=replace(anchor.reference, crop=Box(0, 0, 40, 60)),
+    )
+    pack = ReferencePack("pack", "1", scope, (cropped,))
+    row = collection_distributions(pack, small_max_px=16, medium_max_px=32)[0]
+    assert row.examples == 1
+    assert row.class_counts == {"keyboard": 1}
+    assert row.scale_counts == {"small": 1}
+    assert row.occluded_objects == 0
+    partial = replace(cropped, reference=replace(cropped.reference, crop=Box(0, 0, 60, 80)))
+    assert (
+        collection_distributions(
+            replace(pack, examples=(partial,)), small_max_px=16, medium_max_px=32
+        )[0]
+        == row
+    )
+    repeated = replace(
+        cropped,
+        reference=replace(cropped.reference, reference_id="second-crop", crop=Box(0, 0, 45, 70)),
+    )
+    repeated_pack = replace(pack, examples=(cropped, repeated))
+    repeated_row = collection_distributions(repeated_pack, small_max_px=16, medium_max_px=32)[0]
+    assert repeated_row.examples == 2
+    assert repeated_row.teacher_counts == {"curated": 2}
+    assert repeated_row.scene_counts == {"indoor": 2}
+    assert repeated_row.class_counts == row.class_counts
+    assert repeated_row.scale_counts == row.scale_counts
+    assert repeated_row.occluded_objects == 0
+    other_crop = replace(
+        cropped,
+        reference=replace(
+            cropped.reference, reference_id="mouse-crop", class_id="mouse", crop=mouse.box
+        ),
+    )
+    full = replace(cropped, reference=replace(cropped.reference, reference_id="full", crop=None))
+    represented = replace(pack, examples=(cropped, repeated, other_crop, full))
+    represented_row = collection_distributions(represented, small_max_px=16, medium_max_px=32)[0]
+    assert represented_row.class_counts == {"keyboard": 1, "mouse": 1}
+    assert represented_row.scale_counts == {"large": 1, "small": 1}
+    assert represented_row.occluded_objects == 1
+    assert (
+        collection_distributions(
+            replace(represented, examples=tuple(reversed(represented.examples))),
+            small_max_px=16,
+            medium_max_px=32,
+        )[0]
+        == represented_row
+    )
+    # Object IDs are local to a source revision, not global across sources.
+    second_source = memory_for(scope, "easy-b")
+    distinct = replace(pack, examples=(cropped, second_source))
+    assert collection_distributions(distinct, small_max_px=16, medium_max_px=32)[
+        0
+    ].class_counts == {"keyboard": 2}
 
 
 @pytest.mark.parametrize("asset_id", ["holdout", "test", "tile", "train-tile"])
@@ -689,6 +795,67 @@ def test_bad_sources_trace_all_variants_runs_models_and_annotations_without_rewr
         artifacts=tuple(reversed(artifacts)),
     )
     assert reordered == event
+
+
+@pytest.mark.parametrize("human_reviewed", [False, True])
+def test_bad_generated_revision_invalidates_next_iteration_not_its_ancestors(
+    human_reviewed: bool,
+) -> None:
+    graph, artifacts = lineage_fixture()
+    if human_reviewed:
+        artifacts = tuple(
+            replace(item, revision=revision_for(scope_for()))
+            if item.artifact_id == "generated"
+            else item
+            for item in artifacts
+        )
+    artifacts = (
+        *artifacts,
+        EvidenceArtifact("release:2", "canonical_release"),
+        EvidenceArtifact("variant:2", "dataset_variant"),
+        EvidenceArtifact("train:2", "training_run"),
+        EvidenceArtifact("model:2", "model"),
+        EvidenceArtifact(
+            "generated:2", "generated_annotation", revision_for(scope_for(), auto=True)
+        ),
+    )
+    for child, parent in (
+        ("release:2", "generated"),
+        ("variant:2", "release:2"),
+        ("train:2", "variant:2"),
+        ("model:2", "train:2"),
+        ("generated:2", "model:2"),
+    ):
+        graph.add(child, parent)
+    original_parents = graph.parents.copy()
+    original_artifacts = artifacts
+    event = plan_invalidation(
+        event_id="audit-generated",
+        reason="older teacher label was wrong",
+        bad_evidence_ids=frozenset({"generated"}),
+        graph=graph,
+        artifacts=artifacts,
+    )
+    marks = {mark.artifact_id: mark for mark in event.marks}
+    assert set(marks) == {
+        "generated",
+        "adjudicated",
+        "release:2",
+        "variant:2",
+        "train:2",
+        "model:2",
+        "generated:2",
+    }
+    assert marks["generated"].action == ("adjudication_required" if human_reviewed else "review")
+    assert marks["generated"].expected_revision == 1
+    assert marks["adjudicated"].action == "adjudication_required"
+    assert marks["release:2"].action == marks["variant:2"].action == "rebuild"
+    assert marks["train:2"].action == marks["model:2"].action == "retrain"
+    assert marks["generated:2"].action == "review"
+    assert all(mark.affected_by == ("generated",) for mark in event.marks)
+    assert graph.parents == original_parents
+    assert artifacts == original_artifacts
+    assert append_invalidation((), event) == (event,)
 
 
 def test_invalidation_refuses_missing_inventory_bad_roots_and_persisted_cycles() -> None:
