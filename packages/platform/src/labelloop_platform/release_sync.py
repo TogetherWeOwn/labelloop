@@ -29,6 +29,19 @@ class Action(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class DatasetEvidence:
+    dataset_id: str
+    owner: str
+    slug: str
+    visibility: str
+    task: str
+    class_names: tuple[str, ...]
+    operation_id: str
+    manifest_sha256: str
+    archive_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class UploadSession:
     session_id: str
     expires_at: float
@@ -42,6 +55,7 @@ class SyncCommand:
     slug: str
     dataset_id: str | None
     payload_json: str
+    dispatch_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +97,11 @@ class ReleaseSync:
                 "visibility": "private",
                 "format": "yolo",
                 "classNames": self.intent.class_names,
+                "metadata": {
+                    "labelloopOperation": self.intent.operation_id,
+                    "labelloopManifest": self.intent.manifest_sha256,
+                    "labelloopArchive": self.intent.archive_sha256,
+                },
             }
         elif self.phase == Phase.DATASET:
             action = Action.SIGN
@@ -114,6 +133,7 @@ class ReleaseSync:
             self.slug,
             self.dataset_id,
             canonical_json(payload),
+            f"{self.intent.operation_id}:{action}:{self.sequence + 1}",
         )
         return replace(
             self,
@@ -173,7 +193,7 @@ class ReleaseSync:
             history=(*self.history, "retire_upload_session"),
         )
 
-    def recover_dataset(self, dataset_id: str, class_names: tuple[str, ...]) -> "ReleaseSync":
+    def recover_dataset(self, evidence: DatasetEvidence) -> "ReleaseSync":
         """Caller looked up this exact owner/slug; absence is NOT proof create failed."""
         if (
             self.phase not in {Phase.IN_FLIGHT, Phase.UNCERTAIN}
@@ -181,13 +201,31 @@ class ReleaseSync:
             or self.pending.action != Action.CREATE
         ):
             raise SyncConflict("not recovering dataset creation")
-        if not dataset_id or class_names != self.intent.class_names:
-            raise SyncConflict("dataset lookup did not establish exact identity/catalog")
+        if not evidence.dataset_id or (
+            evidence.owner,
+            evidence.slug,
+            evidence.visibility,
+            evidence.task,
+            evidence.class_names,
+            evidence.operation_id,
+            evidence.manifest_sha256,
+            evidence.archive_sha256,
+        ) != (
+            self.owner,
+            self.slug,
+            "private",
+            "detect",
+            self.intent.class_names,
+            self.intent.operation_id,
+            self.intent.manifest_sha256,
+            self.intent.archive_sha256,
+        ):
+            raise SyncConflict("dataset lookup did not establish exact private release identity")
         return replace(
             self,
             sequence=self.sequence + 1,
             phase=Phase.DATASET,
-            dataset_id=dataset_id,
+            dataset_id=evidence.dataset_id,
             pending=None,
             history=(*self.history, "reconciled_dataset_id"),
         )

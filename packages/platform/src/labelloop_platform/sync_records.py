@@ -53,6 +53,11 @@ class Label:
                 or any(type(v) not in {int, float} or not math.isfinite(v) for v in value)
             ):
                 raise SyncConflict("malformed mixed-task label")
+        extra = {
+            key: value
+            for key, value in extra.items()
+            if not (key in {"segments", "keypoints"} and value == [])
+        }
         object.__setattr__(self, "extra_json", canonical_json(extra))
         if self.bbox is not None:
             if len(self.bbox) != 4 or any(
@@ -94,15 +99,31 @@ class Label:
         return value
 
 
+def _same_task_data(expected: Any, actual: Any) -> bool:
+    if type(expected) in {int, float} and type(actual) in {int, float}:
+        return abs(expected - actual) <= COORDINATE_TOLERANCE
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        return expected.keys() == actual.keys() and all(
+            _same_task_data(expected[key], actual[key]) for key in expected
+        )
+    if isinstance(expected, list) and isinstance(actual, list):
+        return len(expected) == len(actual) and all(
+            _same_task_data(a, b) for a, b in zip(expected, actual, strict=True)
+        )
+    return type(expected) is type(actual) and expected == actual
+
+
 def same_labels(expected: tuple[Label, ...], actual: tuple[Label, ...]) -> bool:
     """Order-independent multiset matching, with bounded saved-coordinate rounding."""
     if len(expected) != len(actual):
         return False
 
+    extras = {label: json.loads(label.extra_json) for label in (*expected, *actual)}
+
     def compatible(a: Label, b: Label) -> bool:
         return (
             a.class_id == b.class_id
-            and a.extra_json == b.extra_json
+            and _same_task_data(extras[a], extras[b])
             and (
                 a.bbox == b.bbox
                 or (
@@ -151,6 +172,15 @@ def same_labels(expected: tuple[Label, ...], actual: tuple[Label, ...]) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class ContentEvidence:
+    """Measured by a trusted download/decoder, never copied from properties.hash."""
+
+    sha256: str
+    width: int
+    height: int
+
+
+@dataclass(frozen=True, slots=True)
 class ImageSnapshot:
     image_id: str
     dataset_id: str
@@ -162,6 +192,8 @@ class ImageSnapshot:
     labels: tuple[Label, ...]
     updated_at: str = ""
     labels_truncated: bool = False
+    content: ContentEvidence | None = None
+    storage_hash: str = ""
 
     def __post_init__(self) -> None:
         if not self.image_id or not self.dataset_id or not self.filename:
@@ -199,6 +231,7 @@ class ImageSnapshot:
             labels,
             properties.get("updatedAt", ""),
             value.get("labelsTruncated", False),
+            storage_hash=properties["hash"],
         )
 
     def fingerprint(self) -> str:
@@ -212,6 +245,7 @@ class ImageSnapshot:
                     "updated_at": self.updated_at,
                     "labels": sorted(canonical_json(label.wire()) for label in self.labels),
                     "truncated": self.labels_truncated,
+                    "storage_hash": self.storage_hash,
                 }
             ).encode()
         )

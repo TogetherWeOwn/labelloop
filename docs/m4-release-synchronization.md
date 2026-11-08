@@ -21,12 +21,28 @@ unknown task/class labels and image short sides below 28 pixels. Ingest always i
 It never sends `targetSplit`, `sourceUrl`, or a connected-source reference. A release gets
 one stable private detection dataset slug, never an editable shared incoming dataset.
 
-`reconcile_release` requires processing completion, an explicitly exhausted image listing,
-and a saved dataset version/content hash. List summaries are insufficient: the adapter must
-fetch complete labels for every image and exhaust pagination. It checks class order both at
-dataset and image level, unique image IDs/names, exact membership, split membership, label
-multisets/classes, truncation and geometry. A moved train image, missing negative image,
-remapped class, unexpected extra box or incomplete response prevents freezing.
+`reconcile_release` consumes a `CapturedVersion` capsule from the trusted version-export
+reader, not a live image listing accompanied by independently supplied version/hash fields.
+The reader must request `GET export?v=N`, verify the response version and dataset's recorded
+version/content hash, download and hash the saved NDJSON, and derive complete image/label
+snapshots from that exact export. `export_sha256` is retained in the frozen mapping. Processing
+completion and complete export membership remain required. A live listing cannot claim the
+`saved_version_export` provenance. Final implementation/testing of this reader is part of the
+explicit foundation integration gate below; the typed capsule is not proof of that wiring.
+
+List summaries are insufficient. Reconciliation checks class order at dataset and image level,
+unique IDs/names, exact membership, splits, label multisets/classes, truncation and geometry.
+Every image also requires trusted `ContentEvidence`: measured original content SHA-256 and
+raster dimensions matching the compiler's expected file. The remote CAS `properties.hash`
+is retained as opaque storage identity, never assumed to be SHA-256. If only a resized image
+can be retrieved and original content cannot be verified, fail closed rather than bless its
+filename as content proof. This may require original-asset access for >4096-pixel uploads;
+dimension tolerance alone does not qualify those uploads.
+
+The compiler bridge also reads hash-frozen `data.yaml` names and rejects independently renamed
+catalogs (recompile first). Each parsed row's class index is checked directly against its
+stable class ID, not only against a redundant manifest field. A moved train image, missing
+negative image, remapped class, wrong-pixel image or incomplete response prevents freezing.
 
 For dimensions up to 4096 pixels, exact dimensions are mandatory. Above 4096, the expected
 long side is exactly 4096; the short side may be floor or ceiling of the proportional resize
@@ -55,7 +71,9 @@ The journal port requires shared durable transactions and unique stable operatio
 The test journals are deliberately in-memory fakes, not production persistence.
 
 - A create timeout or restart after intent cannot dispatch create again. Recover only by
-  looking up the authorized exact owner/stable slug and checking its identity/catalog.
+  looking up the authorized exact owner/stable slug and checking `DatasetEvidence`: private
+  visibility, detection task, exact class catalog and operation/manifest/archive metadata
+  supplied in the original create. Do not adopt a public or unrelated same-name dataset.
   An empty lookup is not proof that a previously submitted create cannot still arrive.
 - Signed PUT targets are create-only. Expiry, 412, a lost PUT result or loss of the ephemeral
   signed target after restart retires the old session. A new signed URL/session is required;
@@ -101,6 +119,12 @@ edit. The API has no annotation revision/If-Match guard; this code claims no rem
 An external edit between a read and PATCH could otherwise be overwritten without any evidence
 left in readback. Do not enable this writer while allowing uncoordinated UI edits.
 
+Empty `segments`/`keypoints` arrays are not mixed-task geometry and do not retain stale target
+boxes. Meaningful task geometry is preserved and numerically compared within the same rounding
+tolerance; array shape and skeleton identity remain exact. Already-satisfied replacements are
+verified without dispatching PATCH, including matches within saved-coordinate tolerance.
+An old uncertain no-op intent cannot use the unchanged baseline as completion proof.
+
 Before PATCH, observed divergence stops without writing. After PATCH, complete readback must
 match intended labels (bounded rounding) and unchanged image identity/classes/split/dimensions.
 Divergence stops for adjudication; it never replaces canonical truth. A lost response or
@@ -111,8 +135,8 @@ the baseline over an external edit. Later divergence requires a new proposed can
 and adjudication, not an in-place overwrite of source history.
 
 `inverse_edit` produces only proposed retained-source geometry from the recorded raster
-inverse. A previously clipped object or a new intersection with padding requires source-image
-review. Lost extent is never reconstructed, and this proposal cannot assert acceptance or
+inverse. A previously clipped object, new intersection with padding, or a box reaching an
+internal source-crop edge requires source-image review. Lost extent is never reconstructed, and this proposal cannot assert acceptance or
 change canonical state. `require_complete_prediction` rejects both `partial` and nonempty
 `partialImages`, as well as truncated label results; a nonpartial result is still only proposal
 evidence, not an image-completeness assessment.

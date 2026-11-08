@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from .sync_records import ContentEvidence as ContentEvidence
 from .sync_records import ImageSnapshot, Label, SyncConflict, canonical_json, same_labels, sha256
 
 
@@ -22,6 +23,16 @@ class ExpectedImage:
     object_ids: tuple[str, ...]
     transform_json: str
     image_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.filename
+            or not self.source_id
+            or self.revision < 1
+            or self.split not in {"train", "val", "test"}
+            or len(self.object_ids) != len(self.labels)
+        ):
+            raise SyncConflict("invalid expected image lineage")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +81,23 @@ class ReleaseIntent:
         mapping = manifest["class_map"]
         if set(mapping) != set(class_names):
             raise SyncConflict("approved catalog differs from compiler class map")
+        frozen_yaml = read_file("data.yaml")
+        if sha256(frozen_yaml) != manifest["file_hashes"]["data.yaml"]:
+            raise SyncConflict("compiled catalog changed after manifest freeze")
+        # Consume only the compiler's deterministic names block, not arbitrary YAML.
+        try:
+            names_block = frozen_yaml.decode().split("names:\n", 1)[1]
+            archive_names = {}
+            for row in names_block.splitlines():
+                index, name = row.strip().split(": ", 1)
+                archive_names[int(index)] = json.loads(name)
+        except (ValueError, IndexError) as error:
+            raise SyncConflict("invalid compiler class catalog") from error
+        ordered_names = tuple(
+            class_names[stable] for stable, _ in sorted(mapping.items(), key=lambda i: i[1])
+        )
+        if archive_names != dict(enumerate(ordered_names)):
+            raise SyncConflict("approved names differ from frozen archive catalog; recompile")
         images: list[ExpectedImage] = []
         for sample in manifest["samples"]:
             image_path, label_path = sample["image_path"], sample["label_path"]
@@ -83,8 +111,14 @@ class ReleaseIntent:
             retained = tuple(obj for obj in sample["objects"] if obj.get("yolo_row") is not None)
             if labels != tuple(_yolo_label(obj["yolo_row"]) for obj in retained):
                 raise SyncConflict("compiler object lineage does not match label file")
-            if any(mapping[obj["class_id"]] != obj["class_index"] for obj in retained):
+            if any(
+                mapping[obj["class_id"]] != obj["class_index"]
+                or label.class_id != obj["class_index"]
+                for obj, label in zip(retained, labels, strict=True)
+            ):
                 raise SyncConflict("compiler class identity was remapped")
+            if sample["image_sha256"] != manifest["file_hashes"][image_path]:
+                raise SyncConflict("compiler image identity differs from file hash")
             if bool(sample["verified_negative"]) != (not labels):
                 raise SyncConflict("missing explicit negative assessment")
             width, height = sample["image_size"]
@@ -172,6 +206,7 @@ class FrozenReleaseMapping:
     content_hash: str
     class_map: tuple[tuple[str, int], ...]
     images: tuple[ImageMapping, ...]
+    captured_export_sha256: str
 
     def verify_model_capture(self, model: dict[str, Any]) -> None:
         capture = model.get("datasetVersion", {})
@@ -183,20 +218,38 @@ class FrozenReleaseMapping:
             raise SyncConflict("model captured a different dataset version")
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedVersion:
+    """Trusted adapter decoded GET export?v=N, not a live listing plus a version number.
+
+    The adapter binds the export download to the requested version and the dataset's
+    recorded version/contentHash, hashes the downloaded bytes, and verifies image
+    content through a trusted content reader. Raw remote hashes are not SHA-256 proof.
+    """
+
+    dataset_id: str
+    version: int
+    content_hash: str
+    class_names: tuple[str, ...]
+    images: tuple[ImageSnapshot, ...]
+    listing_complete: bool
+    processing_complete: bool
+    export_sha256: str
+    origin: str
+
+
 def reconcile_release(
     intent: ReleaseIntent,
     *,
     owner: str,
     dataset_slug: str,
-    dataset_id: str,
-    class_names: tuple[str, ...],
-    images: tuple[ImageSnapshot, ...],
-    listing_complete: bool,
-    processing_complete: bool,
-    version: int,
-    content_hash: str,
+    capture: CapturedVersion,
 ) -> FrozenReleaseMapping:
-    if not processing_complete or not listing_complete:
+    if capture.origin != "saved_version_export" or len(capture.export_sha256) != 64:
+        raise SyncConflict("reconciliation requires a saved version export")
+    dataset_id, version, content_hash = capture.dataset_id, capture.version, capture.content_hash
+    class_names, images = capture.class_names, capture.images
+    if not capture.processing_complete or not capture.listing_complete:
         raise SyncConflict("queued ingest or partial image listing is not a reconciled release")
     if not owner or not dataset_slug or not dataset_id or type(version) is not int or version < 1:
         raise SyncConflict("missing captured release identity/version")
@@ -216,6 +269,12 @@ def reconcile_release(
             raise SyncConflict("image split changed or label response is truncated")
         if (image.width, image.height) not in ingest_dimensions(expected.width, expected.height):
             raise SyncConflict("unexpected ingest geometry")
+        if (
+            image.content is None
+            or image.content.sha256 != expected.image_sha256
+            or (image.content.width, image.content.height) != (expected.width, expected.height)
+        ):
+            raise SyncConflict("missing or mismatched source image content evidence")
         if not same_labels(expected.labels, image.labels):
             raise SyncConflict("ingested label membership, class or geometry changed")
         mappings.append(
@@ -243,4 +302,5 @@ def reconcile_release(
         content_hash,
         intent.class_map,
         tuple(mappings),
+        capture.export_sha256,
     )

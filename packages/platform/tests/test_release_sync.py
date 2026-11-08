@@ -9,6 +9,7 @@ from test_sync_reconciliation import remote as remote
 
 from labelloop_platform.release_sync import (
     Action,
+    DatasetEvidence,
     MutationOutcome,
     Phase,
     ReleaseSync,
@@ -90,12 +91,25 @@ def test_uncertain_create_reconciles_returned_id_without_duplicate_create(intent
     assert "untrusted response" not in repr(uncertain)
     with pytest.raises(SyncConflict):
         dispatch_once(journal, transport, "sync-1", now=0)
-    recovered = uncertain.recover_dataset("dataset-1", intent.class_names)
+    evidence = DatasetEvidence(
+        "dataset-1",
+        "fixture",
+        "release-7-full320",
+        "private",
+        "detect",
+        intent.class_names,
+        intent.operation_id,
+        intent.manifest_sha256,
+        intent.archive_sha256,
+    )
+    recovered = uncertain.recover_dataset(evidence)
     assert recovered.phase == Phase.DATASET
     assert recovered.dataset_id == "dataset-1"
     assert len(transport.commands) == 1
     with pytest.raises(SyncConflict):
-        uncertain.recover_dataset("dataset-1", tuple(reversed(intent.class_names)))
+        uncertain.recover_dataset(
+            replace(evidence, class_names=tuple(reversed(intent.class_names)))
+        )
 
 
 def test_restart_after_intent_before_response_cannot_dispatch_again(intent):

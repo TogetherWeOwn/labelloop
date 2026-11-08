@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from labelloop_platform.reconciliation import (
+    CapturedVersion,
+    ContentEvidence,
     ExpectedImage,
     ReleaseIntent,
     ingest_dimensions,
@@ -63,26 +65,32 @@ def remote(intent):
             image.height,
             intent.class_names,
             image.labels,
+            content=ContentEvidence(image.image_sha256, image.width, image.height),
         )
         for index, image in enumerate(intent.images)
     )
 
 
 def reconcile(intent, remote, **changes):
-    return reconcile_release(
-        intent,
+    capsule = CapturedVersion(
         **{
-            "owner": "fixture",
-            "dataset_slug": "release-7-full320",
             "dataset_id": "dataset-1",
+            "version": 7,
+            "content_hash": "captured-content",
             "class_names": intent.class_names,
             "images": remote,
             "listing_complete": True,
             "processing_complete": True,
-            "version": 7,
-            "content_hash": "captured-content",
-            **changes,
-        },
+            "export_sha256": "e" * 64,
+            "origin": "saved_version_export",
+            **{key: value for key, value in changes.items() if key != "capture"},
+        }
+    )
+    return reconcile_release(
+        intent,
+        owner="fixture",
+        dataset_slug="release-7-full320",
+        capture=changes.get("capture", capsule),
     )
 
 
@@ -180,7 +188,13 @@ def test_unexpected_resize_and_tiny_inputs_fail(intent, remote):
     oversized = replace(
         intent, images=(replace(intent.images[0], width=9000, height=3000), intent.images[1])
     )
-    reconcile(oversized, (replace(remote[0], width=4096, height=1365), remote[1]))
+    resized = replace(
+        remote[0],
+        width=4096,
+        height=1365,
+        content=ContentEvidence(intent.images[0].image_sha256, 9000, 3000),
+    )
+    reconcile(oversized, (resized, remote[1]))
     with pytest.raises(SyncConflict, match="geometry"):
         reconcile(oversized, (replace(remote[0], width=4095, height=1365), remote[1]))
     with pytest.raises(SyncConflict, match="short side"):
@@ -221,7 +235,11 @@ def test_asymmetric_roundtrip_tolerates_five_decimals_not_wrong_geometry(intent)
 
 def test_compiler_manifest_bridge_retains_source_and_class_identity():
     labels = b"1 0.45566120 0.45072340 0.29691230 0.24404320\n"
-    files = {"images/val/source.jpg": b"fixture image bytes", "labels/val/source.txt": labels}
+    files = {
+        "images/val/source.jpg": b"fixture image bytes",
+        "labels/val/source.txt": labels,
+        "data.yaml": b'val: images/val\nnames:\n  0: "A"\n  1: "B"\n',
+    }
     manifest = {
         "release_id": "release-1",
         "recipe": {"recipe_id": "full-letterbox-320-v1"},
@@ -259,6 +277,25 @@ def test_compiler_manifest_bridge_retains_source_and_class_identity():
     assert release.class_names == ("A", "B")
     assert release.images[0].object_ids == ("obj-7",)
     assert release.images[0].revision == 3
+    with pytest.raises(SyncConflict, match="frozen archive catalog"):
+        ReleaseIntent.from_compiler(
+            "op",
+            canonical_json(manifest).encode(),
+            b"zip",
+            {"stable-a": "Renamed A", "stable-b": "B"},
+            files.__getitem__,
+        )
+    wrong_lineage = json.loads(json.dumps(manifest))
+    obj = wrong_lineage["samples"][0]["objects"][0]
+    obj["class_id"], obj["class_index"] = "stable-a", 0
+    with pytest.raises(SyncConflict, match="remapped"):
+        ReleaseIntent.from_compiler(
+            "op",
+            canonical_json(wrong_lineage).encode(),
+            b"zip",
+            {"stable-a": "A", "stable-b": "B"},
+            files.__getitem__,
+        )
     files["labels/val/source.txt"] = b""
     with pytest.raises(SyncConflict, match="changed"):
         ReleaseIntent.from_compiler(

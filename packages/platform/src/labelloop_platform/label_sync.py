@@ -66,6 +66,7 @@ class Replacement:
     def matches_readback(self, observed: ImageSnapshot) -> bool:
         return (
             not observed.labels_truncated
+            and observed.storage_hash == self.baseline.storage_hash
             and (
                 observed.image_id,
                 observed.dataset_id,
@@ -90,7 +91,7 @@ class Replacement:
     def recover(self, observed: ImageSnapshot) -> "Replacement":
         if self.phase not in {"in_flight", "uncertain"}:
             raise SyncConflict("only outstanding replacement can reconcile readback")
-        if self.matches_readback(observed):
+        if self.matches_readback(observed) and not same_labels(self.baseline.labels, self.intended):
             return replace(self, phase="verified", sequence=self.sequence + 1, readback=observed)
         # Even an unchanged baseline cannot prove an outstanding PATCH will not arrive.
         return replace(
@@ -153,6 +154,17 @@ def replace_once(
         if not journal.compare_and_set(before, conflict):
             raise SyncConflict("replacement reservation changed")
         return conflict
+    if before.matches_readback(current):
+        satisfied = replace(
+            before,
+            phase="verified",
+            sequence=before.sequence + 1,
+            readback=current,
+            reason="already satisfied; no PATCH dispatched",
+        )
+        if not journal.compare_and_set(before, satisfied):
+            raise SyncConflict("replacement reservation changed")
+        return satisfied
     prepared = replace(before, phase="in_flight", sequence=before.sequence + 1)
     if not journal.compare_and_set(before, prepared):
         raise SyncConflict("another writer claimed this image")
@@ -213,7 +225,19 @@ def inverse_edit(
         min(crop["x"] + crop["width"], inverse[0][0] * retained[2] + inverse[0][2]),
         min(crop["y"] + crop["height"], inverse[1][1] * retained[3] + inverse[1][2]),
     )
-    clipped = original_was_clipped or retained != edges
+    internal_edge = (
+        (crop["x"] > 0 and abs(mapped[0] - crop["x"]) <= 1e-7)
+        or (crop["y"] > 0 and abs(mapped[1] - crop["y"]) <= 1e-7)
+        or (
+            crop["x"] + crop["width"] < transform.get("source_width", float("inf"))
+            and abs(mapped[2] - crop["x"] - crop["width"]) <= 1e-7
+        )
+        or (
+            crop["y"] + crop["height"] < transform.get("source_height", float("inf"))
+            and abs(mapped[3] - crop["y"] - crop["height"]) <= 1e-7
+        )
+    )
+    clipped = original_was_clipped or retained != edges or internal_edge
     return InverseEditProposal(
         mapped,
         clipped,
