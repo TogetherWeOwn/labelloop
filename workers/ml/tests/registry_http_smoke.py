@@ -124,6 +124,49 @@ def assert_operations_read(client, engine, expected):
     return acceptance
 
 
+def assert_final_test_read(client, engine, expected):
+    project_key = expected.dataset.project_id
+    dataset_key = expected.dataset.release_id
+    path = f"/projects/{project_key}/dataset-releases/{dataset_key}/final-test-state"
+    heads = snapshot(engine, project_key)
+    before = qualification_journals(engine)
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "release_key": dataset_key,
+        "revision": expected.revision,
+        "effective_role": expected.effective_role,
+        "quarantined": bool(expected.quarantine_reasons),
+    }
+    with engine.begin() as connection:
+        assert (
+            load_final_test(connection, project_key=project_key, dataset_key=dataset_key)
+            == expected
+        )
+    assert qualification_journals(engine) == before
+    assert snapshot(engine, project_key) == heads
+
+
+def qualification_journals(engine):
+    with engine.connect() as connection:
+        return {
+            table.name: tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(table).order_by(*table.primary_key.columns)
+                ).mappings()
+            )
+            for table in (
+                qualification_schema.policy_event,
+                qualification_schema.acceptance_event,
+                qualification_schema.final_test_event,
+                qualification_schema.annotation_audit,
+                qualification_schema.annotation_evidence,
+            )
+        }
+
+
 def exercise_http_final_invalidation(engine, project_key, dataset_key, action, reason, revision):
     path = f"/projects/{project_key}/dataset-releases/{dataset_key}/final-test-events"
     scope = {"project_key": project_key, "dataset_key": dataset_key}
@@ -150,10 +193,13 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
     registry_before = snapshot(engine, project_key)
     transition = original.record_adaptation if action == "adapt" else original.quarantine
     expected = transition(reason, expected_revision=revision)
+    read_path = f"/projects/{project_key}/dataset-releases/{dataset_key}/final-test-state"
     with authenticated_client(engine) as (client, identities, workers):
         assert client.post(path, json=payload).status_code == 401
+        assert client.get(read_path).status_code == 401
         reviewer = login(client, identities["reviewer"][1])
         assert client.post(path, headers=reviewer, json=payload).status_code == 403
+        assert client.get(read_path).status_code == 403
         client.cookies.clear()
         for token in workers.values():
             assert (
@@ -162,7 +208,33 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
                 ).status_code
                 == 403
             )
+            assert (
+                client.get(read_path, headers={"authorization": "Bearer " + token}).status_code
+                == 403
+            )
         headers = login(client, identities["admin"][1])
+        assert_final_test_read(client, engine, original)
+        for missing in (
+            f"/projects/missing-http-project/dataset-releases/{dataset_key}/final-test-state",
+            f"/projects/{project_key}/dataset-releases/missing-http-final/final-test-state",
+        ):
+            response = client.get(missing)
+            assert response.status_code == 404
+            assert response.json() == {"detail": "final_test_scope_not_found"}
+        from labelloop_api import final_test_store
+
+        def fail_read(*args, **kwargs):
+            load_final_test(*args, **kwargs)
+            raise sa.exc.SQLAlchemyError("private fixture lifecycle read failure")
+
+        before_read = qualification_journals(engine)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(final_test_store, "load_final_test", fail_read)
+            response = client.get(read_path)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "final_test_unavailable"}
+        assert qualification_journals(engine) == before_read
+        assert_final_test_read(client, engine, original)
         for denied in (
             {},
             headers | {"origin": "https://untrusted.invalid"},
@@ -233,6 +305,7 @@ def exercise_http_final_invalidation(engine, project_key, dataset_key, action, r
         assert added[0]["record"] == json.loads(dumps(expected))
         assert expected.dataset == original.dataset
         assert expected.assessments == original.assessments
+        assert_final_test_read(client, engine, expected)
         for change in ({}, {"expected_revision": expected.revision}):
             # Neither a stale retry nor a duplicate reason can append another event.
             assert client.post(path, headers=headers, json=payload | change).status_code == 409
@@ -287,24 +360,6 @@ def exercise_http_resume_policy_replays(
         ),
     )
 
-    def journals():
-        with engine.connect() as connection:
-            return {
-                table.name: tuple(
-                    dict(row)
-                    for row in connection.execute(
-                        sa.select(table).order_by(*table.primary_key.columns)
-                    ).mappings()
-                )
-                for table in (
-                    qualification_schema.policy_event,
-                    qualification_schema.acceptance_event,
-                    qualification_schema.final_test_event,
-                    qualification_schema.annotation_audit,
-                    qualification_schema.annotation_evidence,
-                )
-            }
-
     heads = snapshot(engine, registry.project_id)
     path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
     payload = {
@@ -328,12 +383,12 @@ def exercise_http_resume_policy_replays(
             assert load_qualification_policy(connection, **scope) == updated
             with pytest.raises(ValueError, match="stale or substituted"):
                 current_policy_context(connection, qualification)
-        before = journals()
+        before = qualification_journals(engine)
         response = client.post(path, headers=headers, json=payload)
         assert response.status_code == 409
         assert response.json() == {"detail": "drift_resume_rejected"}
         assert response.headers["cache-control"] == "no-store"
-        assert journals() == before
+        assert qualification_journals(engine) == before
         assert snapshot(engine, registry.project_id) == heads
         with engine.begin() as connection:
             restored = append_qualification_policy(
@@ -343,7 +398,7 @@ def exercise_http_resume_policy_replays(
                 expected_revision=updated.revision,
                 policy=original.policy,
             )
-        after = journals()
+        after = qualification_journals(engine)
         for name, rows in before.items():
             if name != qualification_schema.policy_event.name:
                 assert after[name] == rows

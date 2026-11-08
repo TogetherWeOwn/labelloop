@@ -399,6 +399,7 @@ def exercise_acceptance(
     return {
         "scope": "synthetic drift persistence and HTTP final-test invalidation, not domain quality",
         "authenticated_final_invalidation_recovered": True,
+        "http_final_lifecycle_metadata_recovered_without_scores_or_writes": True,
         "http_invalidation_denials_and_failures_unchanged": True,
         "current_policy_journal": policy_evidence,
         "persisted_context_assembly": assembly_evidence,

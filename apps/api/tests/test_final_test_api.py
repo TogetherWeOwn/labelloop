@@ -16,6 +16,7 @@ from labelloop_api.auth_schema import auth_event, principal
 from labelloop_api.main import app
 
 PATH = "/projects/synthetic-qualification/dataset-releases/fixture-final/final-test-events"
+READ_PATH = "/projects/synthetic-qualification/dataset-releases/fixture-final/final-test-state"
 PAYLOAD = {"action": "adapt", "reason": "result guided later change", "expected_revision": 1}
 
 
@@ -37,6 +38,115 @@ def http(monkeypatch, store):
     monkeypatch.setattr(registry_api.final_test_store, "invalidate_final_test", invalidate)
     with TestClient(app, base_url=ORIGIN) as client:
         yield client, calls
+
+
+@pytest.fixture
+def read_http(http, monkeypatch):
+    client, writes = http
+    reads = []
+    state = SimpleNamespace(
+        revision=3,
+        effective_role="development",
+        quarantine_reasons=("private integrity details",),
+        assessments="private final scores and pass/fail",
+        dataset="private holdout membership",
+    )
+
+    def load(connection, **kwargs):
+        assert connection.in_transaction()
+        reads.append(kwargs)
+        return state
+
+    monkeypatch.setattr(registry_api.final_test_store, "load_final_test", load)
+    yield client, reads, state
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    ("role", "reasons"),
+    [("locked_final_test", ()), ("development", ()), ("development", ("integrity",))],
+)
+def test_admin_reads_only_current_lifecycle_metadata(read_http, role, reasons):
+    client, reads, state = read_http
+    state.effective_role = role
+    state.quarantine_reasons = reasons
+    login(client, "admin")
+    response = client.get(READ_PATH)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "release_key": "fixture-final",
+        "revision": 3,
+        "effective_role": role,
+        "quarantined": bool(reasons),
+    }
+    assert reads == [{"project_key": "synthetic-qualification", "dataset_key": "fixture-final"}]
+
+
+def test_anonymous_and_reviewer_cannot_read_final_lifecycle(read_http):
+    client, reads, _ = read_http
+    assert client.get(READ_PATH).status_code == 401
+    login(client)
+    assert client.get(READ_PATH).status_code == 403
+    assert reads == []
+
+
+@pytest.mark.parametrize("worker", ["worker-core", "worker-ml", "worker-llm", "worker-platform"])
+def test_services_cannot_read_final_lifecycle(read_http, store, worker):
+    client, reads, _ = read_http
+    response = client.get(
+        READ_PATH, headers={"authorization": "Bearer " + worker_token(store, worker)}
+    )
+    assert response.status_code == 403
+    assert reads == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        READ_PATH.replace("synthetic-qualification", "bad%20project"),
+        READ_PATH.replace("fixture-final", "bad%20release"),
+        READ_PATH.replace("fixture-final", "x" * 129),
+    ],
+)
+def test_final_lifecycle_read_validates_scope_before_loading(read_http, path):
+    client, reads, _ = read_http
+    login(client, "admin")
+    response = client.get(path)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert reads == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "detail"),
+    [
+        (NoResultFound("private missing scope"), 404, "final_test_scope_not_found"),
+        (ValueError("private malformed journal"), 409, "final_test_state_rejected"),
+        (SQLAlchemyError("private driver context"), 503, "final_test_unavailable"),
+    ],
+)
+def test_final_lifecycle_read_failure_is_redacted_and_rolls_back(
+    read_http, store, monkeypatch, error, status, detail
+):
+    client, _, _ = read_http
+    login(client, "admin")
+    probe_id = str(uuid4())
+
+    def fail(connection, **_kwargs):
+        connection.execute(insert(auth_event).values(id=probe_id, occurred_at=NOW, action="logout"))
+        raise error
+
+    monkeypatch.setattr(registry_api.final_test_store, "load_final_test", fail)
+    response = client.get(READ_PATH)
+    assert response.status_code == status
+    assert response.json() == {"detail": detail}
+    assert response.headers["cache-control"] == "no-store"
+    with store.engine.connect() as connection:
+        assert (
+            connection.execute(select(auth_event.c.id).where(auth_event.c.id == probe_id)).all()
+            == []
+        )
 
 
 def admin_headers(client):

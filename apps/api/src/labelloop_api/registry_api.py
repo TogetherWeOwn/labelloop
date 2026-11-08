@@ -111,6 +111,38 @@ class FinalTestInvalidationRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+def _final_test_metadata(release_key, state):
+    return {
+        "release_key": release_key,
+        "revision": state.revision,
+        "effective_role": state.effective_role,
+        "quarantined": bool(state.quarantine_reasons),
+    }
+
+
+@router.get("/projects/{project_key}/dataset-releases/{release_key}/final-test-state")
+def inspect_final_test(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # Inspect lifecycle metadata only. Even aggregate scores or pass/fail results
+    # would expose the locked final test; this read never opens an assessment.
+    try:
+        with auth_store().engine.begin() as connection:
+            state = final_test_store.load_final_test(
+                connection, project_key=project_key, dataset_key=release_key
+            )
+            record = _final_test_metadata(release_key, state)
+    except NoResultFound:
+        raise HTTPException(404, detail="final_test_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="final_test_state_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="final_test_unavailable") from None
+    return record
+
+
 @router.post("/projects/{project_key}/dataset-releases/{release_key}/final-test-events")
 def invalidate_final_test(
     project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
@@ -131,12 +163,7 @@ def invalidate_final_test(
                 expected_revision=payload.expected_revision,
                 actor_id=actor.id,
             )
-            record = {
-                "release_key": release_key,
-                "revision": changed.revision,
-                "effective_role": changed.effective_role,
-                "quarantined": bool(changed.quarantine_reasons),
-            }
+            record = _final_test_metadata(release_key, changed)
     except NoResultFound:
         raise HTTPException(404, detail="final_test_scope_not_found") from None
     except ValueError:

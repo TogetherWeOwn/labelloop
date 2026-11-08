@@ -6,7 +6,43 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## HTTP current-policy resumption replay controls — pending Actions
+## Authenticated final-test lifecycle inspection — pending Actions
+
+`GET /projects/{project_key}/dataset-releases/{release_key}/final-test-state`
+uses the existing human-admin session boundary and scoped, project-locked journal
+reader. It returns only release identity, current journal revision, effective role
+and a quarantine boolean, sharing the invalidation response projection. It never
+returns membership, scores, pass/fail, assessments, reasons or qualification; no
+final exposure or other journal write is performed. Missing scope, invalid state
+and storage errors are redacted. Responses remain `no-store`.
+
+Adapter controls cover lifecycle states, anonymous/reviewer/service denial, strict
+path bounds and outer-transaction rollback on errors. Both-recipe disposable
+PostgreSQL HTTP invalidation controls now inspect state before/after committed
+adaptation and quarantine over fresh connections, require exact metadata-only
+responses, and preserve every policy/acceptance/final/audit/measured-outcome row,
+both registry heads and promotion history on reads. Missing/foreign scope and an
+injected post-load read failure are covered. These new assertions await exact-head
+Actions; no local tests or builds ran. No migration, dependency, design or second
+lifecycle engine. Operational UI mounting, authenticated promotion/automatic
+annotation, trusted execution/measurement provenance and expanded restore remain
+unfinished. REA angle: reuse the scoped lifecycle reader and existing invalidation
+metadata, not expose the final result or invent another operational state store.
+
+## HTTP current-policy replay controls — verified baseline
+
+Exact `efc2835ac96ec70dc877f904f3df9b4609f7ccfa`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42520061639),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42520061258) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42520061259)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42520061639/job/128851413874),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42520061639/job/128851413880),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the policy replay controls below, not the new
+lifecycle read, full UI/expanded-restore or milestone acceptance. Totals were not
+extracted. Required Devin/fresh-context/native QA/Security gates remain.
+
+## HTTP current-policy resumption replay controls — verified baseline
 
 Both-recipe disposable PostgreSQL smoke now commits three valid policy changes
 *after* the remediated champion's promotion: reviewer prompt identity, supported
@@ -23,7 +59,7 @@ must not resume acceptance. The existing successful HTTP resumption follows all
 three controls using the unchanged champion/incidents/request, so a generic
 stale-revision or incident rejection cannot satisfy the negative controls alone.
 No production code, domain gate, schema, migration or dependency changed; these
-new assertions await exact-head Actions. No local test or build ran.
+assertions passed exact-head Actions at `efc2835`. No local test or build ran.
 
 ## Incident-linked resumption — verified baseline
 
