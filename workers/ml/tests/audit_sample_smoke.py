@@ -347,27 +347,21 @@ def exercise_current_groups(engine, request, arguments, project_id, frozen, obse
         )
         ordinary = assets[observations[0].asset_id]
         other = assets[observations[1].asset_id]
-        # Identical canonical pixels cannot become independent by relabelling a
-        # pinned assignment. Check both fresh sampling and reuse of an old sample.
+        # The database forbids rewriting a locked assignment; the negative
+        # grouping control below must create new evidence, not bypass this guard.
         with connection.begin_nested() as transaction:
-            connection.execute(
-                sa.update(source_split_assignment)
-                .where(
-                    source_split_assignment.c.asset_id == other,
-                    source_split_assignment.c.assignment_version
-                    == request.split_assignment_version,
+            with pytest.raises(sa.exc.DatabaseError, match="immutable"):
+                connection.execute(
+                    sa.update(source_split_assignment)
+                    .where(
+                        source_split_assignment.c.asset_id == other,
+                        source_split_assignment.c.assignment_version
+                        == request.split_assignment_version,
+                    )
+                    .values(group_id="invented-independent-group")
                 )
-                .values(group_id="invented-independent-group")
-            )
-            for operation in ("reuse", "freeze"):
-                with pytest.raises(ValueError, match="merge pinned groups"):
-                    if operation == "reuse":
-                        load_audit_sample(connection, **checked)
-                    else:
-                        freeze_audit_sample(
-                            connection, **(arguments | {"sample_key": "invalid-current-groups"})
-                        )
             transaction.rollback()
+        assert load_audit_sample(connection, **checked) == frozen
 
         def add_source(key, digest, split=None, group="one-shared-group"):
             asset_id = connection.execute(
@@ -408,6 +402,24 @@ def exercise_current_groups(engine, request, arguments, project_id, frozen, obse
                     algorithm_version="fixture-current-groups",
                 )
             )
+
+        # A newly discovered exact duplicate may carry a different pinned group.
+        # Both fresh sampling and reuse must reject it without editing old rows.
+        with connection.begin_nested() as transaction:
+            digest = connection.execute(
+                sa.select(source_asset.c.sha256).where(source_asset.c.id == ordinary)
+            ).scalar_one()
+            add_source("-current-duplicate", digest, "train", "invented-independent-group")
+            for operation in ("reuse", "freeze"):
+                with pytest.raises(ValueError, match="merge pinned groups"):
+                    if operation == "reuse":
+                        load_audit_sample(connection, **checked)
+                    else:
+                        freeze_audit_sample(
+                            connection, **(arguments | {"sample_key": "invalid-current-groups"})
+                        )
+            transaction.rollback()
+        assert load_audit_sample(connection, **checked) == frozen
 
         with connection.begin_nested() as transaction:
             bridge = add_source("-current-bridge", "b" * 64)
