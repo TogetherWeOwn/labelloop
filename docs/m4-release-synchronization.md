@@ -27,8 +27,19 @@ The reader must request `GET export?v=N`, verify the response version and datase
 version/content hash, download and hash the saved NDJSON, and derive complete image/label
 snapshots from that exact export. `export_sha256` is retained in the frozen mapping. Processing
 completion and complete export membership remain required. A live listing cannot claim the
-`saved_version_export` provenance. Final implementation/testing of this reader is part of the
-explicit foundation integration gate below; the typed capsule is not proof of that wiring.
+`saved_version_export` provenance. `saved_export.read_saved_export` now implements the bounded
+NDJSON reading boundary against an injected `SavedExportSource`. It requests the explicit saved
+version, compares the returned API version and recorded version/content hash, and derives labels
+from the exact hashed NDJSON bytes, never from a current image listing. The NDJSON header's
+`version` is not assumed to identify the saved API version. Detection tuples are decoded explicitly;
+unknown tasks, duplicate JSON keys, partial rows, mismatched counts and split totals fail closed.
+Because documented NDJSON rows omit image IDs, the source must provide an unambiguous current
+ID lookup with independently measured image content; the reader compares every saved image field,
+label multiset and measured bytes before associating that ID. A trusted pinned decoder measures
+raster dimensions. Signed URLs remain ephemeral and decoder/provider exception text is suppressed.
+Reader limits are defence in depth, not streaming guarantees: the foundation download binding
+must bound bytes before buffering. The concrete `SavedExportSource` binding to the foundation
+and exact-head fixture qualification are still required; this implementation does not certify them.
 
 List summaries are insufficient. Reconciliation checks class order at dataset and image level,
 unique IDs/names, exact membership, splits, label multisets/classes, truncation and geometry.
@@ -37,7 +48,14 @@ raster dimensions matching the compiler's expected file. The remote CAS `propert
 is retained as opaque storage identity, never assumed to be SHA-256. If only a resized image
 can be retrieved and original content cannot be verified, fail closed rather than bless its
 filename as content proof. This may require original-asset access for >4096-pixel uploads;
-dimension tolerance alone does not qualify those uploads.
+dimension tolerance alone does not qualify those uploads. The [vendor dataset documentation](https://docs.ultralytics.com/platform/data/datasets/)
+(inspected 2026-11-08) also describes format/color conversion and quality-92 JPEG encoding:
+even an image below 4096 pixels is not guaranteed to retain uploaded bytes. The reader does not
+relax byte-identity evidence for that case. A converted or resized asset that cannot meet the
+compiler hash remains unqualified; a future alternative requires an explicit technical contract,
+not a filename match, an assumed CAS algorithm or a silent tolerance increase. NDJSON row shape
+is grounded in the same vendor documentation and [detection format guide](https://docs.ultralytics.com/datasets/detect/);
+the test pixels and rows are original synthetic fixtures, not copied datasets.
 
 The compiler bridge also reads hash-frozen `data.yaml` names and rejects independently renamed
 catalogs (recompile first). Each parsed row's class index is checked directly against its
