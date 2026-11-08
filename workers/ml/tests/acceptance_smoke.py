@@ -396,8 +396,12 @@ def exercise_acceptance(
                 "later grouping integrity finding",
                 2,
             )
+    from promotion_http_smoke import exercise_durable_http_promotion
+
+    durable_promotion = exercise_durable_http_promotion(engine, release, final, context, actor)
     return {
         "scope": "synthetic drift persistence and HTTP final-test invalidation, not domain quality",
+        "committed_http_promotion_and_rollback": durable_promotion,
         "authenticated_final_invalidation_recovered": True,
         "http_final_lifecycle_metadata_recovered_without_scores_or_writes": True,
         "http_invalidation_denials_and_failures_unchanged": True,

@@ -994,7 +994,9 @@ def _exercise_selected_promotion(connection, candidate, report, variant, argumen
     assert snapshot() == original
 
 
-def _exercise_final_report_selection(connection, release, final, context, annotation, actor):
+def prepare_sole_final_candidate(
+    connection, release, final, context, actor, *, suffix="-sole-final"
+):
     """One synthetic candidate owns one final; never prune the shared model's history."""
     from evaluation_fixture import independent_evaluation_variant
 
@@ -1002,74 +1004,84 @@ def _exercise_final_report_selection(connection, release, final, context, annota
     from labelloop_api.final_test_store import expose_final_test, record_candidate_selection
     from labelloop_api.model_store import json_record, save_evaluation
 
-    with connection.begin_nested() as fixture_transaction:
-        project_id = lock_project(connection, release.project_id)
-        model = (
-            connection.execute(
-                sa.select(model_schema.model_release).where(
-                    model_schema.model_release.c.project_id == project_id,
-                    model_schema.model_release.c.release_key == release.release_id,
-                )
-            )
-            .mappings()
-            .one()
-        )
-        selection = context.current_final_test.assessments[0].selection
-        prefix = release.release_id + "-sole-final"
-        candidate_final = replace(
-            final, run_id=prefix + "-report", dataset_release_id=prefix + "-dataset"
-        )
-        candidate = replace(
-            release,
-            release_id=prefix,
-            evaluation_run_ids=(selection.development_run_id, candidate_final.run_id),
-        )
+    project_id = lock_project(connection, release.project_id)
+    model = (
         connection.execute(
-            sa.insert(model_schema.model_release).values(
-                **{
-                    key: value
-                    for key, value in model.items()
-                    if key not in {"id", "created_at", "release_key", "record"}
-                },
-                release_key=prefix,
-                record=json_record(candidate),
+            sa.select(model_schema.model_release).where(
+                model_schema.model_release.c.project_id == project_id,
+                model_schema.model_release.c.release_key == release.release_id,
             )
         )
-        source_variant = connection.execute(
-            sa.select(model_schema.evaluation_run.c.variant_id).where(
-                model_schema.evaluation_run.c.run_key == final.run_id
-            )
-        ).scalar_one()
-        variant = independent_evaluation_variant(
-            connection, source_variant, candidate_final.dataset_release_id
+        .mappings()
+        .one()
+    )
+    selection = context.current_final_test.assessments[0].selection
+    prefix = release.release_id + suffix
+    candidate_final = replace(
+        final, run_id=prefix + "-report", dataset_release_id=prefix + "-dataset"
+    )
+    candidate = replace(
+        release,
+        release_id=prefix,
+        evaluation_run_ids=(selection.development_run_id, candidate_final.run_id),
+    )
+    connection.execute(
+        sa.insert(model_schema.model_release).values(
+            **{
+                key: value
+                for key, value in model.items()
+                if key not in {"id", "created_at", "release_key", "record"}
+            },
+            release_key=prefix,
+            record=json_record(candidate),
         )
-        save_evaluation(connection, model_key=prefix, variant_id=variant, report=candidate_final)
-        dataset = load_evaluation_set(
-            connection,
-            project_key=release.project_id,
-            dataset_key=candidate_final.dataset_release_id,
-            role="locked_final_test",
+    )
+    source_variant = connection.execute(
+        sa.select(model_schema.evaluation_run.c.variant_id).where(
+            model_schema.evaluation_run.c.run_key == final.run_id
         )
-        register_final_test(connection, dataset=dataset, actor_id=actor)
-        pinned = record_candidate_selection(
-            connection,
-            project_key=release.project_id,
-            model_key=prefix,
-            selection_key=prefix + "-selection",
-            development_key=selection.development_run_id,
-            development_set=context.evidence.lineage.development,
-            actor_id=actor,
+    ).scalar_one()
+    variant = independent_evaluation_variant(
+        connection, source_variant, candidate_final.dataset_release_id
+    )
+    save_evaluation(connection, model_key=prefix, variant_id=variant, report=candidate_final)
+    dataset = load_evaluation_set(
+        connection,
+        project_key=release.project_id,
+        dataset_key=candidate_final.dataset_release_id,
+        role="locked_final_test",
+    )
+    register_final_test(connection, dataset=dataset, actor_id=actor)
+    pinned = record_candidate_selection(
+        connection,
+        project_key=release.project_id,
+        model_key=prefix,
+        selection_key=prefix + "-selection",
+        development_key=selection.development_run_id,
+        development_set=context.evidence.lineage.development,
+        actor_id=actor,
+    )
+    expose_final_test(
+        connection,
+        project_key=release.project_id,
+        dataset_key=dataset.release_id,
+        model_key=prefix,
+        selection_key=pinned.selection_id,
+        evaluation_key=candidate_final.run_id,
+        expected_revision=0,
+        actor_id=actor,
+    )
+    return candidate, candidate_final, variant
+
+
+def _exercise_final_report_selection(connection, release, final, context, annotation, actor):
+    from labelloop_api.model_store import save_evaluation
+
+    with connection.begin_nested() as fixture_transaction:
+        candidate, candidate_final, variant = prepare_sole_final_candidate(
+            connection, release, final, context, actor
         )
-        expose_final_test(
-            connection,
-            project_key=release.project_id,
-            dataset_key=dataset.release_id,
-            model_key=prefix,
-            selection_key=pinned.selection_id,
-            evaluation_key=candidate_final.run_id,
-            expected_revision=0,
-            actor_id=actor,
-        )
+        prefix = candidate.release_id
         canary = _outcome(connection, candidate, context, actor, canary=True)
         arguments = dict(
             project_key=release.project_id,

@@ -6,7 +6,39 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated fixture promotion — pending Actions
+## Committed HTTP promotion and rollback — pending Actions
+
+Both-recipe CPU smoke now prepares a separate synthetic sole-final candidate using
+one shared fixture helper; earlier savepoint ambiguity controls retain their exact
+setup and rollback. The new setup commits canonical final membership, selection,
+exposure, unique ordinary/candidate-bound outcomes and same-population incumbent
+comparison. Authenticated HTTP requests use the actual engine, not a borrowed
+connection, and no outer fixture transaction surrounds them.
+
+New controls require committed promotion and rollback to recover after each client
+closes, with complete metadata, authenticated actor, selected report IDs and typed
+qualification. Injected event-append failures must roll back each request's preceding
+head write. Stale/already-champion replay must preserve history; both recipe heads,
+all prior promotion events and qualification journals are compared after reconnect.
+The rollback returns the prior champion without deleting either new event or any
+fixture evidence. This runs after the existing drift acceptance controls, before
+the shared adverse audit. Copied metrics and synthetic sources remain explicitly
+fixture-only, not independent measurement or domain gold. New assertions await
+exact-head Actions; no local tests/builds ran. No production code, schema, migration,
+dependency or gate changed. REA: reuse the sole-final fixture and real registry/auth
+transactions rather than build another engine or claim savepoints prove durability.
+
+## Authenticated fixture promotion — verified baseline
+
+Exact `2ce222090392ebe34ab053f20f45cd61cf8a31b3`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42532381205),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42532380958) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42532380965)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42532381205/job/128889219126),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42532381205/job/128889219165),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the nested HTTP controls below, not the new committed
+recovery controls, independent measurements or full M5 acceptance. Totals not extracted.
 
 The existing promotions endpoint now discriminates `rollback` and `promote` without
 adding a second route. Only a human admin session with same-origin CSRF can select
@@ -31,8 +63,9 @@ fixture connection. They require denied/stale/missing-evidence no-ops, injected
 event-append rollback, complete success metadata and authenticated actor, other-recipe
 isolation, unchanged qualification journals and stale/already-champion replay
 rejection. The enclosing fixture is rolled back: no new committed promotion or
-fresh-connection recovery claim is made. These new assertions await exact-head
-Actions; no local tests/builds ran. No new schema, migration, dependency or engine.
+fresh-connection recovery claim is made for these nested controls. These assertions
+passed exact-head Actions at `2ce2220`; no local tests/builds ran. No new schema,
+migration, dependency or engine.
 REA angle: reuse the delivered human-admin boundary and trusted promotion service.
 
 ## Trusted promotion orchestration — verified baseline
