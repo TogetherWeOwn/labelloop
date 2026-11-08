@@ -27,7 +27,7 @@ second registry, status poller or full-screen navigation should be mounted.
 
 | Accepted screen | Fixture implementation | Contract/browser coverage |
 | --- | --- | --- |
-| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, dataset/source file-selection and assistant draft request capture and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
+| 02 New project | Six inspectable steps, Proposed catalog/reference provenance, individual accept commands, revision-pinned class field editing, dataset/source/reference file-selection and assistant draft request capture and reference-link metadata entry, scope/guide/source-metadata fields with explicit save/discard and retained conflicts, recorded import row validation, read-only source dimensions/hash/group/assignment facts, approved-version summary, dependency explanation | Reviewer controls absent, class/reference payloads and separate acceptance, retained failed/conflicting edits, keyboard step navigation, import errors do not approve classes, missing source details stay unavailable, metadata alone cannot authorize pair decisions |
 | 03 Dataset releases | Accepted-label provenance, distribution table, changed images, exclusions, gate/build/quarantine/identical/frozen states, in-place freeze confirmation | Frozen release exposes no edit/freeze, compiler reason visible, freeze pins expected revision |
 | 04 Size/crop recipes | Shared-scale J22 frames, recorded affine/box geometry, image-level exclusion consequences, locked recipe versioning, compilation/artifact surfaces | Browser rectangles cross-checked with the Python compiler geometry, 640 frame twice 320, compile pins recipe IDs |
 | 05 Local training | Local-only run table and selected details, explicit start/cancel panels, fixed-shape development selection, settings mismatch table, retention and checkpoint hashes | Start pins release/recipe/base hash, size not user-overridden, cancel explicit, no paid start |
@@ -205,6 +205,36 @@ revision locking and approval invalidation remain with the producer. Selection
 metadata must not be wired to an importer as-is. Its new keyboard/axe, failure,
 revision, deferred-response, read-only and no-file-read/no-upload cases are pending
 on Actions. No new tokens, upload adapter, client, shell or persistent store is added.
+
+Reference file selection reuses the existing Evidence form and A11/A1/A14 fields
+and controls. The upload mode requires a class in the inspected draft, a non-empty
+file selection, declared source, permitted use, view, lighting and scale, and an
+optional different confusion class. It captures only filename, byte count and
+those metadata fields, pinned to the inspected draft ID/revision. Source text is
+passive provenance, not a fetched URL or a new asset identity. Opening, changing,
+clearing and explicitly discarding do not dispatch; failed/conflicting entries
+retain both file selection and fields. Pending capture prevents field changes,
+discard, navigation, linked entry and approval races. A returned fixture reference
+is Proposed and needs separate acceptance using the refreshed revision.
+
+`request_reference_upload` is not a generated wire operation or a working upload.
+No file bytes, decoder, image preview, hash, storage, retrieval index, approval,
+provider or spend authority is supplied. Transport, supported formats/limits,
+licensing, authenticated ownership, holdout exclusion, safe normalization,
+proposal validation, revision locking, approval invalidation and persistence
+remain producer responsibilities. Do not connect this metadata capture to an
+importer as-is. Its browser failure/conflict/deferred-response, separate-acceptance,
+read-only, keyboard/axe/overflow and no-read/no-upload cases are pending on Actions.
+No new tokens, components or second client/store/shell are introduced.
+
+At `c38b6ad`, no Actions runs registered: the PR was conflicted after the Platform
+fixture module landed on main. The restack retains both modules' package scripts,
+browser checks and required artifacts, the Platform build sentinels, and the
+management job's exact-head checkout verification. Only one browser install is
+needed. Neither module is mounted as a second production shell. Main's separately
+reviewed scanner changes are inherited unchanged; this conflict resolution adds
+no scanner ignore, waiver or gate reduction. No source-selection pass is inferred
+from this repair; all changed behavior requires new exact-head Actions evidence.
 
 ## Remaining acceptance and final wiring obligations
 

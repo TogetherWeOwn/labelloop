@@ -53,13 +53,13 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
       read: () => Promise.resolve(structuredClone(snapshot)),
       execute: (command) => {
         capture(command);
-        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes' || command.kind === 'request_dataset_import' || command.kind === 'request_source_upload') return new Promise((resolve) => {
+        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes' || command.kind === 'request_dataset_import' || command.kind === 'request_source_upload' || command.kind === 'request_reference_upload') return new Promise((resolve) => {
           finishSave = () => {
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
             if (command.kind === 'save_setup' && command.step === 'Sources and groups' && typeof command.values.metadata_keys === 'string') snapshot.draft.sources.metadata_keys = command.values.metadata_keys;
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
-            if (command.kind === 'add_reference') snapshot.draft.references = [...snapshot.draft.references, { id: 'ref-linked', ...command.values, provenance: 'Proposed' }];
+            if (command.kind === 'add_reference' || command.kind === 'request_reference_upload') snapshot.draft.references = [...snapshot.draft.references, { id: command.kind === 'add_reference' ? 'ref-linked' : 'ref-uploaded', ...command.values, provenance: 'Proposed' }];
             if (command.kind === 'draft_assistant_classes') snapshot.draft.classes = [...snapshot.draft.classes, { id: 'assistant-oat', name: 'Oat milk 1 L', aliases: '', parent: '', exclusions: 'Soy milk', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
             if (command.kind === 'request_dataset_import') {
               snapshot.draft.dataset_import = { id: 'import-returned', source_name: command.file.name, rows: importRejected ? 14 : 1, state: importRejected ? 'Rejected' : 'Proposed', errors: importRejected ? [{ row: 14, field: 'name', message: 'Class name is empty' }] : [] };
