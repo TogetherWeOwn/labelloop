@@ -310,6 +310,45 @@ controls. These new cases are commissioned, not verified until exact-head Action
 completes. No new queue/table/migration/runtime grant, management async binding,
 worker handler, default route mount or project-to-export acceptance is enabled.
 
+### Canonical compilation producer (partial, unmounted)
+
+`CanonicalManagementCompilation(mutations, enqueue)` composes the canonical
+mutation authority with the existing queue's `JobStore.enqueue_in_transaction`,
+supplied as a trusted server dependency. The adapter passes SQLAlchemy's actual
+psycopg driver connection while its transaction is active. It does not open a
+second connection or invoke standalone enqueue. Temporary disposable-DB producer
+roles need SELECT/INSERT on `worker_job` in addition to the existing canonical
+read/event grants; no queue UPDATE/DELETE, worker lease or audit rewrite grants
+are required. Production provisioning remains separately unproved.
+
+`compile_variant` requires an authenticated human admin, a bound actor/route/body
+fingerprint, workspace ownership and the immutable release revision. It takes the
+shared project lock, validates the recorded canonical freeze and pinned members,
+then resolves one of the two delivered full-frame compiler recipes in code.
+The queue input pins workspace/project/release/revision, canonical snapshot hash,
+ontology, assignment version, complete recipe, variant identity and requester.
+No endpoint, output path, provider or spend setting comes from the request.
+
+One release/recipe pair has one producer intent across actors and retry keys.
+An identical actor/key/body replays the original accepted resource/job, including
+after a worker claims the job; changed bodies conflict. Another key for an
+already-requested pair conflicts rather than dispatching another job. The two
+recipes remain independent. The attributed receipt and queue row commit/roll
+back together, and compilation intent does not advance the project revision or
+claim that a validated derivative already exists. The release is the receipt's
+aggregate; its immutable revision remains one.
+
+Actions cases exercise the real SQLAlchemy transaction and existing queue under
+restricted grants: precommit invisibility, both recipes, worker claim/replay,
+queue/audit/caller rollback, concurrent retries/unique pairs, revision/key/actor
+and ownership refusals, missing freeze evidence and independent recipe intents.
+New cases are not verified until exact-head Actions completes. This is a producer
+binding only: the `compile_variant` worker handler, fenced canonical variant
+publication, progress/detail reads and final shared-session app composition are
+still required before live mounting. There is no new table, migration, dependency,
+scheduler or production grant; no compiler execution or project-to-export pass is
+claimed by enqueue/claim tests.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`

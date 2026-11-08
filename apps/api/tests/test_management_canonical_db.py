@@ -107,6 +107,325 @@ def database(tmp_path):
 
 
 @pytest.fixture
+def compilation(database):
+    from labelloop_api.management_compilation import CanonicalManagementCompilation
+    from labelloop_worker_core.jobs import JobStore
+
+    service, owner, role = database
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT SELECT, INSERT ON worker_job TO "{role}"'))
+    return CanonicalManagementCompilation(service, JobStore.enqueue_in_transaction)
+
+
+def compile_request(
+    compilation,
+    release_id,
+    *,
+    key="compile",
+    actor=None,
+    revision=1,
+    recipe="full-letterbox-320-v1",
+):
+    from labelloop_api.management_contracts import VariantCompile
+
+    actor = actor or Actor()
+    payload = VariantCompile(expected_revision=revision, recipe_id=recipe)
+    context = MutationContext.bind(actor, key, "compile_variant", release_id, payload)
+    return compilation.compile_variant(actor, context, payload)
+
+
+def compile_receipts(owner, release_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.compile_variant",
+                canonical_event.c.aggregate_id == release_id,
+            )
+        ).all()
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_compile_intent_uses_actual_caller_transaction_and_shared_queue(
+    database, compilation, recipe
+):
+    from labelloop_worker_core.jobs import JobStore
+
+    service, owner, role = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+
+    def enqueue(connection, *args, **kwargs):
+        assert connection.execute("SELECT current_user").fetchone()[0] == role
+        job_id = JobStore.enqueue_in_transaction(connection, *args, **kwargs)
+        # A separate connection sees neither intent nor receipt before SQLAlchemy commits.
+        with owner.connect() as observer:
+            assert (
+                observer.execute(
+                    text("SELECT job_id FROM worker_job WHERE job_id=:id"), {"id": job_id}
+                ).first()
+                is None
+            )
+        assert compile_receipts(owner, release.id) == []
+        return job_id
+
+    compilation = replace(compilation, enqueue=enqueue)
+    result = compile_request(compilation, release.id, recipe=recipe)
+    assert result.resource.kind == "variant" and result.resource.state == "queued"
+    assert result.resource.project_id == created.id
+    receipts = compile_receipts(owner, release.id)
+    assert len(receipts) == 1
+    assert receipts[0].actor_id == Actor().id and receipts[0].actor_kind == "human"
+    evidence = receipts[0].payload["evidence"]
+    assert evidence["job_id"] == result.job_id and evidence["recipe_id"] == recipe
+    with owner.connect() as connection:
+        row = connection.execute(
+            text("SELECT * FROM worker_job WHERE job_id=:id"), {"id": result.job_id}
+        ).one()
+        assert row.status == "queued" and row.kind == "compile_variant" and row.max_attempts == 3
+        assert row.input == evidence["inputs"]
+        assert row.input["workspace_id"] == str(service.workspace_id)
+        assert row.input["requested_by"] == Actor().id
+        assert row.input["release_id"] == release.id
+        assert row.input["variant_id"] == result.resource.id
+        assert row.input["recipe"]["recipe_id"] == recipe
+        assert row.input["recipe"]["output_size"] == (320 if "320" in recipe else 640)
+        assert row.input["canonical_snapshot_sha256"]
+    # Claim proves compatibility with the real shared queue, not execution of the compiler.
+    import psycopg
+
+    queue = JobStore(lambda: psycopg.connect(os.environ["DATABASE_URL"].replace("+psycopg", "")))
+    lease = queue.claim("compile_variant", "fixture-worker", job_id=result.job_id)
+    assert lease is not None and lease.input == evidence["inputs"]
+    assert compile_request(compilation, release.id, recipe=recipe) == result
+    assert len(compile_receipts(owner, release.id)) == 1
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read(Actor(), "project", created.id).revision == 3
+
+
+@pytest.mark.parametrize(
+    "grant", ["INSERT ON worker_job", "SELECT ON worker_job", "INSERT ON canonical_event"]
+)
+def test_compile_intent_grant_failure_rolls_back_queue_and_receipt(database, compilation, grant):
+    from psycopg.errors import InsufficientPrivilege
+
+    service, owner, role = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{role}"'))
+    with pytest.raises((DBAPIError, InsufficientPrivilege)):
+        compile_request(compilation, release.id)
+    assert compile_receipts(owner, release.id) == []
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM worker_job WHERE project_key=:key"),
+                {"key": pack_key(owner, created.id)},
+            ).scalar_one()
+            == 0
+        )
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{role}"'))
+    assert compile_request(compilation, release.id).resource.state == "queued"
+
+
+def pack_key(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(project.c.project_key).where(project.c.id == project_id)
+        ).scalar_one()
+
+
+def test_compile_intent_caller_exception_rolls_back_real_queue(database, compilation):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+
+    def enqueue(*args, **kwargs):
+        compilation.enqueue(*args, **kwargs)
+        raise RuntimeError("synthetic caller failure")
+
+    with pytest.raises(RuntimeError, match="synthetic caller failure"):
+        compile_request(replace(compilation, enqueue=enqueue), release.id)
+    assert compile_receipts(owner, release.id) == []
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM worker_job WHERE project_key=:key"),
+                {"key": pack_key(owner, created.id)},
+            ).scalar_one()
+            == 0
+        )
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_compile_intent_concurrent_retry_and_unique_pair(database, compilation, same_key):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait(timeout=10)
+        try:
+            return compile_request(compilation, release.id, key="same" if same_key else str(index))
+        except ManagementFailure as exc:
+            return exc.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    if same_key:
+        assert results[0] == results[1]
+    else:
+        assert results.count("revision_conflict") == 1
+    assert len(compile_receipts(owner, release.id)) == 1
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM worker_job WHERE project_key=:key"),
+                {"key": pack_key(owner, created.id)},
+            ).scalar_one()
+            == 1
+        )
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        Actor(kind="service", role="worker_core"),
+        Actor(kind="service", role="worker_ml"),
+        Actor(kind="service", role="worker_llm"),
+        Actor(kind="service", role="worker_platform"),
+        Actor(role="reviewer"),
+    ],
+)
+def test_compile_intent_refuses_non_admin_before_queue(database, compilation, actor):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    with pytest.raises(ManagementFailure) as exc:
+        compile_request(compilation, release.id, actor=actor)
+    assert exc.value.error.detail == "permission_denied"
+    assert compile_receipts(owner, release.id) == []
+
+
+@pytest.mark.parametrize("target", ["foreign", "unknown"])
+def test_compile_intent_authorizes_release_before_replay(database, compilation, target):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    compile_request(compilation, release.id)
+    other = replace(compilation, mutations=replace(service, workspace_id=uuid4()))
+    with pytest.raises(ManagementFailure) as exc:
+        compile_request(
+            other if target == "foreign" else compilation,
+            release.id if target == "foreign" else str(uuid4()),
+        )
+    assert exc.value.error.detail == "not_found"
+    assert len(compile_receipts(owner, release.id)) == 1
+
+
+def test_compile_intent_revision_retry_collision_and_independent_recipes(database, compilation):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    with pytest.raises(ManagementFailure) as exc:
+        compile_request(compilation, release.id, revision=2)
+    assert exc.value.error.detail == "revision_conflict"
+    first = compile_request(compilation, release.id)
+    with pytest.raises(ManagementFailure) as exc:
+        compile_request(compilation, release.id, recipe="full-letterbox-640-v1")
+    assert exc.value.error.detail == "idempotency_conflict"
+    second = compile_request(
+        compilation, release.id, key="compile-640", recipe="full-letterbox-640-v1"
+    )
+    assert first.job_id != second.job_id and first.resource.id != second.resource.id
+    with pytest.raises(ManagementFailure) as exc:
+        compile_request(compilation, release.id, key="another-key")
+    assert exc.value.error.detail == "revision_conflict"
+    assert len(compile_receipts(owner, release.id)) == 2
+
+
+@pytest.mark.parametrize("failure", ["missing_receipt", "forged_context"])
+def test_compile_intent_requires_canonical_evidence_and_bound_context(
+    database, compilation, failure
+):
+    from labelloop_api.management_contracts import VariantCompile
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    request = VariantCompile(expected_revision=1, recipe_id="full-letterbox-320-v1")
+    context = MutationContext.bind(Actor(), "compile", "compile_variant", release.id, request)
+    if failure == "missing_receipt":
+        with owner.begin() as connection:
+            connection.execute(
+                canonical_event.delete().where(
+                    canonical_event.c.event_type == "management.freeze_release",
+                    canonical_event.c.aggregate_id == created.id,
+                )
+            )
+    else:
+        context = replace(context, actor_id="forged")
+    with pytest.raises(ManagementFailure) as exc:
+        compilation.compile_variant(Actor(), context, request)
+    assert exc.value.error.detail == (
+        "missing_evidence" if failure == "missing_receipt" else "invalid_request"
+    )
+    assert compile_receipts(owner, release.id) == []
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_compile_intent_binds_real_shared_session_and_csrf(
+    database, compilation, restricted_auth_store, auth_account, role
+):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.main import create_app
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    origin = "https://testserver"
+    operations = SimpleNamespace(compile_variant=compilation.compile_variant)
+    path = f"/dataset-releases/{release.id}/variants"
+    body = {"expected_revision": 1, "recipe_id": "full-letterbox-320-v1"}
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        assert (
+            client.post(path, json=body, headers={"Idempotency-Key": "compile"}).status_code == 403
+        )
+        assert compile_receipts(owner, release.id) == []
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "compile",
+        }
+        response = client.post(path, json=body, headers=headers)
+        if role == "reviewer":
+            assert response.status_code == 403
+            assert compile_receipts(owner, release.id) == []
+        else:
+            assert response.status_code == 202, response.text
+            assert response.headers["cache-control"] == "no-store"
+            replay = client.post(path, json=body, headers=headers)
+            assert replay.status_code == 202 and replay.json() == response.json()
+            receipts = compile_receipts(owner, release.id)
+            assert len(receipts) == 1 and receipts[0].actor_id == identity
+            assert receipts[0].payload["evidence"]["inputs"]["requested_by"] == identity
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
+@pytest.fixture
 def restricted_auth_store(database, monkeypatch):
     from labelloop_api import auth
     from labelloop_api.auth_store import AuthStore
