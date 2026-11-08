@@ -367,7 +367,7 @@ def test_training_intent_refuses_untrusted_or_inaccessible_inputs(
         "missing_receipt",
         "duplicate_receipt",
         "compile_not_completed",
-        "forged_job_input",
+        "forged_snapshot_receipt",
         "missing_freeze",
     ],
 )
@@ -413,6 +413,33 @@ def test_training_requires_fenced_compiler_and_historical_snapshot(
                 {"id": compiled.job_id},
             )
         else:
+            receipt = connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.event_type == "management.variant_compiled",
+                    canonical_event.c.aggregate_id == compiled.resource.id,
+                )
+            ).one()
+            connection.execute(
+                canonical_event.update()
+                .where(canonical_event.c.id == receipt.id)
+                .values(payload={**receipt.payload, "canonical_snapshot_sha256": "0" * 64})
+            )
+    with pytest.raises(ManagementFailure) as exc:
+        training_request(training, compiled.resource.id)
+    assert exc.value.error.detail == "missing_evidence"
+    assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+
+
+def test_training_compiler_job_input_is_immutable(database, training_ready):
+    training, created, compiled = training_ready
+    _, owner, _ = database
+    with owner.connect() as connection:
+        original = connection.execute(
+            text("SELECT input FROM worker_job WHERE job_id=:id"), {"id": compiled.job_id}
+        ).scalar_one()
+    with pytest.raises(DBAPIError, match="worker stage and application records are immutable"):
+        with owner.begin() as connection:
             connection.execute(
                 text(
                     "UPDATE worker_job SET input=jsonb_set(input,'{variant_id}','\"forged\"') "
@@ -420,10 +447,18 @@ def test_training_requires_fenced_compiler_and_historical_snapshot(
                 ),
                 {"id": compiled.job_id},
             )
-    with pytest.raises(ManagementFailure) as exc:
-        training_request(training, compiled.resource.id)
-    assert exc.value.error.detail == "missing_evidence"
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT input FROM worker_job WHERE job_id=:id"), {"id": compiled.job_id}
+            ).scalar_one()
+            == original
+        )
     assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+    assert training_request(training, compiled.resource.id).resource.state == "queued"
+    assert len(training_jobs(owner, created.id)) == 1
+    assert len(training_receipts(owner, compiled.resource.id)) == 1
 
 
 def test_training_profiles_are_select_only_project_scoped_and_retries_precede_revision(
