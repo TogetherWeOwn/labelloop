@@ -239,6 +239,10 @@ jobs:
         run: uv run pytest apps/api/tests/test_management_canonical_db.py -v
         env:
           LABELLOOP_MANAGEMENT_DB_TESTS: "1"
+      - name: Budget ledger PostgreSQL races, restart and atomic rollback
+        run: uv run pytest apps/api/tests/test_budget_store.py -v
+        env:
+          LABELLOOP_BUDGET_POSTGRES: "1"
       - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
