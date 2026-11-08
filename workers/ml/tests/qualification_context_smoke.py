@@ -881,6 +881,113 @@ def _exercise_recorded_selection(
             transaction.rollback()
 
 
+def _exercise_final_report_selection(connection, release, final, context, annotation, actor):
+    """One synthetic candidate owns one final; never prune the shared model's history."""
+    from evaluation_fixture import independent_evaluation_variant
+
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+    from labelloop_api.final_test_store import expose_final_test, record_candidate_selection
+    from labelloop_api.model_store import json_record, save_evaluation
+
+    with connection.begin_nested() as fixture_transaction:
+        project_id = lock_project(connection, release.project_id)
+        model = (
+            connection.execute(
+                sa.select(model_schema.model_release).where(
+                    model_schema.model_release.c.project_id == project_id,
+                    model_schema.model_release.c.release_key == release.release_id,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        selection = context.current_final_test.assessments[0].selection
+        prefix = release.release_id + "-sole-final"
+        candidate_final = replace(
+            final, run_id=prefix + "-report", dataset_release_id=prefix + "-dataset"
+        )
+        candidate = replace(
+            release,
+            release_id=prefix,
+            evaluation_run_ids=(selection.development_run_id, candidate_final.run_id),
+        )
+        connection.execute(
+            sa.insert(model_schema.model_release).values(
+                **{
+                    key: value
+                    for key, value in model.items()
+                    if key not in {"id", "created_at", "release_key", "record"}
+                },
+                release_key=prefix,
+                record=json_record(candidate),
+            )
+        )
+        source_variant = connection.execute(
+            sa.select(model_schema.evaluation_run.c.variant_id).where(
+                model_schema.evaluation_run.c.run_key == final.run_id
+            )
+        ).scalar_one()
+        variant = independent_evaluation_variant(
+            connection, source_variant, candidate_final.dataset_release_id
+        )
+        save_evaluation(connection, model_key=prefix, variant_id=variant, report=candidate_final)
+        dataset = load_evaluation_set(
+            connection,
+            project_key=release.project_id,
+            dataset_key=candidate_final.dataset_release_id,
+            role="locked_final_test",
+        )
+        register_final_test(connection, dataset=dataset, actor_id=actor)
+        pinned = record_candidate_selection(
+            connection,
+            project_key=release.project_id,
+            model_key=prefix,
+            selection_key=prefix + "-selection",
+            development_key=selection.development_run_id,
+            development_set=context.evidence.lineage.development,
+            actor_id=actor,
+        )
+        expose_final_test(
+            connection,
+            project_key=release.project_id,
+            dataset_key=dataset.release_id,
+            model_key=prefix,
+            selection_key=pinned.selection_id,
+            evaluation_key=candidate_final.run_id,
+            expected_revision=0,
+            actor_id=actor,
+        )
+        canary = _outcome(connection, candidate, context, actor, canary=True)
+        arguments = dict(
+            project_key=release.project_id,
+            recipe_key=release.recipe_id,
+            model_key=prefix,
+            qualification_key=prefix + "-qualification",
+            annotation=annotation,
+            canary=canary,
+        )
+        explicit = load_qualification_context(
+            connection, **arguments, evaluation_key=candidate_final.run_id
+        )
+        assert load_qualification_context(connection, **arguments) == explicit
+        partial = AnnotationOutcomeRef(
+            canary.release_key, canary.audit_key + "-partial", canary.evidence_key + "-partial"
+        )
+        with pytest.raises(ValueError, match="adverse or missing observations"):
+            load_qualification_context(connection, **(arguments | {"canary": partial}))
+        for other_passes in (False, True):
+            with connection.begin_nested() as transaction:
+                second = replace(candidate_final, run_id=candidate_final.run_id + "-ambiguous")
+                if not other_passes:
+                    second = replace(second, overall=replace(second.overall, map50_95=0.0))
+                save_evaluation(connection, model_key=prefix, variant_id=variant, report=second)
+                with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
+                    load_qualification_context(connection, **arguments)
+                transaction.rollback()
+            assert load_qualification_context(connection, **arguments) == explicit
+        fixture_transaction.rollback()
+
+
 def exercise_context_assembly(engine, release, final, context, actor):
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
@@ -942,37 +1049,20 @@ def exercise_context_assembly(engine, release, final, context, actor):
         automatic_arguments = {
             key: value for key, value in derived_arguments.items() if key != "evaluation_key"
         }
-        automatic = load_qualification_context(connection, **automatic_arguments)
-        assert automatic == derived
-        from labelloop_api.model_store import save_evaluation
-
-        final_variant_id = connection.execute(
-            sa.select(model_schema.evaluation_run.c.variant_id).where(
-                model_schema.evaluation_run.c.run_key == final.run_id
-            )
-        ).scalar_one()
-        for other_passes in (False, True):
-            with connection.begin_nested() as transaction:
-                second = replace(final, run_id=final.run_id + "-ambiguous")
-                if not other_passes:
-                    second = replace(second, overall=replace(second.overall, map50_95=0.0))
-                save_evaluation(
-                    connection,
-                    model_key=release.release_id,
-                    variant_id=final_variant_id,
-                    report=second,
-                )
-                with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
-                    load_qualification_context(connection, **automatic_arguments)
-                assert load_registry(connection, **scope) == before
-                assert (
-                    connection.execute(
-                        sa.select(sa.func.count()).select_from(model_schema.promotion_event)
-                    ).scalar_one()
-                    == count
-                )
-                transaction.rollback()
-            assert load_qualification_context(connection, **automatic_arguments) == derived
+        # Earlier registry controls deliberately linked several finals. Preserve
+        # that committed history and require ambiguity, rather than selecting the
+        # newest journal report or deleting earlier evidence to make this pass.
+        with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
+            load_qualification_context(connection, **automatic_arguments)
+        _exercise_final_report_selection(connection, release, final, derived, annotation, actor)
+        assert load_qualification_context(connection, **derived_arguments) == derived
+        assert load_registry(connection, **scope) == before
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+            ).scalar_one()
+            == count
+        )
         from labelloop_api.training_group_store import model_input_groups
 
         recorded = model_input_groups(connection, project_id=project_id, model_id=model_id)
@@ -1327,7 +1417,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
         )
         with pytest.raises(ValueError, match="adverse or missing observations"):
             load_qualification_context(connection, **(arguments | {"canary": partial}))
-        with pytest.raises(ValueError, match="adverse or missing observations"):
+        with pytest.raises(ValueError, match="one unambiguous linked final evaluation"):
             load_qualification_context(connection, **(automatic_arguments | {"canary": partial}))
         # Even a valid, committed model-bound outcome cannot reuse prior audit groups.
         with pytest.raises(ValueError, match="canary groups must be fresh"):

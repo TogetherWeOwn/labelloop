@@ -23,12 +23,24 @@ scores. No endpoint, schema, migration, dependency or second qualification engin
 
 Adapter controls cover both recipes, absent/ambiguous finals, substitutions in
 final and development links, unexposed/adapted/quarantined finals and changed report
-payloads. Both-recipe disposable PostgreSQL assembly reconnects without an evaluation
-key, requires equality with explicit assembly, rejects a second persisted linked
-final regardless of its score with registry heads/events unchanged, then restores
-only the disposable savepoint and rechecks the original context. Partial canary
-rejection remains mandatory on the selector-free path. New controls are unverified
-pending exact-head Actions; no local tests/builds ran. REA angle: reuse immutable
+payloads. At `0c414f2`, [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42525180854/job/128867149781)
+failed **2 tests, with 17 passed**: both recipes reached the selector, which correctly
+rejected the shared fixture's multiple historical finals. The positive assertion
+incorrectly assumed that existing model had a sole final. Unit (including all 42
+new adapters), queue/migration cycles/all four parents, web-build/dev-stack,
+lint/types/import-contract, CodeQL and gitleaks passed; overall CI failed.
+
+The corrected smoke preserves the shared model's complete committed history and
+requires automatic ambiguity rejection after reconnect. A separate synthetic candidate
+in a disposable savepoint reuses its training run/development evidence, adds a fresh
+canonical final population, real selection/exposure and its own candidate-bound canary.
+It requires equality between automatic and explicit assembly, partial-canary rejection,
+and second-final rejection regardless of scores; savepoint rollback restores the
+unique control and leaves the original registry heads/events and explicit context
+unchanged. This unique-candidate control is transactional, not a new reconnect or
+independent measurement claim. No production selector, gate, historical evidence,
+migration or dependency changed. Corrected controls remain unverified pending
+exact-head Actions; no local tests/builds ran. REA angle: reuse immutable
 model-evaluation links, the final journal and the existing assembler, not another
 selection or qualification store. Trusted execution/measurement producers,
 service-owned outcome selection, authenticated promotion/automatic annotation and
