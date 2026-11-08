@@ -39,6 +39,23 @@ for (const width of [1280, 390]) {
               const cell = await header.boundingBox();
               expect(cell!.x + cell!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
             }
+          } else {
+            const ledger = page.getByRole('region', { name: 'Paid operation ledger' });
+            expect(await ledger.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+            const wordLines = await ledger.getByRole('rowheader').first().evaluate((cell) => {
+              const text = cell.firstChild!;
+              const range = document.createRange();
+              range.setStart(text, 0);
+              range.setEnd(text, 'Training'.length);
+              return range.getClientRects().length;
+            });
+            expect(wordLines).toBe(1);
+            await ledger.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+            const bounds = await ledger.boundingBox();
+            const result = await ledger.getByRole('columnheader', { name: 'Result', exact: true }).boundingBox();
+            expect(result!.x).toBeGreaterThanOrEqual(bounds!.x);
+            expect(result!.x + result!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
+            await ledger.evaluate((element) => { element.scrollLeft = 0; });
           }
         }
         await page.addScriptTag({ content: axe.source });

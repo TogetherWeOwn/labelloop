@@ -81,6 +81,7 @@
   .operations .tiles { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .operations .cost-layout, .operations .recipe-tiles { grid-template-columns: minmax(0,1fr); gap: var(--two-space-5); }
   .operations .policy, .operations .ledger { grid-column: auto; grid-row: auto; }
+  .operations .ledger :is(th,td) { overflow-wrap: normal; }
   .operations .audit-filters { display: grid; grid-template-columns: minmax(0,1fr); }
   .operations .chips { flex-wrap: nowrap; overflow-x: auto; padding: var(--two-space-1); }
   .operations .audit-extra { display: none; }
