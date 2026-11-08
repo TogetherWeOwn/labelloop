@@ -118,6 +118,52 @@ jobs:
       - run: uv run pytest
       - run: uv run python scripts/check-fixtures.py
 
+  queue-postgres:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LABELLOOP_QUEUE_TESTS: "1"
+      DATABASE_URL: postgresql+psycopg://fixture:fixture@localhost:5432/labelloop
+    services:
+      postgres:
+        image: docker.io/pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: labelloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d labelloop"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Check migration round trip on disposable PostgreSQL
+        run: |
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini downgrade base
+          uv run alembic -c apps/api/alembic.ini upgrade head
+      - run: uv run pytest workers/core/tests/test_jobs.py -v --junitxml=queue-evidence.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: queue-evidence
+          path: queue-evidence.xml
+          if-no-files-found: error
+          retention-days: 7
+
   import-contract:
     needs: [changes, full-run]
     if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
@@ -154,6 +200,29 @@ jobs:
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10.28.2
+      - name: Check out the base lint toolchain
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .lint-baseline
+          persist-credentials: false
+      - name: Baseline lint consumer contract
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm --dir .lint-baseline install --frozen-lockfile
+          node apps/web/scripts/lint-consumer-contract.mjs .lint-baseline/apps/web/package.json
+      - name: Remove the isolated base checkout
+        if: always() && github.event_name == 'pull_request'
+        run: rm -rf .lint-baseline
+      - name: Resolve web lockfile with native policy
+        run: pnpm install --lockfile-only
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-lock-resolution
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 7
       - run: pnpm install --frozen-lockfile
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -165,6 +234,12 @@ jobs:
       - run: uv sync --frozen
       - name: Check published management contract before web checks
         run: uv run python -m labelloop_api.management_codegen --check
+      - name: Candidate lint consumer contract
+        run: node apps/web/scripts/lint-consumer-contract.mjs
+        env:
+          EXPECTED_LINT_MATCHER: "11.0.4"
+      - name: Require the generated lockfile to be committed
+        run: git diff --exit-code -- pnpm-lock.yaml
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
@@ -172,12 +247,25 @@ jobs:
         env:
           VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
           VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
+      - run: pnpm --dir apps/web build:operations
       - run: pnpm --dir apps/web build:platform-fixture
         env:
           VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
           VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
+      - name: Scan application and fixture bundles for secrets
+        run: docker run --rm -v "$PWD/apps/web/dist:/scan:ro" zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f dir /scan --redact --exit-code 1
       - run: pnpm --dir apps/web exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/web test:operations
       - run: pnpm --dir apps/web test:platform-browser
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: operational-ui-evidence
+          path: |
+            apps/web/dist/operations-evidence
+            apps/web/dist/operations-report
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -260,7 +348,7 @@ jobs:
         run: uv run pytest apps/api/tests/test_budget_store.py -v
         env:
           LABELLOOP_BUDGET_POSTGRES: "1"
-      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
+      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -277,7 +365,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, full-run, lint, types, unit, import-contract, web-build, dev-stack, ml-smoke]
+    needs: [changes, full-run, lint, types, unit, queue-postgres, import-contract, web-build, dev-stack, ml-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
