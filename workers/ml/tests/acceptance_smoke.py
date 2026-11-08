@@ -337,8 +337,50 @@ def exercise_acceptance(
             )
         assert load_acceptance(connection, **scope) == resumed
         assert load_other(connection) == other
+    for action in ("adapt", "quarantine"):
+        with engine.begin() as connection:
+            # The historical context still passes the pure gates. Only the store's
+            # mandatory current-journal read prevents this otherwise valid promotion.
+            policy = PromotionPolicy(1, 0.0)
+            fresh_context.require_qualified(candidate, fresh_final, incumbent_report, policy)
+            before = load_registry(connection, **scope)
+            events = connection.execute(
+                sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+            ).scalar_one()
+            with pytest.raises(ValueError, match="stale or mismatched"):
+                change_registry(
+                    connection,
+                    **scope,
+                    actor_id=actor,
+                    expected_revision=before.revision,
+                    candidate_key=candidate.release_id,
+                    evaluation_key=fresh_final.run_id,
+                    incumbent_evaluation_key=incumbent_report.run_id,
+                    policy=policy,
+                    qualification=fresh_context,
+                )
+            assert load_registry(connection, **scope) == before
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                ).scalar_one()
+                == events
+            )
+        if action == "adapt":
+            with engine.begin() as connection:
+                invalidate_final_test(
+                    connection,
+                    project_key=release.project_id,
+                    dataset_key=fresh_final.dataset_release_id,
+                    action="quarantine",
+                    reason="later grouping integrity finding",
+                    expected_revision=2,
+                    actor_id=actor,
+                )
     return {
         "scope": "synthetic scoped drift persistence, not domain quality or HTTP authorization",
+        "registry_reloaded_final_after_adaptation_and_quarantine": True,
+        "stale_final_preserved_complete_head_and_event_count": True,
         "paused_and_resumed_across_connections": True,
         "unaffected_cell_and_other_recipe_unchanged": True,
         "racing_pause_winners": 1,

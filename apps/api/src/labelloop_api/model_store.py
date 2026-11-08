@@ -402,9 +402,10 @@ def change_registry(
 
     candidate_key=None requests rollback. The caller must authenticate/authorize the admin;
     this internal store deliberately does not expose principal claims through HTTP.
-    Qualification is a trusted read port, not a request body. Until authenticated,
-    locked policy/final-test/audit loaders are wired, production callers must omit it
-    and promotion fails closed. Synthetic fixtures exercise the port explicitly.
+    Qualification is a trusted read port, not a request body. Current final-test
+    state is always reloaded under the project lock. Until authenticated, locked
+    policy/pipeline/audit/canary loaders are wired, production callers must omit the
+    context and promotion fails closed. Synthetic fixtures exercise the port explicitly.
     """
     if not actor_id.strip():
         raise ValueError("registry events require an authenticated actor")
@@ -459,6 +460,19 @@ def change_registry(
             assert candidate is not None
             if policy is None or evaluation_key is None:
                 raise ValueError("promotion requires explicit gates and persisted evaluation")
+            if qualification is not None:
+                # The journal also reads persisted model reports via this module.
+                from labelloop_api.final_test_store import current_qualification_context
+
+                if (
+                    qualification.evidence.final_test.dataset.project_id != project_key
+                    or qualification.evidence.pipeline.project_id != project_key
+                    or qualification.evidence.pipeline.recipe_id != recipe_key
+                ):
+                    raise ValueError(
+                        "promotion qualification cannot cross project or recipe boundaries"
+                    )
+                qualification = current_qualification_context(connection, qualification)
             incumbent = (
                 stored_report(connection, state.champion, incumbent_evaluation_key)
                 if state.champion and incumbent_evaluation_key

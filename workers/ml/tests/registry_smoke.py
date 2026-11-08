@@ -20,6 +20,12 @@ from labelloop_api.annotation_audit_store import (
     record_annotation_audit,
     require_no_annotation_veto,
 )
+from labelloop_api.final_test_store import (
+    expose_final_test,
+    load_final_test,
+    record_candidate_selection,
+    register_final_test,
+)
 from labelloop_api.model_store import (
     change_registry,
     decode_report,
@@ -41,7 +47,51 @@ from labelloop_api.schema import (
     yolo_dataset_variant,
 )
 from labelloop_core.audit import AuditObservation
+from labelloop_core.evaluation_lifecycle import EvaluationSet
 from labelloop_core.registry import ModelRelease, PromotionPolicy
+
+
+def synthetic_final_variant(connection, source_variant_id, dataset_key):
+    """Copy frozen fixture membership solely for journal mechanics, never domain gold."""
+    source = (
+        connection.execute(
+            sa.select(yolo_dataset_variant).where(yolo_dataset_variant.c.id == source_variant_id)
+        )
+        .mappings()
+        .one()
+    )
+    existing = connection.execute(
+        sa.select(yolo_dataset_variant.c.id)
+        .join(canonical_dataset_release)
+        .where(
+            canonical_dataset_release.c.release_key == dataset_key,
+            yolo_dataset_variant.c.recipe_id == source["recipe_id"],
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    canonical = (
+        connection.execute(
+            sa.select(canonical_dataset_release).where(
+                canonical_dataset_release.c.id == source["release_id"]
+            )
+        )
+        .mappings()
+        .one()
+    )
+    values = {key: value for key, value in canonical.items() if key not in {"id", "created_at"}}
+    values["release_key"] = dataset_key
+    release_id = connection.execute(
+        sa.insert(canonical_dataset_release).values(**values)
+    ).inserted_primary_key[0]
+    values = {key: value for key, value in source.items() if key not in {"id", "created_at"}}
+    values.update(
+        release_id=release_id,
+        file_manifest=source["file_manifest"] | {"release_id": dataset_key},
+    )
+    return connection.execute(
+        sa.insert(yolo_dataset_variant).values(**values)
+    ).inserted_primary_key[0]
 
 
 def fixture_change_registry(connection, **kwargs):
@@ -55,6 +105,8 @@ def fixture_change_registry(connection, **kwargs):
     if candidate_key is None:
         return change_registry(connection, **kwargs)
 
+    project_id = lock_project(connection, kwargs["project_key"])
+
     def final_for(model_key, evaluation_key):
         model_id = connection.execute(
             sa.select(db.model_release.c.id).where(db.model_release.c.release_key == model_key)
@@ -63,8 +115,8 @@ def fixture_change_registry(connection, **kwargs):
         source = stored_report(connection, release, evaluation_key)
         final = synthetic_final(
             source,
-            run_id=evaluation_key + "-synthetic-final-" + model_key,
-            dataset_id=source.dataset_release_id,
+            run_id=evaluation_key + "-synthetic-final-" + model_key + "-for-" + candidate_key,
+            dataset_id=source.dataset_release_id + "-synthetic-final-" + candidate_key,
         )
         if final.run_id not in release.evaluation_run_ids:
             variant_id = connection.execute(
@@ -72,16 +124,73 @@ def fixture_change_registry(connection, **kwargs):
                     db.evaluation_run.c.run_key == evaluation_key
                 )
             ).scalar_one()
+            variant_id = synthetic_final_variant(connection, variant_id, final.dataset_release_id)
             save_evaluation(connection, model_key=model_key, variant_id=variant_id, report=final)
-        return load_release(connection, model_id), final
+        return load_release(connection, model_id), final, source
 
-    candidate, final = final_for(candidate_key, kwargs["evaluation_key"])
+    candidate, final, development = final_for(candidate_key, kwargs["evaluation_key"])
     kwargs["evaluation_key"] = final.run_id
     state = load_registry(connection, kwargs["project_key"], kwargs["recipe_key"])
     if state.champion and kwargs.get("incumbent_evaluation_key"):
-        _, incumbent = final_for(state.champion.release_id, kwargs["incumbent_evaluation_key"])
+        _, incumbent, _ = final_for(state.champion.release_id, kwargs["incumbent_evaluation_key"])
         kwargs["incumbent_evaluation_key"] = incumbent.run_id
-    kwargs["qualification"] = qualification_context(candidate, final, kwargs["policy"])
+    development_set = EvaluationSet(
+        development.dataset_release_id, candidate.project_id, ("dev-group",), "development"
+    )
+    selection_key = "fixture-selection-" + final.run_id
+    actor = kwargs["actor_id"]
+    exists = connection.execute(
+        sa.select(qualification_schema.final_test_event.c.revision)
+        .where(
+            qualification_schema.final_test_event.c.project_id == project_id,
+            qualification_schema.final_test_event.c.dataset_key == final.dataset_release_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if exists is None:
+        register_final_test(
+            connection,
+            actor_id=actor,
+            dataset=EvaluationSet(
+                final.dataset_release_id,
+                candidate.project_id,
+                ("final-group",),
+                "locked_final_test",
+            ),
+        )
+        record_candidate_selection(
+            connection,
+            project_key=candidate.project_id,
+            model_key=candidate_key,
+            selection_key=selection_key,
+            development_key=development.run_id,
+            development_set=development_set,
+            actor_id=actor,
+        )
+        expose_final_test(
+            connection,
+            project_key=candidate.project_id,
+            dataset_key=final.dataset_release_id,
+            model_key=candidate_key,
+            selection_key=selection_key,
+            evaluation_key=final.run_id,
+            expected_revision=0,
+            actor_id=actor,
+        )
+    exposed = load_final_test(
+        connection, project_key=candidate.project_id, dataset_key=final.dataset_release_id
+    )
+    context = qualification_context(candidate, final, kwargs["policy"])
+    kwargs["qualification"] = replace(
+        context,
+        current_final_test=exposed,
+        evidence=replace(
+            context.evidence,
+            final_test=exposed,
+            selection_id=selection_key,
+            lineage=replace(context.evidence.lineage, development=development_set),
+        ),
+    )
     return change_registry(connection, **kwargs)
 
 
@@ -366,7 +475,9 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             results = tuple(pool.map(compete, ("-next", "-racer")))
         assert sum(item is not None for item in results) == 1
         winner = next(item for item in results if item is not None)
-        assert winner.rollback == model and winner.revision == 2
+        assert winner.revision == 2
+        assert replace(winner.rollback, evaluation_run_ids=model.evaluation_run_ids) == model
+        model = winner.rollback  # Includes the new common-final incumbent comparison link.
         with engine.begin() as connection:
             # Inject a failure after the pointer write: the savepoint must undo both effects.
             def fail_event(_conn, _cursor, statement, _parameters, _context, _many):

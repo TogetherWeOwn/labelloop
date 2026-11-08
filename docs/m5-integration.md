@@ -109,11 +109,15 @@ savepoint. New evaluation links take the same lock because selection pins the en
 release including evaluation IDs. The service must commit selection before final
 access and exposure before returning even an aggregate or pass/fail result; a later
 promotion failure cannot undo a real exposure. The store does not own the caller's
-outer commit. `current_qualification_context` reloads current final state rather
-than accepting a historical success snapshot. It is **not yet automatically wired
-into `change_registry`**: authoritative policy/pipeline/audit/canary/group loaders
-and authenticated service routing remain necessary before production promotion.
-The existing production port remains fail-closed without trusted qualification.
+outer commit. `change_registry` now always reloads the current final-test journal
+when a trusted qualification context is present, after checking project/recipe scope
+and while retaining the project lock. A missing journal fails closed; adaptation or
+quarantine cannot be bypassed by replaying a serialized historical success. The
+promotion event stores the context actually checked, including its reloaded state.
+Authoritative policy/pipeline/audit/canary/group loaders and authenticated service
+routing remain necessary before production promotion. The existing production port
+remains fail-closed without trusted qualification. Rollback is still a distinct
+recovery operation and never grants automatic acceptance.
 
 `workers/ml/tests/final_test_smoke.py` extends the existing Actions CPU/PostgreSQL
 smoke for both recipes with explicitly synthetic, separately named final releases.
@@ -150,7 +154,7 @@ integration**. The service must derive the actor, approved expanded scope, histo
 qualification identity, policy/pipeline/audit/canary and canonical group provenance.
 Without trusted qualification, resumption and automatic acceptance fail closed. The
 service/worker acceptance path does not yet consume this port. The existing registry
-port still needs automatic current-final-state and complete authoritative context
+port reloads current final state but still needs complete authoritative context
 loading; this acceptance port does not substitute for that work.
 
 The paired Actions PostgreSQL smoke now prepares synthetic affected/unaffected cells,
@@ -178,6 +182,36 @@ reported **16 passed**, plus **24 passed** in the separate budget-persistence st
 Dev-stack, lint/types/import-contract and web-build also passed. This covers earlier
 checkpoint ancestry and final-journal mechanics at that head, not this new drift
 slice, HTTP enforcement, independent quality, or final milestone acceptance.
+
+## Mandatory registry final-state read — new assertions pending Actions
+
+`apps/api/tests/test_registry_final_state.py` checks that the registry adapter
+forwards only the reloaded context, saves that exact context, rejects foreign
+project/recipe/final identities before the read and cannot mutate the head/event
+when the journal is missing. The existing paired PostgreSQL drift smoke now replays
+an otherwise passing historical qualification after committed adaptation and after
+quarantine, asserting unchanged complete registry state and promotion-event count
+across new connections. These new assertions have not yet run on Actions.
+
+The older synthetic registry helper now persists a separately named final release,
+selection and exposure for each fixture candidate, using matching incumbent reports
+on that same frozen test. Its membership/groups/scores remain explicitly invented
+or copied for software mechanics, never independent final accuracy. It cannot use
+an in-memory success as a substitute for the mandatory journal. Later comparison
+links are retained in recovered rollback metadata. No migration or production gate
+exception is introduced.
+
+Previous head `34bcaab4078e5d8a650bf1d28d521f0d75e4c859` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42449245275) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42449245102).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42449245275/job/128634733563)
+reported **960 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42449245275/job/128634733553)
+reported **19 passed**, plus **24 passed** in the separate budget step.
+[Queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42449245275/job/128634733606)
+reported **39 passed**. Migration round trips, dev-stack and lint/types/import-contract
+passed; web-build was path-filter skipped. This verifies the previous drift/journal
+mechanics, not this new registry change, HTTP/UI/restore acceptance or domain quality.
 
 ## Remaining end-to-end cases and consumers
 
