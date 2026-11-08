@@ -645,11 +645,16 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             next(item for item in reports if item.run_id == result.selected.evaluation_run_id),
             seed_variant,
         )
+        from registry_http_smoke import exercise_http_audit_veto, exercise_http_rollback
+
+        http_rollback = exercise_http_rollback(engine, request)
         audit_veto = None
+        http_audit_veto = None
         # The recipes share a canonical training release. Finish both smoke cases
         # before inserting its durable adverse evidence; 640 runs second in Actions.
         if request.policy.imgsz == 640:
             audit_veto = exercise_annotation_veto(engine, request, common, gate)
+            http_audit_veto = exercise_http_audit_veto(engine, request)
         (output / "registry-smoke.json").write_text(
             json.dumps(
                 {
@@ -660,6 +665,8 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     "common_evaluation": common_evaluation,
                     "durable_annotation_veto": audit_veto,
                     "final_test_journal": final_test_journal,
+                    "http_rollback": http_rollback,
+                    "http_durable_annotation_veto": http_audit_veto,
                 },
                 sort_keys=True,
                 indent=2,

@@ -6,6 +6,42 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Persisted authenticated rollback — pending Actions
+
+The existing CPU registry smoke now drives the actual mounted HTTP route, session
+login, CSRF/admin permission boundary and registry transaction against Actions'
+disposable PostgreSQL. Only connection configuration is replaced; no dependency,
+authentication or registry function is bypassed. Both recipes roll back twice,
+recover complete heads over new connections, retain the other recipe unchanged,
+and check exact authenticated-actor promotion events with complete before/after
+release metadata. Anonymous/reviewer/service requests, missing/wrong CSRF or origin,
+caller-supplied authority, missing scope and stale revisions must leave both heads
+and all promotion events unchanged. An injected event append failure after the head
+write must return a redacted 503 and undo the head write. Stale HTTP replays cannot
+append duplicate events. After durable adverse ordinary-label observations and a
+clean replacement sample, actual admin HTTP rollback must still reject the affected
+recipes with complete heads/events unchanged.
+
+New assertions await exact-head Actions. They are fixture-only recovery mechanics,
+not original pipeline execution, domain quality, authenticated promotion or automatic
+annotation, operational views or expanded-schema restore acceptance. No production
+code, migration, dependency, policy or gate is changed. REA angle: reuse the delivered
+session/auth middleware and atomic registry store inside the existing CPU smoke.
+
+Baseline `3f835616b03bd91c9dbde4a5ed895e0f60c34643`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504965433) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504965433/job/128805542555),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504965433/job/128805542585),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504965433/job/128805542497),
+migration cycles/all four parent upgrades, web-build, dev-stack and lint/types/import
+contract. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504967751)
+and [gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42504970079)
+also succeeded; the scanner passed its 20 controls and full-history scan. This
+supersedes the older unresolved-scan/pending-baseline notes below, not the remaining
+milestone gaps. Required Devin, fresh-context and native QA/Security reviews remain
+gates. Real targets stay null and fail closed. The fixed 2026-11-09T12:00:00Z
+checkpoint and exact-gap/owned-fallback obligation are unchanged.
+
 ## Original-policy sampling at qualification consumers — pending Actions
 
 Strict producers now bind the complete original-pipeline digest into the immutable
