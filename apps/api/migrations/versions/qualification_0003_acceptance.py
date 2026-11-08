@@ -25,13 +25,20 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
+        sa.Column("qualification", sa.JSON(none_as_null=True), nullable=True),
         sa.CheckConstraint("revision >= 1 AND length(trim(actor_id)) > 0"),
         sa.CheckConstraint("action IN ('pause','resume')"),
+        sa.CheckConstraint("(action = 'resume') = (qualification IS NOT NULL)"),
     )
     op.execute(
         "CREATE TRIGGER qualification_acceptance_event_no_update "
         "BEFORE UPDATE OR DELETE ON qualification_acceptance_event "
         "FOR EACH ROW EXECUTE FUNCTION model_record_immutable()"
+    )
+    op.execute(
+        "CREATE TRIGGER qualification_acceptance_event_no_truncate "
+        "BEFORE TRUNCATE ON qualification_acceptance_event "
+        "FOR EACH STATEMENT EXECUTE FUNCTION model_record_immutable()"
     )
 
 

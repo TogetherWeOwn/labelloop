@@ -57,7 +57,7 @@ def load_acceptance(
     return state
 
 
-def _append(connection, project_id, recipe_id, actor_id, action, state):
+def _append(connection, project_id, recipe_id, actor_id, action, state, qualification=None):
     connection.execute(
         sa.insert(qualification_schema.acceptance_event).values(
             project_id=project_id,
@@ -66,6 +66,7 @@ def _append(connection, project_id, recipe_id, actor_id, action, state):
             actor_id=actor_id,
             action=action,
             record=json.loads(dumps(state)),
+            qualification=json.loads(dumps(qualification)) if qualification is not None else None,
         )
     )
 
@@ -162,7 +163,7 @@ def resume_acceptance(
         changed = state.resume(
             release, report, context, pause_ids=pause_ids, expected_revision=expected_revision
         )
-        _append(connection, project_id, recipe_id, actor_id, "resume", changed)
+        _append(connection, project_id, recipe_id, actor_id, "resume", changed, context)
     return changed
 
 

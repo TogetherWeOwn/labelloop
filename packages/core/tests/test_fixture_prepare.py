@@ -62,6 +62,9 @@ def test_atomic_output_cleanup(tmp_path: Path) -> None:
     output_root = tmp_path / "new" / "output"
     with (
         patch.object(prepare.sys, "argv", ["prepare.py", str(output_root)]),
+        patch("PIL.__version__", check_fixtures.PROCESSING["pillow"]),
+        patch("PIL.features.version", return_value=check_fixtures.PROCESSING["libjpeg_turbo"]),
+        patch.object(prepare, "PROCESSING", check_fixtures.PROCESSING),
         patch.object(prepare, "response", side_effect=RuntimeError("simulated drift")),
         pytest.raises(RuntimeError, match="simulated drift"),
     ):
@@ -69,6 +72,34 @@ def test_atomic_output_cleanup(tmp_path: Path) -> None:
     assert not (output_root / "cc0-interface").exists()
     assert not list(output_root.glob(".cc0-interface.partial*"))
     assert manifest_path.exists()
+
+
+def test_provisioning_rejects_current_runtime_before_download(tmp_path: Path) -> None:
+    manifest_path = Path(prepare.HERE) / "cc0-interface" / "manifest.json"
+    with (
+        patch.object(prepare.sys, "argv", ["prepare.py", str(tmp_path / "output")]),
+        patch.object(prepare, "response") as download,
+        pytest.raises(AssertionError, match="Pillow does not match manifest"),
+    ):
+        prepare.prepare(manifest_path, "CC0-1.0")
+    download.assert_not_called()
+    assert not (tmp_path / "output").exists()
+
+
+def test_fixture_runtime_is_pinned_separately_from_provenance() -> None:
+    assert check_fixtures.PROCESSING["pillow"] == "12.2.0"
+    assert check_fixtures.PROCESSING["libjpeg_turbo"] == "3.1.4.1"
+    check_fixtures.check_runtime_toolchain()
+    with (
+        patch.object(check_fixtures, "pillow_version", "12.2.0"),
+        pytest.raises(AssertionError, match="runtime pin"),
+    ):
+        check_fixtures.check_runtime_toolchain()
+    with (
+        patch.object(check_fixtures.features, "version", return_value="unexpected"),
+        pytest.raises(AssertionError, match="libjpeg-turbo"),
+    ):
+        check_fixtures.check_runtime_toolchain()
 
 
 def test_commons_metadata_checks_recorded_thumbnail() -> None:

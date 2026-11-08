@@ -9,8 +9,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 import sqlalchemy as sa
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 
 from labelloop_api import acceptance_store, qualification_schema
 from labelloop_api.acceptance_store import load_acceptance, pause_acceptance, resume_acceptance
@@ -100,5 +102,29 @@ def test_acceptance_migration_is_frozen_and_append_only():
     assert "future_column" not in sql
     assert "PRIMARY KEY (project_id, recipe_id, revision)" in sql
     assert "BEFORE UPDATE OR DELETE ON qualification_acceptance_event" in sql
+    assert "BEFORE TRUNCATE ON qualification_acceptance_event" in sql
     assert "DROP TABLE qualification_acceptance_event" in sql
     assert migration["down_revision"] == "qualification_0002"
+
+
+def test_qualification_and_proposal_histories_have_one_head_without_rewriting_ddl():
+    directory = Path(__file__).parents[1] / "migrations"
+    config = Config()
+    config.set_main_option("script_location", str(directory))
+    scripts = ScriptDirectory.from_config(config)
+    assert scripts.get_heads() == ["m5_jobs_0001"]
+    merged = scripts.get_revision("m5_jobs_0001")
+    assert set(merged.down_revision) == {"qualification_0003", "0006_proposal_jobs"}
+    assert scripts.get_revision("qualification_0001").down_revision == "budget_0002"
+    assert scripts.get_revision("0006_proposal_jobs").down_revision == "budget_0002"
+    assert {row.revision for row in scripts.walk_revisions()} >= {
+        "0001_canonical_foundation",
+        "0002_local_models",
+        "budget_0001",
+        "budget_0002",
+        "0006_proposal_jobs",
+        "qualification_0001",
+        "qualification_0002",
+        "qualification_0003",
+        "m5_jobs_0001",
+    }

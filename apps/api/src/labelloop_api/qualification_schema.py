@@ -18,8 +18,10 @@ acceptance_event = sa.Table(
     sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
     ),
+    sa.Column("qualification", sa.JSON(none_as_null=True), nullable=True),
     sa.CheckConstraint("revision >= 1 AND length(trim(actor_id)) > 0"),
     sa.CheckConstraint("action IN ('pause','resume')"),
+    sa.CheckConstraint("(action = 'resume') = (qualification IS NOT NULL)"),
 )
 candidate_selection = sa.Table(
     "qualification_candidate_selection",

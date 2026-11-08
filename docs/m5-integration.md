@@ -162,6 +162,14 @@ with a new otherwise passing synthetic qualification. These new assertions await
 exact-head Actions; no drift/HTTP acceptance or domain-quality PASS is claimed.
 The recovery owner must add the journal to the expanded restore inventory.
 
+The PR had real conflicts with delivered main `f68d897`; the restack retains both
+proposal inference and qualification smoke coverage, not an optional up-to-date
+refresh. No-DDL merge revision `m5_jobs_0001` joins `qualification_0003` and delivered
+`0006_proposal_jobs` without rewriting either history. The graph regression requires
+one head containing both chains; upgrade/downgrade/re-upgrade remains an Actions gate.
+Delivered dependency and UI updates are inherited unchanged from main; no dependency
+installation, version decision or regenerated lockfile is performed in this slice.
+
 Corrected journal-loader head `80ef127` passed [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447535464)
 and [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447537762).
 [Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42447535464/job/128629548277)

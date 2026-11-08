@@ -1,5 +1,6 @@
 """Synthetic drift persistence only; these records establish no domain accuracy."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
@@ -16,6 +17,7 @@ from labelloop_api.acceptance_store import (
 )
 from labelloop_api.final_test_store import (
     expose_final_test,
+    invalidate_final_test,
     record_candidate_selection,
     register_final_test,
 )
@@ -28,6 +30,7 @@ from labelloop_api.model_store import (
 )
 from labelloop_api.schema import preprocessing_recipe, project
 from labelloop_core.evaluation_lifecycle import EvaluationSet
+from labelloop_core.qualification_wire import dumps
 from labelloop_core.registry import PromotionPolicy
 
 
@@ -120,6 +123,7 @@ def exercise_acceptance(
         for statement in (
             sa.delete(qualification_schema.acceptance_event),
             sa.update(qualification_schema.acceptance_event).values(actor_id="replacement"),
+            sa.text("TRUNCATE qualification_acceptance_event"),
         ):
             with connection.begin_nested() as transaction:
                 with pytest.raises(sa.exc.DatabaseError, match="immutable"):
@@ -279,6 +283,17 @@ def exercise_acceptance(
         resumed = resume_acceptance(connection, **resume_args, qualification=fresh_context)
     with engine.begin() as connection:
         assert load_acceptance(connection, **scope) == resumed
+        saved = connection.execute(
+            sa.select(qualification_schema.acceptance_event.c.qualification)
+            .join(preprocessing_recipe)
+            .join(project)
+            .where(
+                project.c.project_key == release.project_id,
+                preprocessing_recipe.c.recipe_key == release.recipe_id,
+                qualification_schema.acceptance_event.c.revision == resumed.revision,
+            )
+        ).scalar_one()
+        assert saved == json.loads(dumps(fresh_context))
         assert all(item.resumed_by_release_id == candidate.release_id for item in resumed.pauses)
         require_automatic_acceptance(
             connection,
@@ -287,6 +302,24 @@ def exercise_acceptance(
             qualification=fresh_context,
             scope=affected,
         )
+        invalidate_final_test(
+            connection,
+            project_key=release.project_id,
+            dataset_key=fresh_final.dataset_release_id,
+            action="adapt",
+            reason="final result guided later change",
+            expected_revision=1,
+            actor_id=actor,
+        )
+    with engine.begin() as connection:
+        with pytest.raises(ValueError, match="stale or mismatched"):
+            require_automatic_acceptance(
+                connection,
+                **scope,
+                evaluation_key=fresh_final.run_id,
+                qualification=fresh_context,
+                scope=affected,
+            )
         # Even a fresh synthetic qualification cannot rehabilitate the invalidated
         # release identity after rollback; the pause's history remains authoritative.
         old, old_final, old_context, _ = qualify(connection, release.release_id, "rollback")
