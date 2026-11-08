@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, event, func, insert, select, text
 from sqlalchemy.exc import DBAPIError
 
 from labelloop_api.management_canonical import CanonicalManagementMutations
-from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze
+from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze, ScopeDraft
 from labelloop_api.management_ports import ManagementFailure, MutationContext
 from labelloop_api.management_reads import CanonicalManagementReads
 from labelloop_api.revision_store import append_review, completeness_context_hash
@@ -67,7 +67,9 @@ def database(tmp_path):
                 f'borderline_review TO "{role}"'
             )
         )
-        connection.execute(text(f'GRANT UPDATE (scope) ON project TO "{role}"'))
+        connection.execute(
+            text(f'GRANT UPDATE (scope, domain, access_policy) ON project TO "{role}"')
+        )
         connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
     runtime = create_engine(
         os.environ["DATABASE_URL"],
@@ -352,6 +354,198 @@ def test_canonical_read_hides_foreign_legacy_and_unknown_resources(database):
     with pytest.raises(ManagementFailure, match="not_found"):
         reads.read(Reader(), "project", str(legacy_id))
     assert [item.id for item in reads.list_projects(Reader(), None, 100).items] == [created.id]
+
+
+def scope_payload(revision=1):
+    return ScopeDraft(
+        expected_revision=revision,
+        name="Package inspection",
+        scope="Visible packages on the production line",
+        domain="industrial",
+        representation="scene_object",
+        intended_use="Fixture detection",
+        specificity="Package category",
+        source_permitted_use="Generated fixture only",
+    )
+
+
+def save_scope(service, project_id, payload=None, actor=None, key="scope"):
+    actor = actor or Actor()
+    payload = payload or scope_payload()
+    context = MutationContext.bind(actor, key, "save_scope_draft", project_id, payload)
+    return service.save_scope_draft(actor, context, payload)
+
+
+def test_scope_save_reconciles_replay_and_projects_only_attributed_draft(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = scope_payload()
+    result = save_scope(service, created.id, payload)
+    assert result.revision == 2 and result.state == "draft"
+    assert save_scope(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        save_scope(service, created.id, payload.model_copy(update={"name": "Changed"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_scope(service, created.id, key="stale")
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.resource == result
+    assert detail.name == payload.name
+    assert detail.scope == payload.scope
+    assert detail.representation == payload.representation
+    assert detail.intended_use == payload.intended_use
+    assert detail.specificity == payload.specificity
+    assert detail.source_permitted_use == payload.source_permitted_use
+    assert detail.approved_steps == []
+    assert detail.published_release_id is None
+    assert detail.classes[0].approval is None
+    assert detail.guide is None and detail.references is None
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.save_scope_draft",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.expected_revision == 1
+        assert receipt.payload["evidence"]["scope_draft"] == payload.model_dump(
+            exclude={"expected_revision"}
+        )
+        assert receipt.payload["evidence"]["invalidated_steps"] == [
+            "scope",
+            "classes",
+            "evidence",
+            "guide",
+            "sources",
+            "publish",
+        ]
+    assert counts(owner, created.id) == (0, 0, 2)
+    next_payload = payload.model_copy(update={"expected_revision": 2, "name": "Next name"})
+    assert save_scope(service, created.id, next_payload, key="next").revision == 3
+    assert save_scope(service, created.id, payload) == result
+    assert reads.read_project(Reader(), created.id).name == "Next name"
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_parallel_scope_saves_share_canonical_revision_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created = create(service)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return save_scope(service, created.id, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(2) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+def test_scope_save_audit_failure_rolls_back_policy_and_allows_same_key_retry(database):
+    service, owner, role = database
+    created = create(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        save_scope(service, created.id)
+    assert reads.read_project(Reader(), created.id) == before
+    assert counts(owner, created.id) == (0, 0, 1)
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    assert save_scope(service, created.id).revision == 2
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_scope_save_denies_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created = create(service)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        save_scope(service, created.id, actor=actor)
+    assert counts(owner, created.id) == (0, 0, 1)
+
+
+def test_scope_save_checks_workspace_and_context_even_for_replays(database):
+    service, owner, _ = database
+    created = create(service)
+    save_scope(service, created.id)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_scope(replace(service, workspace_id=uuid4()), created.id)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_scope(service, "not-a-uuid")
+    payload = scope_payload()
+    context = MutationContext.bind(Actor(), "scope", "save_scope_draft", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.save_scope_draft(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+@pytest.mark.parametrize("same_scope", [True, False])
+def test_scope_save_invalidates_qualification_and_refuses_new_freeze(database, same_scope):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    frozen = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = {**row.access_policy, "auto_accept_qualification": {"qualified": True}}
+        policy["management_setup_approvals"] = {"scope": "previous-approval"}
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    # Release freeze consumed revision 3; the edit invalidates any old approvals.
+    draft = scope_payload(3)
+    if same_scope:
+        draft = draft.model_copy(update={"scope": row.scope})
+    save_scope(service, created.id, draft)
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert "auto_accept_qualification" not in policy
+        assert policy["management_setup_approvals"] == {}
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read(Reader(), "dataset-release", frozen.id) == frozen
+    assert reads.read_project(Reader(), created.id).approved_steps == []
+    plan = reads.read_freeze_plan(Reader(), created.id)
+    assert plan.payload is None and not plan.checks[0].passed
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(service, created.id, payload.model_copy(update={"expected_revision": 4}), key="new")
+
+
+@pytest.mark.parametrize("tamper", ["no_receipt", "name", "scope", "removed", "approval"])
+def test_scope_projection_requires_matching_canonical_draft_receipt(database, tamper):
+    service, owner, _ = database
+    created = create(service)
+    if tamper != "no_receipt":
+        save_scope(service, created.id)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = dict(row.access_policy)
+        draft = scope_payload().model_dump(exclude={"expected_revision"})
+        policy["management_scope_draft"] = draft
+        if tamper == "name":
+            draft["name"] = "Unattributed name"
+        if tamper == "removed":
+            del policy["management_scope_draft"]
+        if tamper == "approval":
+            policy["management_setup_approvals"] = {"scope": "forged"}
+        connection.execute(
+            project.update()
+            .where(project.c.id == row.id)
+            .values(
+                access_policy=policy, scope="Unattributed scope" if tamper == "scope" else row.scope
+            )
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
 
 
 def test_create_replay_and_conflict_preserve_single_canonical_ontology(database):
@@ -912,7 +1106,9 @@ def test_freeze_plan_is_select_only_and_supplies_a_real_freeze_payload(database)
         connection.execute(
             text(f'GRANT INSERT ON canonical_event, canonical_dataset_release TO "{role}"')
         )
-        connection.execute(text(f'GRANT UPDATE (scope) ON project TO "{role}"'))
+        connection.execute(
+            text(f'GRANT UPDATE (scope, domain, access_policy) ON project TO "{role}"')
+        )
         connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
     assert freeze(service, created.id, plan.payload).state == "frozen"
 

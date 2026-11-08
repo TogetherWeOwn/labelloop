@@ -84,6 +84,21 @@ MUTATIONS = [
         },
         200,
     ),
+    (
+        "/projects/p/setup/scope",
+        "save_scope_draft",
+        {
+            "expected_revision": 1,
+            "name": "Wildlife",
+            "scope": "Birds on source images",
+            "domain": "wildlife",
+            "representation": "scene_object",
+            "intended_use": "Fixture detection",
+            "specificity": "Species",
+            "source_permitted_use": "CC0 fixture",
+        },
+        200,
+    ),
 ]
 READS = [
     "/projects",
@@ -183,6 +198,28 @@ def test_admin_dispatches_typed_payload_with_attributed_context(path, operation,
         ).fingerprint
     )
     assert received.expected_revision == payload.get("expected_revision", 0)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"name": ""},
+        {"representation": "invented"},
+        {"expected_revision": True},
+        {"expected_revision": "1"},
+        {"approved_steps": ["scope"]},
+        {"approval": "admin_approved"},
+        {"external_provider_ids": ["provider"]},
+        {"published_release_id": "release"},
+    ],
+)
+def test_scope_draft_rejects_invalid_or_authority_fields(patch):
+    client, service = client_for(Actor())
+    path, _, payload, _ = MUTATIONS[-1]
+    response = client.post(path, json={**payload, **patch}, headers={"Idempotency-Key": "scope"})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert not service.calls
 
 
 def test_asset_json_text_is_decoded_for_the_port_without_relaxing_revisions():
@@ -399,9 +436,14 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 18
-    assert sum(len(methods) for methods in spec["paths"].values()) == 19
+    assert len(spec["paths"]) == 19
+    assert sum(len(methods) for methods in spec["paths"].values()) == 20
+    assert (
+        spec["paths"]["/projects/{project_id}/setup/scope"]["post"]["operationId"]
+        == "saveScopeDraft"
+    )
     for model in (
+        "ScopeDraft",
         "ProjectDetail",
         "ReleaseDetail",
         "FreezePlanRead",

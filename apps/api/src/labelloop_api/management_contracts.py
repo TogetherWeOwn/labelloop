@@ -47,6 +47,16 @@ class Mutation(Contract):
     expected_revision: Revision
 
 
+class ScopeDraft(Mutation):
+    name: Annotated[str, Field(min_length=1, max_length=256)]
+    scope: Annotated[str, Field(min_length=1, max_length=8192)]
+    domain: Annotated[str, Field(min_length=1, max_length=256)]
+    representation: Literal["scene_object", "depiction", "interface_element"]
+    intended_use: Annotated[str, Field(min_length=1, max_length=4096)]
+    specificity: Annotated[str, Field(min_length=1, max_length=4096)]
+    source_permitted_use: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

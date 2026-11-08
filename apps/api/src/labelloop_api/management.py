@@ -23,6 +23,7 @@ from .management_contracts import (
     Resource,
     ResourceKind,
     ResourcePage,
+    ScopeDraft,
     TrainingStart,
     VariantCompile,
 )
@@ -133,6 +134,23 @@ def management_router(
             actor, idempotency_key, "create_project", "projects", payload
         )
         return invoke(lambda: service.create_project(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/setup/scope",
+        response_model=Resource,
+        operation_id="saveScopeDraft",
+    )
+    def save_scope_draft(
+        project_id: Identifier,
+        payload: ScopeDraft,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "save_scope_draft", project_id, payload
+        )
+        return invoke(lambda: service.save_scope_draft(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/assets",

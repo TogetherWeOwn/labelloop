@@ -77,6 +77,29 @@ idempotency, revision protection and attributed append-only audit committed with
 the shared fenced-queue intent where asynchronous. Read contracts do not grant
 mutation authority.
 
+## Scope draft save (unmounted)
+
+`saveScopeDraft`, `POST /projects/{project_id}/setup/scope`, is an admin-only
+full replacement of the scope step: expected project revision, name, scope,
+domain, representation, intended use, specificity and permitted source use.
+It cannot set providers, spend, human approval or publication fields. Send a
+new idempotency key for an edit; retries return the original revision, while a
+changed body using the same key conflicts. Refresh `readProject` after saving.
+
+The canonical adapter locks the owned project and commits scope/domain/policy
+and an attributed append-only audit/retry receipt together. It stores structured
+metadata in the existing canonical project policy, not a UI or second database.
+Reads expose it only when it matches the authenticated workspace's latest
+attributed scope-save receipt. A save invalidates every setup approval and
+removes automatic-acceptance qualification; it never approves a class or step.
+Until the separate approval/publication producer is implemented, any project
+with an edited scope draft fails closed on a new dataset freeze, even if the
+old scope text and prior completeness assessment still match. Existing frozen
+datasets remain immutable historical records. Other setup steps remain missing.
+
+Real asset-admission composition also requires accepted Security evidence for
+the exact consuming head. This preparation does not enable real admission.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.
@@ -87,7 +110,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 
 | Fixture command family | Producer and intended implementation boundary |
 |---|---|
-| `save_setup`, `add_class` | Management facade: typed per-step draft writes; stable class IDs and structured scope/guide/source metadata; edits invalidate dependent approvals |
+| Remaining `save_setup`, `add_class` | Management facade: guide/source and class draft writes remain missing; the typed scope save above is implemented separately; stable class IDs and edits invalidating dependent approvals are required |
 | `accept_class`, `accept_reference`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; reference provenance and evaluation-holdout exclusion enforced server-side |
 | `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |

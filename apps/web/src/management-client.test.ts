@@ -67,6 +67,35 @@ describe('generated management client', () => {
     });
   });
 
+  it('saves a typed scope draft without granting approval or publication', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 2,
+      name: 'Wildlife',
+      scope: 'Visible birds',
+      domain: 'wildlife',
+      representation: 'scene_object' as const,
+      intended_use: 'Fixture detection',
+      specificity: 'Species',
+      source_permitted_use: 'CC0 fixture',
+    };
+    await client.saveScopeDraft({ project_id: 'p', 'idempotency-key': 'scope-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/setup/scope', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'scope-1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('uses the server training profile and reads a fresh CSRF token per mutation', async () => {
     const { request } = mockRequest();
     const csrf = vi.fn().mockReturnValueOnce('first').mockReturnValueOnce('second');

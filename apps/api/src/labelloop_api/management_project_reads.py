@@ -5,7 +5,7 @@ from sqlalchemy import Connection, func, select
 from labelloop_core.domain import ClassDefinition, OntologyRelease
 
 from .management_canonical import refuse
-from .management_contracts import Resource
+from .management_contracts import Resource, ScopeDraft
 from .management_details import ClassRead, ProjectDetail, SourceGroupsRead, SourcePairRead
 from .schema import (
     borderline_review,
@@ -102,6 +102,36 @@ def source_groups(connection: Connection, project_id) -> SourceGroupsRead:
     )
 
 
+def scope_draft(connection: Connection, project_row, workspace_id) -> ScopeDraft | None:
+    receipt = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type == "management.save_scope_draft",
+            canonical_event.c.actor_kind == "human",
+            canonical_event.c.payload["workspace_id"].as_string() == str(workspace_id),
+        )
+        .order_by(canonical_event.c.expected_revision.desc())
+        .limit(1)
+    ).one_or_none()
+    stored = project_row.access_policy.get("management_scope_draft")
+    if receipt is None:
+        if stored is not None:
+            refuse("missing_evidence")
+        return None
+    evidence = receipt.payload["evidence"]["scope_draft"]
+    draft = ScopeDraft.model_validate({**evidence, "expected_revision": receipt.expected_revision})
+    if (
+        stored != evidence
+        or project_row.scope != draft.scope
+        or project_row.domain != draft.domain
+        or project_row.access_policy["source_permitted_use"] != draft.source_permitted_use
+        or project_row.access_policy.get("management_setup_approvals") != {}
+    ):
+        refuse("missing_evidence")
+    return draft
+
+
 def project_detail(
     connection: Connection, project_row, revision: int, workspace_id
 ) -> ProjectDetail:
@@ -136,6 +166,7 @@ def project_detail(
     if len(receipts) != 1:
         refuse("missing_evidence")
     policy = project_row.access_policy
+    draft = scope_draft(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:
@@ -148,12 +179,12 @@ def project_detail(
             revision=revision,
             state="draft",
         ),
-        name=None,
+        name=draft.name if draft else None,
         scope=project_row.scope,
         domain=project_row.domain,
-        representation=None,
-        intended_use=None,
-        specificity=None,
+        representation=draft.representation if draft else None,
+        intended_use=draft.intended_use if draft else None,
+        specificity=draft.specificity if draft else None,
         source_permitted_use=policy["source_permitted_use"],
         external_provider_ids=policy["external_llm_providers_allowed"],
         classes=[
@@ -174,7 +205,7 @@ def project_detail(
         annotation_guide=policy["annotation_guide"],
         guide=None,
         sources=sources,
-        approved_steps=None,
+        approved_steps=[] if draft else None,
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

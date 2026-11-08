@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import NoReturn
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, Engine, func, insert, select, text
+from sqlalchemy import Connection, Engine, func, insert, select, text, update
 
 from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 
@@ -22,6 +22,7 @@ from .management_contracts import (
     ProjectCreate,
     ReleaseFreeze,
     Resource,
+    ScopeDraft,
 )
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
 from .management_release import freeze_candidate
@@ -224,6 +225,56 @@ class CanonicalManagementMutations:
             refuse("management_unavailable")
         if expected_revision != last_revision + 1:
             refuse("revision_conflict")
+
+    def save_scope_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ScopeDraft
+    ) -> Resource:
+        self.authorize(actor, context, "save_scope_draft", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            draft = payload.model_dump(mode="json", exclude={"expected_revision"})
+            policy = dict(owned.access_policy)
+            policy["management_scope_draft"] = draft
+            policy["source_permitted_use"] = payload.source_permitted_use
+            # Scope edits never carry forward an automatic acceptance grant or
+            # dependent setup approvals. The audit retains the old evidence.
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project)
+                .where(project.c.id == owned.id)
+                .values(scope=payload.scope, domain=payload.domain, access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "scope_draft": draft,
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
 
     def freeze_release(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ReleaseFreeze

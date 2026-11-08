@@ -27,6 +27,7 @@ from .management_contracts import (
     Resource,
     ResourceKind,
     ResourcePage,
+    ScopeDraft,
     TrainingStart,
     VariantCompile,
 )
@@ -84,6 +85,10 @@ class ManagementFailure(Exception):
 class ManagementOperations(Protocol):
     def create_project(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ProjectCreate
+    ) -> Resource: ...
+
+    def save_scope_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ScopeDraft
     ) -> Resource: ...
 
     def ingest_asset(

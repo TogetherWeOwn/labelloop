@@ -41,6 +41,7 @@ export type ReleaseMemberRead = { "annotation_revision": number; "asset_id": str
 export type Resource = { "id": string; "kind": "project" | "asset" | "dataset-release" | "variant" | "training-run" | "model" | "evaluation" | "job"; "project_id": string; "revision": number; "state": "draft" | "frozen" | "queued" | "running" | "completed" | "failed" | "cancelled" };
 export type ResourcePage = { "items": Array<Resource>; "next_cursor"?: string | null };
 export type RetentionRead = { "after": number; "before": number; "dropped_object_ids": Array<string> };
+export type ScopeDraft = { "domain": string; "expected_revision": number; "intended_use": string; "name": string; "representation": "scene_object" | "depiction" | "interface_element"; "scope": string; "source_permitted_use": string; "specificity": string };
 export type SourceGroupsRead = { "assignment_version": string | null; "groups": number | null; "images": number; "metadata_keys": Array<string> | null; "pending_pairs": Array<SourcePairRead>; "split_counts": Record<string, number> | null };
 export type SourcePairRead = { "id": string; "left_asset_id": string; "right_asset_id": string };
 export type TrainingDetail = { "checkpoints": Array<Checkpoint>; "dataset_release_id": string; "epoch": number; "epochs": number; "images": number; "initialization_sha256": string; "mismatches": Array<ArgumentMismatchRead>; "reason": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "requested_arguments": Record<string, unknown>; "resolved_arguments": Record<string, unknown> | null; "resource": Resource; "retention": RetentionRead | null; "training_profile_id": string; "training_profile_revision": number; "updated_at": string; "variant_id": string };
@@ -164,6 +165,11 @@ export class ManagementClient {
     if (input["limit"] != null) query.set("limit", String(input["limit"]));
     if (query.size) path += `?${query}`;
     return this.request<ResourcePage>(path, "GET");
+  }
+
+  saveScopeDraft(input: { "project_id": string; "idempotency-key": string; body: ScopeDraft }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/scope`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
   listTrainingProfiles(input: { "project_id": string }): Promise<TrainingProfilesRead> {

@@ -2622,6 +2622,73 @@
         "title": "RetentionRead",
         "type": "object"
       },
+      "ScopeDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Domain",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "intended_use": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Intended Use",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "representation": {
+            "enum": [
+              "scene_object",
+              "depiction",
+              "interface_element"
+            ],
+            "title": "Representation",
+            "type": "string"
+          },
+          "scope": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "source_permitted_use": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source Permitted Use",
+            "type": "string"
+          },
+          "specificity": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Specificity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "name",
+          "scope",
+          "domain",
+          "representation",
+          "intended_use",
+          "specificity",
+          "source_permitted_use"
+        ],
+        "title": "ScopeDraft",
+        "type": "object"
+      },
       "SourceGroupsRead": {
         "additionalProperties": false,
         "properties": {
@@ -4769,6 +4836,123 @@
           }
         },
         "summary": "List Resources",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/setup/scope": {
+      "post": {
+        "operationId": "saveScopeDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Save Scope Draft",
         "tags": [
           "management"
         ]

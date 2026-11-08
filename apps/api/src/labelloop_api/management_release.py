@@ -72,6 +72,19 @@ def freeze_candidate(
     *,
     lock_sources: bool = True,
 ) -> CanonicalDatasetRelease:
+    # Draft saves invalidate setup acceptance, including edits that leave the
+    # old scope string unchanged. Publication/approval is a separate producer;
+    # until it is implemented, an edited draft cannot freeze a new release.
+    edited = connection.execute(
+        select(canonical_event.c.id)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type == "management.save_scope_draft",
+        )
+        .limit(1)
+    ).first()
+    if edited is not None or "management_scope_draft" in project_row.access_policy:
+        reject("missing_evidence")
     ontology = connection.execute(
         select(ontology_release)
         .where(ontology_release.c.project_id == project_row.id)
