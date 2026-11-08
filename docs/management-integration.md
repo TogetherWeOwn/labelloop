@@ -332,10 +332,10 @@ The endpoint remains unmounted. Disposable Actions cases cover SELECT-only roles
 historical reviews, denied/foreign IDs, missing evidence, exclusions and class
 count/revision deltas. New cases are commissioned, not a test-pass claim.
 
-## Receipt-bound scope and guide approval
+## Receipt-bound setup approval
 
-`POST /projects/{project_id}/setup/approvals` (`approveSetupStep`) accepts only
-`scope` or `guide`, an expected project revision, a server-projected
+`POST /projects/{project_id}/setup/approvals` (`approveSetupStep`) accepts
+`scope`, `guide` or published `classes`, an expected project revision, a server-projected
 `setup_draft_sha256[step]` and a reason. The digest covers the validated saved
 draft, excluding its transport revision. The browser echoes the digest; it does
 not determine what content is approved. The adapter uses the existing admin,
@@ -343,17 +343,32 @@ workspace, project/retry locks and append-only event transaction. Replays return
 the original receipt; stale revisions, changed digests, absent drafts and second
 approvals under a new key fail closed.
 
-Project reads report these two approved intent steps only after checking the
-stored digest/revision against the attributed approval event and current draft.
+Project reads report approved steps only after checking the stored digest/revision
+against the attributed approval event and current content.
 A later scope, guide, class, source-policy or reference mutation clears all setup
 approvals. Even restoring identical old approval bytes after such a mutation
 cannot resurrect approval: the read checks the latest invalidating event.
 Approving one intent step preserves another current intent approval, removes
 any automatic-acceptance qualification and leaves the project in `draft`.
 
-This is **not** class acceptance, evidence-pack acceptance, source-group
-qualification, pilot acceptance or project publication. Those steps cannot be
-selected by this command. New freezes still refuse unpublished draft policies;
+For `classes`, the content must be the latest receipt-verified immutable catalog,
+with no pending catalog draft. Bootstrap classes alone are insufficient. The
+server projects the published catalog digest under `setup_draft_sha256.classes`
+after publication, preserving the wire field name; while a draft exists that pin
+is for publication only and cannot approve classes. The adapter also checks later
+catalog-save events, so removing pending policy bytes cannot permit approval of
+the superseded publication. Expected revisions and shared project locks serialize
+approval against edits/publication. Approval covers class definitions, not example
+support: current class reads expose `admin_approved` only while this approval is
+valid, and receipt-backed exclusions/mirror-safety settings only without a pending
+catalog draft. Prose positive examples never become approved asset counts;
+`positive_examples` remains null. Later edits clear the approval even if content
+bytes are unchanged. An approval of scope or guide can compose with the current
+class approval without resetting its receipt.
+
+This is **not** evidence-pack acceptance, source-group qualification, pilot
+acceptance or project publication. Those steps cannot be selected by this command.
+New freezes still refuse unpublished draft policies;
 no bulk-job release, completeness, recipe, retrieval, promotion or spend authority
 is enabled. There is no new table, migration, runtime grant or approval store.
 The facade remains unmounted; the combined auth/CSRF composition is still pending.

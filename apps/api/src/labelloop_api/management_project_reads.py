@@ -23,7 +23,7 @@ from .management_details import (
 )
 from .management_ontology import read_catalog_publication
 from .management_references import read_references
-from .management_setup import draft_sha256, read_setup_approvals
+from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
 from .schema import (
     borderline_review,
     canonical_event,
@@ -283,6 +283,18 @@ def project_detail(
     guide = guide_draft(connection, project_row, workspace_id)
     catalog = class_catalog_draft(connection, project_row, workspace_id, ontology.ontology_key)
     source_policy = source_policy_draft(connection, project_row, workspace_id)
+    published = published_catalog_content(connection, project_row, workspace_id)
+    published_classes = (
+        {item["stable_id"]: item for item in published["classes"]} if published else {}
+    )
+    approvals = read_setup_approvals(connection, project_row, workspace_id)
+    pins = {
+        step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
+        for step, value in (("scope", draft), ("guide", guide), ("classes", catalog))
+        if value is not None
+    }
+    if published is not None:
+        pins["classes"] = draft_sha256(published)
     references = read_references(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
@@ -312,9 +324,13 @@ def project_detail(
                 aliases=list(item.aliases),
                 parent_id=item.parent_id,
                 positive_examples=None,
-                exclusions=None,
-                mirror_safe=None,
-                approval=None,
+                exclusions=published_classes[item.stable_id]["exclusions"]
+                if item.stable_id in published_classes
+                else None,
+                mirror_safe=published_classes[item.stable_id]["mirror_safe"]
+                if item.stable_id in published_classes
+                else None,
+                approval="admin_approved" if "classes" in approvals else None,
             )
             for item in canonical.classes
         ],
@@ -328,13 +344,9 @@ def project_detail(
         else None,
         sources=sources,
         source_policy_draft=source_policy,
-        setup_draft_sha256={
-            step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
-            for step, value in (("scope", draft), ("guide", guide), ("classes", catalog))
-            if value is not None
-        },
-        approved_steps=read_setup_approvals(connection, project_row, workspace_id)
-        if draft or guide or catalog or source_policy or references
+        setup_draft_sha256=pins,
+        approved_steps=approvals
+        if draft or guide or catalog or published or source_policy or references
         else None,
         versions=versions,
         published_release_id=None,

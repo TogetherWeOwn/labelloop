@@ -1075,7 +1075,9 @@ def test_catalog_publication_preserves_ids_indices_and_history_not_project_publi
         publish_catalog(service, created.id, payload, key="stale")
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     detail = reads.read_project(Reader(), created.id)
-    assert detail.class_catalog_draft is None and "classes" not in detail.setup_draft_sha256
+    assert detail.class_catalog_draft is None
+    assert detail.setup_draft_sha256["classes"] == payload.draft_sha256
+    assert detail.classes[0].approval is None
     assert detail.published_release_id is None and detail.versions["ontology"] == "2"
     assert {item.stable_id: item.name for item in detail.classes} == {
         "package": "Parcel",
@@ -1361,6 +1363,225 @@ def test_catalog_publication_projection_is_select_only(database):
     )
     assert detail.versions["ontology"] == "2" and detail.resource.state == "draft"
     assert counts(owner, created.id) == (0, 0, 3)
+
+
+def published_catalog_inputs(service):
+    created = create(service)
+    draft = catalog_payload(service, created.id)
+    save_catalog(service, created.id, draft)
+    publish_catalog(service, created.id, publication_payload(service, created.id))
+    return created, draft, step_approval(service, created.id, "classes")
+
+
+def test_class_approval_binds_published_definitions_not_prose_support_or_project_release(database):
+    service, owner, _ = database
+    created, draft, payload = published_catalog_inputs(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_project(Reader(), created.id).classes[0].approval is None
+    result = approve_step(service, created.id, payload)
+    assert result.revision == 4 and result.state == "draft"
+    assert approve_step(service, created.id, payload) == result
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.approved_steps == ["classes"] and detail.published_release_id is None
+    assert detail.class_catalog_draft is None and detail.classes[0].approval == "admin_approved"
+    assert detail.classes[0].mirror_safe == draft.classes[0].mirror_safe
+    assert detail.classes[0].exclusions == draft.classes[0].exclusions
+    assert draft.classes[0].positive_examples and detail.classes[0].positive_examples is None
+    assert detail.setup_draft_sha256["classes"] == payload.draft_sha256
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        approve_step(service, created.id, payload.model_copy(update={"reason": "Changed"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        approve_step(service, created.id, payload, key="stale")
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        approve_step(
+            service, created.id, step_approval(service, created.id, "classes"), key="again"
+        )
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.approve_setup_step",
+            )
+        ).one()
+        assert receipt.actor_id == Actor().id and receipt.actor_kind == "human"
+        assert receipt.payload["evidence"] == payload.model_dump(exclude={"expected_revision"})
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+@pytest.mark.parametrize("saved", [True, False])
+def test_class_approval_requires_publication_not_bootstrap_or_draft(database, saved):
+    service, owner, _ = database
+    created = create(service)
+    if saved:
+        save_catalog(service, created.id, catalog_payload(service, created.id))
+    payload = SetupStepApprove(
+        expected_revision=2 if saved else 1,
+        step="classes",
+        draft_sha256="a" * 64,
+        reason="Fixture",
+    )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        approve_step(service, created.id, payload)
+    assert counts(owner, created.id) == (0, 0, 2 if saved else 1)
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_parallel_class_approvals_share_project_revision_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created, _, payload = published_catalog_inputs(service)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return approve_step(
+                service, created.id, payload, key="same" if same_key else key
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(4) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_class_approval_refuses_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created, _, payload = published_catalog_inputs(service)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        approve_step(service, created.id, payload, actor=actor)
+    assert counts(owner, created.id) == (0, 0, 3)
+
+
+@pytest.mark.parametrize("table", ["canonical_event", "project"])
+def test_class_approval_grant_failure_is_atomic_and_retryable(database, table):
+    service, owner, role = database
+    created, _, payload = published_catalog_inputs(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    privilege = "INSERT" if table == "canonical_event" else "UPDATE (scope, domain, access_policy)"
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} ON {table} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        approve_step(service, created.id, payload)
+    assert reads.read_project(Reader(), created.id) == before
+    assert counts(owner, created.id) == (0, 0, 3)
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} ON {table} TO "{role}"'))
+    assert approve_step(service, created.id, payload).revision == 4
+
+
+@pytest.mark.parametrize("edit", ["scope", "guide", "catalog", "sources"])
+def test_setup_save_invalidates_class_approval_even_if_old_policy_is_restored(database, edit):
+    service, owner, _ = database
+    created, _, payload = published_catalog_inputs(service)
+    approve_step(service, created.id, payload)
+    with owner.connect() as connection:
+        prior = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()["management_setup_approvals"]
+    if edit == "scope":
+        save_scope(service, created.id, scope_payload(4))
+    elif edit == "guide":
+        save_guide(service, created.id, guide_payload(4))
+    elif edit == "catalog":
+        save_catalog(service, created.id, catalog_payload(service, created.id, 4), key="next")
+    else:
+        save_sources(service, created.id, source_policy_payload(4))
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.approved_steps == [] and detail.classes[0].approval is None
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == row.id)
+            .values(access_policy={**row.access_policy, "management_setup_approvals": prior})
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+
+
+def test_class_approval_enforces_digest_owned_target_and_context_before_replay(database):
+    service, owner, _ = database
+    created, _, payload = published_catalog_inputs(service)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        approve_step(service, created.id, payload.model_copy(update={"draft_sha256": "a" * 64}))
+    approve_step(service, created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        approve_step(replace(service, workspace_id=uuid4()), created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        approve_step(service, "not-a-uuid", payload)
+    context = MutationContext.bind(Actor(), "approve", "approve_setup_step", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.approve_setup_step(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+@pytest.mark.parametrize("remove_policy", [True, False])
+def test_class_approval_refuses_new_unpublished_draft_even_if_its_policy_is_removed(
+    database, remove_policy
+):
+    service, owner, _ = database
+    created, _, previous = published_catalog_inputs(service)
+    save_catalog(service, created.id, catalog_payload(service, created.id, 3), key="next")
+    if remove_policy:
+        with owner.begin() as connection:
+            row = connection.execute(select(project).where(project.c.id == created.id)).one()
+            policy = dict(row.access_policy)
+            policy.pop("management_class_catalog_draft")
+            connection.execute(
+                project.update().where(project.c.id == row.id).values(access_policy=policy)
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        approve_step(service, created.id, previous.model_copy(update={"expected_revision": 4}))
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+def test_class_approval_races_new_catalog_draft_under_shared_project_lock(database):
+    service, owner, _ = database
+    created, _, payload = published_catalog_inputs(service)
+    draft = catalog_payload(service, created.id, 3)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(operation):
+        barrier.wait()
+        try:
+            result = (
+                approve_step(service, created.id, payload)
+                if operation == "approve"
+                else save_catalog(service, created.id, draft, key="next")
+            )
+            return result.revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("approve", "save")))
+    assert sorted(outcomes, key=str) == [4, "revision_conflict"]
+    assert counts(owner, created.id) == (0, 0, 4)
+
+
+def test_class_scope_guide_approvals_compose_and_projection_needs_only_select(database):
+    service, owner, role = database
+    created, _, _ = published_catalog_inputs(service)
+    save_scope(service, created.id, scope_payload(3))
+    save_guide(service, created.id, guide_payload(4))
+    for step in ("scope", "classes", "guide"):
+        approve_step(service, created.id, step_approval(service, created.id, step), key=step)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    assert before.approved_steps == ["classes", "guide", "scope"]
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    assert reads.read_project(Reader(), created.id) == before
+    assert counts(owner, created.id) == (0, 0, 8)
 
 
 def reference_inputs(service, owner, **kwargs):

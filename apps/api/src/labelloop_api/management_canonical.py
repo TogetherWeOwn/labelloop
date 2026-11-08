@@ -39,7 +39,7 @@ from .management_references import enroll_reference as create_reference
 from .management_references import reference_context_sha256, require_retired_references
 from .management_references import withdraw_reference as retire_reference
 from .management_release import freeze_candidate
-from .management_setup import draft_sha256, read_setup_approvals
+from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
 from .repository import ingest_canonical_asset
 from .schema import canonical_dataset_release, canonical_event, ontology_release, project
 
@@ -536,11 +536,19 @@ class CanonicalManagementMutations:
                 return replay
             self.check_project_revision(connection, owned.id, payload.expected_revision)
             read_setup_approvals(connection, owned, self.workspace_id)
-            loader = scope_draft if payload.step == "scope" else guide_draft
-            draft = loader(connection, owned, self.workspace_id)
-            if draft is None:
+            if payload.step == "classes":
+                content = published_catalog_content(connection, owned, self.workspace_id)
+            else:
+                loader = scope_draft if payload.step == "scope" else guide_draft
+                draft = loader(connection, owned, self.workspace_id)
+                content = (
+                    draft.model_dump(mode="json", exclude={"expected_revision"})
+                    if draft is not None
+                    else None
+                )
+            if content is None:
                 refuse("missing_evidence")
-            digest = draft_sha256(draft.model_dump(mode="json", exclude={"expected_revision"}))
+            digest = draft_sha256(content)
             if digest != payload.draft_sha256:
                 refuse("revision_conflict")
             policy = dict(owned.access_policy)

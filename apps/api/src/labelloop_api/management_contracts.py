@@ -132,8 +132,8 @@ class SourcePolicyDraft(Mutation):
 
 
 class SetupStepApprove(Mutation):
-    # Only draft-intent steps are implemented here, never publication or pilot gates.
-    step: Literal["scope", "guide"]
+    # Classes require a published catalog; none of these steps qualify a pilot.
+    step: Literal["scope", "guide", "classes"]
     draft_sha256: Digest
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 

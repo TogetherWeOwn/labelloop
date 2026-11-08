@@ -3169,7 +3169,8 @@
           "step": {
             "enum": [
               "scope",
-              "guide"
+              "guide",
+              "classes"
             ],
             "title": "Step",
             "type": "string"
