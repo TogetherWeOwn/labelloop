@@ -42,6 +42,7 @@ class ApprovedTrainingProfile:
     epochs: int = 1
     batch: int = 2
     seed: int = 0
+    inference_policy: InferencePolicy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.project_id, UUID):
@@ -54,6 +55,11 @@ class ApprovedTrainingProfile:
 
     def request(self, run_id: str, release_id: str, manifest: dict, manifest_sha256: str):
         recipe = resolve_recipe(self.recipe_id)
+        policy = self.inference_policy
+        if policy is not None and (
+            not isinstance(policy, InferencePolicy) or policy.imgsz != recipe.output_size
+        ):
+            raise ValueError("server inference policy must match the compiled recipe")
         return TrainingRequest(
             run_id=run_id,
             project_id=str(self.project_id),
@@ -63,7 +69,7 @@ class ApprovedTrainingProfile:
             class_map_sha256=manifest["file_hashes"]["class-map.json"],
             split_assignment_version=manifest["split_assignment_version"],
             initialization_sha256=self.initialization_sha256,
-            policy=InferencePolicy(imgsz=recipe.output_size),
+            policy=policy or InferencePolicy(imgsz=recipe.output_size),
             epochs=self.epochs,
             batch=self.batch,
             seed=self.seed,

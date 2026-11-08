@@ -340,6 +340,7 @@ class CanonicalLocalTrainingWorker:
                     profile["epochs"],
                     request.batch,
                     request.seed,
+                    request.policy,
                 )
                 if (
                     expected.request(request.run_id, variant.release_key, manifest, digest)
@@ -455,6 +456,7 @@ class CanonicalLocalTrainingWorker:
                 profile["epochs"],
                 request.batch,
                 request.seed,
+                request.policy,
             )
             if (
                 expected.request(request.run_id, variant["release_key"], manifest, digest)

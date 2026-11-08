@@ -901,6 +901,47 @@ Disposable Actions cases cover digest/revision/retry pins, races, attribution,
 grant rollback, malformed/privileged inputs and invalidation. Commissioned cases
 are not a pass claim until exact-head Actions completes.
 
+## DB-backed real CPU pipeline (commissioned, not yet verified)
+
+The Actions ML job additionally runs
+`workers/ml/tests/test_management_pipeline.py` at 320 and 640. It reuses the
+API's existing disposable restricted-role fixtures and the checked-in non-game
+interface domain. Project creation, original-byte normalized ingest, canonical
+freeze, shared queue producers and request-bound runners are real adapters.
+Training uses `LocalUltralyticsBackend` on CPU with a seeded local architecture;
+export uses `export_and_compare` with nonempty native/ONNX predictions, and the
+standalone development job uses `predict_samples` plus source-frame evaluation.
+No weights or images are downloaded, paid provider invoked or domain engine edited.
+
+The fixture owner seeds only the known annotation/completeness and materialized
+split evidence, and creates temporary test grants. Review writes use the existing
+append-only revision transaction. These coarse fixture labels are not independently
+adjudicated gold. The test does not prove the setup/grouping producers, HTTP
+sessions/CSRF end to end, production role provisioning or real asset-admission
+clearance. Request-time canonical and worker calls retain restricted roles and
+normal receipt, revision, retry, lineage and application-fence checks.
+
+Immutable server training profiles can now pin an optional `InferencePolicy`.
+Its shape must match the delivered recipe; omission preserves the previous
+0.25-confidence/300-detection defaults. The CPU fixture pins the existing seeded
+smoke's 0.005-confidence/1000-detection cohort, avoiding an empty or capped export
+comparison. This is development instrumentation, not a quality target or permission
+to promote. The public command still selects only a server-approved profile ID;
+no threshold, shape or arbitrary argument is accepted from a request or model.
+Worker execution and publication reconstruct that policy and require exact equality
+with the durable attributed intent and saved public profile arguments.
+
+Assertions cover normalized source hashes, all 16 manifest members, class identity,
+actual tensor shapes/retention, selected checkpoint, ONNX signature/hash/equivalence,
+persisted model/evaluation links, full validation-source support and coverage,
+unchanged source-frame metrics, one application per job, attributed completion,
+exact retry replay and worker-path cleanup. The existing ML evidence artifact retains
+`management-pipeline.json`, export equivalence, runtime shapes, target retention and
+development reports. The new cases are **commissioned, not passing evidence until
+exact-head GitHub Actions succeeds**. Default management/admission stay disabled;
+final mounting, full setup/runtime composition, Security/QA and qualification gates
+remain open. The single promotions implementation remains with its existing owner.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |
