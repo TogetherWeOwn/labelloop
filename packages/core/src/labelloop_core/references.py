@@ -39,9 +39,13 @@ class GoldAdjudication:
         ):
             raise ValueError("gold adjudication requires identified audit evidence and principals")
         if self.pixel_origin != "real_image" or self.truth_origin != "human_blind":
-            raise ValueError("gold requires real-image human truth, never synthetic or public labels")
+            raise ValueError(
+                "gold requires real-image human truth, never synthetic or public labels"
+            )
         if self.blind is not True or self.adjudicator_id in self.annotator_ids | self.reviewer_ids:
-            raise ValueError("gold requires blind adjudication distinct from every prior participant")
+            raise ValueError(
+                "gold requires blind adjudication distinct from every prior participant"
+            )
 
 
 @dataclass(frozen=True, slots=True)
