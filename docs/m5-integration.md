@@ -1,6 +1,6 @@
 # M5 qualification and recovery integration
 
-Status: **preparation only; milestone acceptance is not established**.
+Status: **integration in progress; milestone acceptance is not established**.
 
 Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 21.
 This record joins independently delivered modules; it does not commission a second
@@ -31,17 +31,38 @@ The tests prepare and check:
 - an ordinary accepted wrong identity and an ordinary accepted false negative,
   with an independent synthetic adverse audit, while detector metrics are good.
 
-The last case intentionally does **not** claim a promotion veto: the existing
-`PromotionPolicy` does not consume annotation-audit evidence. Final integration
-must submit that adverse evidence through the qualification module and prove
-that **the real registry head and event count remain unchanged**. Testing only
-`assess_audit(...).passed == False` is insufficient for acceptance check 16.
+The preparation case alone does **not** establish a promotion veto. The delivered
+qualification contract now guards pure promotion; this integration adds an immutable
+annotation-audit store and checks persisted adverse evidence before both promotion
+and rollback. `workers/ml/tests/registry_smoke.py::exercise_annotation_veto` commits
+wrong-identity and missed-object observations, reconnects, records a clean replacement
+sample, then attempts every persisted candidate and rollback at both recipe heads.
+It asserts that **the real registry heads and event count remain unchanged**, including
+models trained from a separately frozen release containing the same source labels.
+These assertions await exact-head Actions; they are not a claimed PASS.
+
+`qualification_0001` follows the delivered ledger's `budget_0002`. The new
+`qualification_annotation_audit` table is append-only at the database boundary and
+must be included in the final restore inventory. Audits load frozen membership and
+prior actors from canonical records. Audit writes and registry changes lock the
+project before any recipe head, ordering adverse evidence against concurrent promotion.
+No new sampler, audit truth source or HTTP endpoint is introduced in this slice.
+
+Vetoes currently hold every later revision of an affected source conservatively;
+there is no clearing API. An authenticated correction plus complete descendant
+re-tracing must precede any future clearing transition. Indirect teacher/generated-label
+and checkpoint-ancestry tracing, current-champion automatic-acceptance enforcement,
+representative population sampling, authoritative acceptance-score/threshold provenance,
+lifecycle storage and authenticated adapters remain integration obligations.
+The internal audit writer is **not** an authorization boundary: its caller must derive
+an authorized human principal from the existing session service. Passing a string
+actor or synthetic clean qualification is never evidence of HTTP authorization.
 
 These are synthetic software-contract cases, not independently adjudicated domain
 gold, trained checkpoint evaluation, empirical quality or production acceptance.
 The explicit `PromotionPolicy(1, 0.9)` is fixture-only. Project targets stay null
 until decided; null targets retain the incumbent. No paid request or real provider
-secret is needed. No dependency, migration, HTTP endpoint or runtime is added.
+secret is needed. No dependency version, HTTP endpoint or runtime is added.
 
 ## Remaining end-to-end cases and consumers
 
@@ -69,9 +90,9 @@ integration assertions against delivered code before milestone acceptance.
 - Final evidence must identify head SHA, Actions run/job/artifact links, measured
   restore duration, native review decisions and all finding dispositions. A module
   fixture pass alone does not establish HTTP, persistence or UI acceptance.
-- Missing independent domain gold/targets is an acceptance prerequisite, not a
-  reason to stop offline preparation or invent adjudication. Record the provenance,
-  independence, support and measured-target gap explicitly.
+- Explicit `fixture_only: true` targets may demonstrate M5 gate mechanics. Independent
+  domain gold is not an M5 fixture-exit prerequisite. Real targets remain null and
+  fail closed; synthetic evidence cannot support an empirical model-quality claim.
 - Integration checkpoint: 2026-11-09T12:00:00Z. If unmet, publish the exact missing
   producer output/gold evidence and accountable fallback without silently moving
   the date or weakening acceptance.

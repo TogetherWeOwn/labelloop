@@ -12,6 +12,8 @@ from qualification_fixture import qualification_context, synthetic_final
 from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import model_schema as db
+from labelloop_api import qualification_schema
+from labelloop_api.annotation_audit_store import record_annotation_audit
 from labelloop_api.model_store import (
     change_registry,
     decode_report,
@@ -24,12 +26,15 @@ from labelloop_api.model_store import (
     stored_report,
 )
 from labelloop_api.schema import (
+    annotation_revision,
     canonical_dataset_release,
     ontology_release,
     preprocessing_recipe,
     project,
+    source_asset,
     yolo_dataset_variant,
 )
+from labelloop_core.audit import AuditObservation
 from labelloop_core.registry import ModelRelease, PromotionPolicy
 
 
@@ -103,6 +108,53 @@ def seed_variant(connection, request, manifest):
     ontology_id = connection.execute(
         sa.select(ontology_release.c.id).where(ontology_release.c.project_id == project_id)
     ).scalar_one()
+    # Explicit synthetic canonical rows exercise persisted audit lineage only;
+    # these are not the actual image labels or domain gold of the CPU run.
+    membership = {}
+    for kind in ("positive", "negative"):
+        asset_key = f"{request.project_id}-synthetic-ordinary-{kind}"
+        connection.execute(
+            insert(source_asset)
+            .values(
+                project_id=project_id,
+                asset_key=asset_key,
+                sha256="a" * 64,
+                object_key="sha256/aa/" + "a" * 64,
+                width=32,
+                height=32,
+                exif_orientation=1,
+                source_uri="fixture://synthetic-audit",
+            )
+            .on_conflict_do_nothing()
+        )
+        asset_id = connection.execute(
+            sa.select(source_asset.c.id).where(source_asset.c.asset_key == asset_key)
+        ).scalar_one()
+        connection.execute(
+            insert(annotation_revision)
+            .values(
+                asset_id=asset_id,
+                revision=1,
+                actor_kind="system",
+                actor_id="fixture-original-reviewer",
+                objects=[
+                    {
+                        "object_id": "one",
+                        "class_id": next(iter(manifest["class_map"])),
+                        "box": [0, 0, 8, 8],
+                    }
+                ]
+                if kind == "positive"
+                else [],
+                approval_state="auto_accepted",
+                review_tier="machine_verified_no_human_review",
+                scope_completeness="exhaustive_for_scope",
+                training_eligible=True,
+                gold_eligible=False,
+            )
+            .on_conflict_do_nothing()
+        )
+        membership[asset_key] = 1
     connection.execute(
         insert(canonical_dataset_release)
         .values(
@@ -110,7 +162,7 @@ def seed_variant(connection, request, manifest):
             project_id=project_id,
             ontology_id=ontology_id,
             assignment_version=request.split_assignment_version,
-            sample_revisions={},
+            sample_revisions=membership,
             ontology_hash="a" * 64,
             excluded_asset_ids=[],
             hashes={},
@@ -355,6 +407,11 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 connection, result, exported, manifest, initial_model, reports[0], common
             )
             assert load_registry(connection, request.project_id, other_recipe) == untouched
+        audit_veto = None
+        # The recipes share a canonical training release. Finish both smoke cases
+        # before inserting its durable adverse evidence; 640 runs second in Actions.
+        if request.policy.imgsz == 640:
+            audit_veto = exercise_annotation_veto(engine, request, common, gate)
         (output / "registry-smoke.json").write_text(
             json.dumps(
                 {
@@ -363,6 +420,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                     "restored": asdict(restored),
                     "other_recipe_unchanged": True,
                     "common_evaluation": common_evaluation,
+                    "durable_annotation_veto": audit_veto,
                 },
                 sort_keys=True,
                 indent=2,
@@ -478,4 +536,128 @@ def exercise_common_evaluation(connection, result, exported, manifest, model, re
         ),
         "selected": asdict(selected),
         "restored": asdict(restored),
+    }
+
+
+def exercise_annotation_veto(engine, request, common, gate):
+    """Adverse ordinary labels veto actual persisted heads, not just a pure verdict."""
+    actor = "fixture-independent-auditor"
+    positive = f"{request.project_id}-synthetic-ordinary-positive"
+    negative = f"{request.project_id}-synthetic-ordinary-negative"
+    ordinary_wrong = AuditObservation(positive, 1, actor, True, False, True)
+    missed_object = AuditObservation(negative, 1, actor, True, True, False)
+    audit_args = dict(
+        project_key=request.project_id,
+        release_key=request.dataset_release_id,
+        actor_id=actor,
+    )
+    with engine.begin() as connection:
+        for bad, message in (
+            (replace(ordinary_wrong, revision=2), "frozen annotation membership"),
+            (replace(ordinary_wrong, asset_id="foreign-asset"), "frozen annotation membership"),
+            (replace(ordinary_wrong, reviewer_id="forged-principal"), "authenticated principal"),
+        ):
+            with pytest.raises(ValueError, match=message):
+                record_annotation_audit(
+                    connection, **audit_args, audit_key="rejected", observations=(bad,)
+                )
+        with pytest.raises(ValueError, match="independent"):
+            record_annotation_audit(
+                connection,
+                **(audit_args | {"actor_id": "fixture-original-reviewer"}),
+                audit_key="dependent",
+                observations=(replace(ordinary_wrong, reviewer_id="fixture-original-reviewer"),),
+            )
+        record_annotation_audit(
+            connection, **audit_args, audit_key="wrong-identity", observations=(ordinary_wrong,)
+        )
+        record_annotation_audit(
+            connection, **audit_args, audit_key="missed-object", observations=(missed_object,)
+        )
+    # A new connection and a new clean sample cannot erase either historical veto.
+    with engine.begin() as connection:
+        record_annotation_audit(
+            connection,
+            **audit_args,
+            audit_key="replacement-clean-sample",
+            observations=(
+                replace(ordinary_wrong, labels_correct=True),
+                replace(missed_object, scope_complete=True),
+            ),
+        )
+    with engine.begin() as connection:
+        before_count = connection.execute(
+            sa.select(sa.func.count()).select_from(db.promotion_event)
+        ).scalar_one()
+        audited = (
+            connection.execute(
+                sa.select(qualification_schema.annotation_audit).where(
+                    qualification_schema.annotation_audit.c.audit_key == "wrong-identity"
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert audited["actor_id"] == actor
+        assert audited["vetoed_revisions"] == {positive: 1}
+        for statement in (
+            sa.delete(qualification_schema.annotation_audit),
+            sa.update(qualification_schema.annotation_audit).values(vetoed_revisions={}),
+        ):
+            with connection.begin_nested() as transaction:
+                with pytest.raises(sa.exc.DatabaseError, match="immutable"):
+                    connection.execute(statement)
+                transaction.rollback()
+        # Both recipes and models trained from a separately frozen descendant release
+        # are checked against their actual training membership, not evaluation inputs.
+        for side in (320, 640):
+            recipe = f"full-letterbox-{side}-v1"
+            before = load_registry(connection, request.project_id, recipe)
+            if before.champion is None:
+                continue  # Also permits focused reproduction of the 640 case alone.
+            scope = common | {"recipe_key": recipe}
+            candidates = connection.execute(
+                sa.select(db.model_release.c.id, db.model_release.c.release_key).where(
+                    db.model_release.c.recipe_id
+                    == connection.execute(
+                        sa.select(preprocessing_recipe.c.id).where(
+                            preprocessing_recipe.c.recipe_key == recipe
+                        )
+                    ).scalar_one()
+                )
+            ).all()
+            for candidate in candidates:
+                release = load_release(connection, candidate.id)
+                # Demonstrate that a synthetically clean qualification itself passes.
+                report = stored_report(connection, release, release.evaluation_run_ids[0])
+                final = synthetic_final(
+                    report,
+                    run_id=release.evaluation_run_ids[-1],
+                    dataset_id="synthetic-passing-final",
+                )
+                qualification_context(release, final, gate).require_qualified(release, final)
+                with pytest.raises(ValueError, match="annotation audit veto"):
+                    change_registry(
+                        connection,
+                        **scope,
+                        expected_revision=before.revision,
+                        candidate_key=candidate.release_key,
+                        evaluation_key=final.run_id,
+                        policy=gate,
+                        qualification=qualification_context(release, final, gate),
+                    )
+            with pytest.raises(ValueError, match="annotation audit veto"):
+                change_registry(connection, **scope, expected_revision=before.revision)
+            assert load_registry(connection, request.project_id, recipe) == before
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(db.promotion_event)
+            ).scalar_one()
+            == before_count
+        )
+    return {
+        "scope": "synthetic ordinary-label audit mechanics, not domain quality",
+        "wrong_identity_and_missed_object_persisted": True,
+        "clean_replacement_sample_did_not_clear_veto": True,
+        "heads_and_event_count_unchanged": True,
     }

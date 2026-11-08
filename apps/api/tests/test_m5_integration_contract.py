@@ -8,6 +8,7 @@ import hashlib
 from dataclasses import dataclass, replace
 
 import pytest
+from qualification_fixture import qualification_context, synthetic_final
 
 from labelloop_api.model_store import decode_release, decode_report, json_record
 from labelloop_core.audit import (
@@ -174,7 +175,15 @@ def test_paired_recipe_rollback_survives_store_codec_boundary(recipe_case: Recip
     first = decode_release(json_record(recipe_case.incumbent))
     second = decode_release(json_record(recipe_case.challenger))
     before_report = decode_report(json_record(recipe_case.incumbent_report))
-    after_report = decode_report(json_record(recipe_case.challenger_report))
+    after_report = synthetic_final(
+        decode_report(json_record(recipe_case.challenger_report)),
+        run_id=second.release_id + "-final",
+        dataset_id="synthetic-final-v1",
+    )
+    before_report = synthetic_final(
+        before_report, run_id=before_report.run_id, dataset_id="synthetic-final-v1"
+    )
+    second = replace(second, evaluation_run_ids=(*second.evaluation_run_ids, after_report.run_id))
     policy = PromotionPolicy(1, 0.9)
     promoted = RegistryState(first.project_id, first.recipe_id, 1, first).promote(
         second,
@@ -182,6 +191,7 @@ def test_paired_recipe_rollback_survives_store_codec_boundary(recipe_case: Recip
         policy,
         expected_revision=1,
         incumbent_report=before_report,
+        qualification=qualification_context(second, after_report, policy),
     )
     # Rehydrate the same snapshot shape used by persisted promotion events.
     snapshot = json_record(promoted)
@@ -194,7 +204,7 @@ def test_paired_recipe_rollback_survives_store_codec_boundary(recipe_case: Recip
     )
     restored = reloaded.roll_back(expected_revision=2)
     assert restored.champion == recipe_case.incumbent
-    assert restored.rollback == recipe_case.challenger
+    assert restored.rollback == second
     assert restored.revision == 3
     assert first.policy != second.policy
     assert first.weights_sha256 != second.weights_sha256

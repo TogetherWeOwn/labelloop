@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import model_schema as db
+from labelloop_api.annotation_audit_store import lock_project, require_no_annotation_veto
 from labelloop_api.schema import (
     canonical_dataset_release,
     preprocessing_recipe,
@@ -400,9 +401,9 @@ def change_registry(
     """
     if not actor_id.strip():
         raise ValueError("registry events require an authenticated actor")
-    project_id = connection.execute(
-        sa.select(project.c.id).where(project.c.project_key == project_key)
-    ).scalar_one()
+    # Audit writes take the same project lock before registry locks. No clean
+    # replacement sample can race an adverse audit into a descendant promotion.
+    project_id = lock_project(connection, project_key)
     recipe_id = connection.execute(
         sa.select(preprocessing_recipe.c.id).where(preprocessing_recipe.c.recipe_key == recipe_key)
     ).scalar_one()
@@ -428,6 +429,10 @@ def change_registry(
             load_release(connection, row["rollback_id"]),
         )
         if candidate_key is None:
+            if row["rollback_id"] is not None:
+                require_no_annotation_veto(
+                    connection, project_id=project_id, model_id=row["rollback_id"]
+                )
             changed = state.roll_back(expected_revision=expected_revision)
             champion_id, rollback_id = row["rollback_id"], row["champion_id"]
         else:
@@ -439,6 +444,9 @@ def change_registry(
                 )
                 .mappings()
                 .one()
+            )
+            require_no_annotation_veto(
+                connection, project_id=project_id, model_id=candidate_row["id"]
             )
             candidate = load_release(connection, candidate_row["id"])
             assert candidate is not None
