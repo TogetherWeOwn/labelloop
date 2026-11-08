@@ -6,7 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated incident-linked resumption — pending Actions
+## HTTP current-policy resumption replay controls — pending Actions
+
+Both-recipe disposable PostgreSQL smoke now commits three valid policy changes
+*after* the remediated champion's promotion: reviewer prompt identity, supported
+scope, and null targets with their matching acceptance-policy digest. A fresh
+connection must recover each version and the real current-policy reader must
+reject the recorded promotion context. The same authenticated admin resumption
+request, with current acceptance/registry revisions and real incident IDs, must
+then return a redacted 409 without changing any policy, acceptance, final-test,
+audit or measured-outcome row, either recipe's registry or promotion history.
+
+Each control restores the original configuration through a new expected-revision
+append, preserving every historical policy row. Restoring configuration alone
+must not resume acceptance. The existing successful HTTP resumption follows all
+three controls using the unchanged champion/incidents/request, so a generic
+stale-revision or incident rejection cannot satisfy the negative controls alone.
+No production code, domain gate, schema, migration or dependency changed; these
+new assertions await exact-head Actions. No local test or build ran.
+
+## Incident-linked resumption — verified baseline
+
+Exact `200f5b3ae9e225af850b2674e74ab91fee9cbd44`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42518322944),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42518322738) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42518322632)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42518322944/job/128846139949),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42518322944/job/128846140016),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the previous authenticated resumption controls,
+superseding their pending labels below; it does not verify the new policy-replay
+controls or establish complete milestone acceptance. Totals were not extracted.
+Required Devin/fresh-context/native QA/Security gates remain.
+
+## Authenticated incident-linked resumption — verified baseline
 
 `POST /projects/{project_key}/registry/{recipe_key}/resumptions` accepts only
 expected acceptance/registry revisions and a bounded list of incident IDs, behind
@@ -28,8 +61,8 @@ replace the successful direct-store resumption and retain reconnect/qualificatio
 and subsequent automatic-acceptance checks. They additionally require rejection
 of the original incident release, denial/stale/foreign/duplicate no-ops, post-insert
 failure rollback, exact session actor and unchanged history/registry/other recipe.
-New assertions await exact-head Actions; no local tests or builds ran. No migration,
-dependency, domain transition or duplicate drift engine. REA angle: revalidate
+These assertions passed exact-head Actions at `200f5b3`; no local tests or builds ran.
+No migration, dependency, domain transition or duplicate drift engine. REA angle: revalidate
 committed promotion evidence through the existing append-only acceptance journal.
 
 ## Containment fixture correction — verified baseline

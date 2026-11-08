@@ -3,6 +3,7 @@
 import json
 import secrets
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -17,7 +18,12 @@ from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
 from labelloop_api.final_test_store import load_final_test
 from labelloop_api.main import app
 from labelloop_api.model_store import json_record, load_registry
-from labelloop_core.qualification import QualificationContext
+from labelloop_api.qualification_policy_store import (
+    append_qualification_policy,
+    current_policy_context,
+    load_qualification_policy,
+)
+from labelloop_core.qualification import QualificationContext, QualificationTargets
 from labelloop_core.qualification_data import record_sha256
 from labelloop_core.qualification_wire import dumps, loads
 
@@ -256,6 +262,103 @@ def reject_http_resume(engine, registry, history, pause_ids):
     assert snapshot(engine, registry.project_id) == heads
 
 
+def exercise_http_resume_policy_replays(
+    engine, client, headers, registry, history, pause_ids, qualification
+):
+    scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
+    with engine.begin() as connection:
+        original = load_qualification_policy(connection, **scope)
+        assert current_policy_context(connection, qualification) == qualification
+    # Each control is a valid append-only configuration change, not a forged
+    # request/context. The same already-promoted champion and incidents remain.
+    unconfigured = QualificationTargets()
+    changes = (
+        replace(
+            original.policy,
+            pipeline=replace(original.policy.pipeline, prompt_sha256="1" * 64),
+        ),
+        replace(original.policy, scope=original.policy.scope[:1]),
+        replace(
+            original.policy,
+            targets=unconfigured,
+            pipeline=replace(
+                original.policy.pipeline, acceptance_policy_sha256=record_sha256(unconfigured)
+            ),
+        ),
+    )
+
+    def journals():
+        with engine.connect() as connection:
+            return {
+                table.name: tuple(
+                    dict(row)
+                    for row in connection.execute(
+                        sa.select(table).order_by(*table.primary_key.columns)
+                    ).mappings()
+                )
+                for table in (
+                    qualification_schema.policy_event,
+                    qualification_schema.acceptance_event,
+                    qualification_schema.final_test_event,
+                    qualification_schema.annotation_audit,
+                    qualification_schema.annotation_evidence,
+                )
+            }
+
+    heads = snapshot(engine, registry.project_id)
+    path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
+    payload = {
+        "expected_revision": history.revision,
+        "expected_registry_revision": registry.revision,
+        "pause_ids": list(pause_ids),
+    }
+    for policy in changes:
+        assert policy != original.policy
+        with engine.begin() as connection:
+            current = load_qualification_policy(connection, **scope)
+            updated = append_qualification_policy(
+                connection,
+                **scope,
+                actor_id="fixture-http-policy-admin",
+                expected_revision=current.revision,
+                policy=policy,
+            )
+        # A separate connection must recover the changed policy before HTTP reads it.
+        with engine.begin() as connection:
+            assert load_qualification_policy(connection, **scope) == updated
+            with pytest.raises(ValueError, match="stale or substituted"):
+                current_policy_context(connection, qualification)
+        before = journals()
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 409
+        assert response.json() == {"detail": "drift_resume_rejected"}
+        assert response.headers["cache-control"] == "no-store"
+        assert journals() == before
+        assert snapshot(engine, registry.project_id) == heads
+        with engine.begin() as connection:
+            restored = append_qualification_policy(
+                connection,
+                **scope,
+                actor_id="fixture-http-policy-admin",
+                expected_revision=updated.revision,
+                policy=original.policy,
+            )
+        after = journals()
+        for name, rows in before.items():
+            if name != qualification_schema.policy_event.name:
+                assert after[name] == rows
+                continue
+            assert len(after[name]) == len(rows) + 1
+            assert all(row in after[name] for row in rows)
+        with engine.begin() as connection:
+            assert load_qualification_policy(connection, **scope) == restored
+            assert current_policy_context(connection, qualification) == qualification
+            assert load_acceptance(connection, **scope) == history
+        # Restoring configuration alone is not a resumption or registry mutation.
+        assert_operations_read(client, engine, registry)
+        assert snapshot(engine, registry.project_id) == heads
+
+
 def exercise_http_resume(engine, registry, history, pause_ids, qualification):
     path = f"/projects/{registry.project_id}/registry/{registry.recipe_id}/resumptions"
     scope = {"project_key": registry.project_id, "recipe_key": registry.recipe_id}
@@ -338,6 +441,10 @@ def exercise_http_resume(engine, registry, history, pause_ids, qualification):
         assert journal_rows() == before
         with engine.begin() as connection:
             assert load_acceptance(connection, **scope) == history
+        exercise_http_resume_policy_replays(
+            engine, client, headers, registry, history, pause_ids, qualification
+        )
+        assert journal_rows() == before
         response = client.post(path, headers=headers, json=payload)
         assert response.status_code == 201
         assert response.headers["cache-control"] == "no-store"
