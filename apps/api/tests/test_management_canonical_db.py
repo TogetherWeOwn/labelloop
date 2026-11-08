@@ -1571,8 +1571,14 @@ def test_class_scope_guide_approvals_compose_and_projection_needs_only_select(da
     created, _, _ = published_catalog_inputs(service)
     save_scope(service, created.id, scope_payload(3))
     save_guide(service, created.id, guide_payload(4))
+    for step in ("scope", "guide"):
+        with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+            approve_step(service, created.id, step_approval(service, created.id, step), key=step)
+    assert counts(owner, created.id) == (0, 0, 5)
     for step in ("scope", "classes", "guide"):
-        approve_step(service, created.id, step_approval(service, created.id, step), key=step)
+        payload = step_approval(service, created.id, step)
+        result = approve_step(service, created.id, payload, key=f"approve-{step}")
+        assert approve_step(service, created.id, payload, key=f"approve-{step}") == result
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     before = reads.read_project(Reader(), created.id)
     assert before.approved_steps == ["classes", "guide", "scope"]
