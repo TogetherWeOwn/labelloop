@@ -13,7 +13,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
   const [editing, setEditing] = useState<{ row: ClassRow; revision: number; draftId: string } | null>(null);
   const [referenceEntry, setReferenceEntry] = useState<{ revision: number; draftId: string } | null>(null);
   const [assistantEntry, setAssistantEntry] = useState<{ revision: number; draftId: string; scope: string } | null>(null);
-  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null || assistantEntry !== null;
+  const [importEntry, setImportEntry] = useState<{ revision: number; draftId: string } | null>(null);
+  const pendingEdits = unsavedFields || editing !== null || referenceEntry !== null || assistantEntry !== null || importEntry !== null;
   const step = setupSteps[stepIndex];
   const readOnly = actions.role !== 'admin' || draft.published || !actions.connected || actions.busy;
   const earlierApproved = setupSteps.slice(0, stepIndex).every((part) => draft.approved_steps.includes(part));
@@ -43,6 +44,8 @@ export function NewProjectView({ data, actions }: ScreenProps) {
         <Notice tone="info">Dataset import and assistant generation are not connected in this module. Assistant request capture does not call a provider, authorize spend or approve classes. Returned proposals need individual admin acceptance.</Notice>
         <CommandButton actions={actions} disabled={readOnly || pendingEdits} reason={data.paid_paused ? 'Paid steps are paused. Assistant drafting is unavailable.' : !draft.approved_steps.includes('Scope') ? 'Approve the scope before requesting draft classes.' : undefined} onClick={() => setAssistantEntry({ revision: draft.revision, draftId: draft.id, scope: draft.scope.detect })}>Draft with the assistant</CommandButton>
         {assistantEntry && <AssistantDraft draft={draft} actions={actions} revision={assistantEntry.revision} draftId={assistantEntry.draftId} scope={assistantEntry.scope} readOnly={readOnly || data.paid_paused} onClose={() => setAssistantEntry(null)} />}
+        <CommandButton actions={actions} disabled={readOnly || pendingEdits} onClick={() => setImportEntry({ revision: draft.revision, draftId: draft.id })}>Import from a labelled dataset</CommandButton>
+        {importEntry && <DatasetImport draft={draft} actions={actions} revision={importEntry.revision} draftId={importEntry.draftId} readOnly={readOnly} onClose={() => setImportEntry(null)} />}
         {draft.dataset_import ? <section className="stack" aria-label="Dataset import validation">
           <h3>Dataset import validation</h3>
           <Facts items={[[ 'Report', draft.dataset_import.id ], ['Source', draft.dataset_import.source_name], ['Rows checked', draft.dataset_import.rows], ['Result', draft.dataset_import.state]]} />
@@ -86,6 +89,33 @@ export function NewProjectView({ data, actions }: ScreenProps) {
     </section>
     <div className="stack setup-rail"><nav className="card" aria-label="Setup steps"><details open><summary>Step {stepIndex + 1} of 6 · {step} · All steps</summary><ol className="steps">{setupSteps.map((part, index) => <li key={part} aria-current={index === stepIndex ? 'step' : undefined}><Button disabled={pendingEdits || actions.busy} onClick={() => setStepIndex(index)}><span className="mono">0{index + 1}</span> {part}</Button><span className="tag">{draft.approved_steps.includes(part) ? 'Done' : index === stepIndex ? 'Now' : 'Not approved'}</span></li>)}</ol></details></nav><Notice>Automation stays off for a class until it has enough reviewed examples and passes its pilot. Almond milk needs at least 1 more.</Notice></div></div>
   </>;
+}
+
+function DatasetImport({ draft, actions, revision, draftId, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; readOnly: boolean; onClose: () => void }) {
+  const [file, setFile] = useState<{ name: string; size: number } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const conflict = draftId !== draft.id || revision !== draft.revision;
+  const reason = conflict ? 'The draft changed. Discard this selection and inspect current records before importing again.' : !file ? 'Select a labelled dataset file first.' : !file.name.trim() || !Number.isSafeInteger(file.size) || file.size <= 0 ? 'Select a non-empty file. File contents and format are not validated here.' : undefined;
+  async function capture() {
+    if (readOnly || saving || reason || !file) return;
+    setSaving(true);
+    const saved = await actions.send({ kind: 'request_dataset_import', draft_id: draftId, expected_revision: revision, file });
+    setSaving(false); setFailed(!saved);
+    if (saved) onClose();
+  }
+  return <form className="stack" aria-label="Dataset import request" onSubmit={(event) => { event.preventDefault(); void capture(); }}>
+    <h3>Import from a labelled dataset</h3>
+    <Facts items={[[ 'Inspected draft', `${draftId} · revision ${revision}`]]} />
+    <Notice tone="info">Fixture selection capture only. No file contents are read, uploaded or imported. Selecting a file does not validate its format, labels or permitted use.</Notice>
+    <div className="field"><label htmlFor="dataset-import-file">Labelled dataset file</label><input id="dataset-import-file" type="file" disabled={readOnly || saving} onChange={(event) => { const selected = event.currentTarget.files?.[0]; setFile(selected ? { name: selected.name, size: selected.size } : null); setFailed(false); }} /></div>
+    {file && <Facts items={[[ 'Selected file', file.name ], ['File size', `${file.size} bytes`]]} />}
+    <p>The server must validate the upload, archive limits, class mapping, source provenance and split isolation. Only returned validation reports and Proposed rows may enter this draft. Class acceptance remains a separate admin action; this request cannot approve steps or start bulk labelling.</p>
+    {conflict && <Notice tone="danger">The draft changed while this import selection was open. Your selection is retained; no request was retargeted to the new revision.</Notice>}
+    {failed && <Notice tone="danger">The dataset import request was not confirmed. Your selection is retained; refresh uncertain records before trying again. No import or class approval is implied.</Notice>}
+    <CommandButton actions={actions} disabled={readOnly || saving} reason={reason} onClick={() => { void capture(); }}>{saving ? 'Capturing import request…' : 'Capture dataset import request'}</CommandButton>
+    <Button disabled={saving || actions.busy} onClick={onClose}>Discard import selection</Button>
+  </form>;
 }
 
 function AssistantDraft({ draft, actions, revision, draftId, scope, readOnly, onClose }: { draft: ProjectDraft; actions: Actions; revision: number; draftId: string; scope: string; readOnly: boolean; onClose: () => void }) {

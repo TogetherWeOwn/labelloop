@@ -42,7 +42,7 @@ export function PortLifecycleFixture() {
   </>;
 }
 
-export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
+export function RefreshLifecycleFixture({ screen, importRejected = false }: { screen: Screen; importRejected?: boolean }) {
   const [rig] = useState(() => {
     const snapshot = structuredClone(fixtureSnapshot);
     snapshot.provenance = 'server';
@@ -53,7 +53,7 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
       read: () => Promise.resolve(structuredClone(snapshot)),
       execute: (command) => {
         capture(command);
-        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes') return new Promise((resolve) => {
+        if (command.kind === 'save_setup' || command.kind === 'edit_class' || command.kind === 'add_reference' || command.kind === 'draft_assistant_classes' || command.kind === 'request_dataset_import') return new Promise((resolve) => {
           finishSave = () => {
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
@@ -61,6 +61,13 @@ export function RefreshLifecycleFixture({ screen }: { screen: Screen }) {
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
             if (command.kind === 'add_reference') snapshot.draft.references = [...snapshot.draft.references, { id: 'ref-linked', ...command.values, provenance: 'Proposed' }];
             if (command.kind === 'draft_assistant_classes') snapshot.draft.classes = [...snapshot.draft.classes, { id: 'assistant-oat', name: 'Oat milk 1 L', aliases: '', parent: '', exclusions: 'Soy milk', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
+            if (command.kind === 'request_dataset_import') {
+              snapshot.draft.dataset_import = { id: 'import-returned', source_name: command.file.name, rows: importRejected ? 14 : 1, state: importRejected ? 'Rejected' : 'Proposed', errors: importRejected ? [{ row: 14, field: 'name', message: 'Class name is empty' }] : [] };
+              if (!importRejected) {
+                snapshot.draft.classes = [...snapshot.draft.classes, { id: 'imported-yoghurt', name: 'Imported yoghurt', aliases: '', parent: '', exclusions: 'Milk cartons', mirror_safe: false, examples: 0, provenance: 'Proposed' }];
+                snapshot.draft.approved_steps = snapshot.draft.approved_steps.filter((step) => step === 'Scope');
+              }
+            }
             resolve({ message: 'Captured save only' });
           };
         });
