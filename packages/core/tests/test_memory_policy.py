@@ -423,7 +423,7 @@ def test_gold_requires_bound_independent_blind_human_provenance() -> None:
 @pytest.mark.parametrize("project_id", ["", "  ", None])
 def test_gold_audit_requires_project_identity(project_id: str | None) -> None:
     with pytest.raises(ValueError, match="project"):
-        replace(adjudication_for("holdout"), project_id=project_id)
+        replace(adjudication_for("holdout"), project_id=project_id)  # type: ignore[arg-type]
 
 
 def test_gold_audit_cannot_cross_projects_with_colliding_asset_and_revision() -> None:
