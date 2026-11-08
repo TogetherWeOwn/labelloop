@@ -37,16 +37,18 @@ def exercise_audit_sampling(engine, request):
     )
     with engine.begin() as connection:
         project_id = lock_project(connection, request.project_id)
-        # Canonical fixture sources initially have no group rows: never invent them
+        # Other qualification exercises already committed samples. A rejected
+        # population must preserve them as well as leave no partial new sample.
+        samples = sa.select(qualification_schema.audit_sample).order_by(
+            qualification_schema.audit_sample.c.project_id,
+            qualification_schema.audit_sample.c.sample_key,
+        )
+        before_samples = connection.execute(samples).mappings().all()
+        # Ordinary fixture sources initially have no group rows: never invent them
         # in the loader or silently reduce the population to rows that happen to join.
         with pytest.raises(ValueError, match="missing canonical revisions or pinned groups"):
             freeze_audit_sample(connection, **arguments)
-        assert (
-            connection.execute(
-                sa.select(sa.func.count()).select_from(qualification_schema.audit_sample)
-            ).scalar_one()
-            == 0
-        )
+        assert connection.execute(samples).mappings().all() == before_samples
         assets = connection.execute(
             sa.select(source_asset.c.id, source_asset.c.asset_key).where(
                 source_asset.c.project_id == project_id,
@@ -266,7 +268,10 @@ def exercise_audit_sampling(engine, request):
         results = {
             row["audit_key"]: row["record"]
             for row in connection.execute(
-                sa.select(qualification_schema.annotation_audit)
+                sa.select(qualification_schema.annotation_audit).where(
+                    qualification_schema.annotation_audit.c.project_id == project_id,
+                    qualification_schema.annotation_audit.c.release_id == release["id"],
+                )
             ).mappings()
         }
         assert set(results) == {"sample-partial", "sample-complete"}
