@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Final-test fixture repair and latest completed evidence
+## Canonical evaluation-group producer — assertions pending Actions
+
+`evaluation_group_store.load_evaluation_set` derives sorted, distinct groups from
+all exact source revisions in a scoped frozen canonical release. It uses that
+release's pinned assignment version and the existing current transitive-group
+checker, including exact duplicates and unselected intermediates. Missing sources,
+missing exact revisions, excluded members, absent assignments and newly conflicting
+relations fail closed rather than shrinking the evaluation population. Known final
+reservations override requested development/calibration use through the existing
+lifecycle guard. Project and canonical group locks remain held to outer commit.
+
+This is a grouping producer, not independent label truth, a measured score, an
+authorization boundary or authority to assign roles. The trusted service must select
+the release and role. The context assembler and direct registry/acceptance consumers
+**do not yet consume this producer**: their synthetic declared evaluation groups must
+be replaced with canonical, independently grouped fixtures before that wiring can be
+claimed. Reference and ancestor selection-use provenance are also still pending.
+No migration, endpoint, dependency, current consumer gate or second grouping engine
+is introduced.
+
+Twenty-four adapter cases and both-recipe PostgreSQL controls exercise recovery from
+committed canonical members, correlated support, missing/excluded/unfrozen revisions,
+pinned assignment identity, final-role replay and new cross-group relations. Scoped
+savepoint rollback retains all earlier qualification evidence. These new assertions
+await exact-head Actions; no local tests or builds ran.
+
+At preceding exact head `c448ec276138bc8778edeb65422ff843322b26a4`,
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42482104676) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42482104354) succeeded.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42482104676/job/128736104396)
+reported **1419 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42482104676/job/128736104351)
+reported **19 passed**, plus **24 passed** in its separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42482104676/job/128736104322)
+reported **39 passed**. Migration round trip and all four parent upgrades, dev-stack,
+web-build and lint/types/import-contract passed. This verifies earlier persisted
+mechanics and the audit-smoke coexistence repair, not this producer, authenticated
+HTTP/UI/restore acceptance or domain quality. The PR stays draft and required Devin,
+fresh-context and native reviews remain gates.
+
+## Historical final-test fixture repair evidence
 
 At exact head `c38285fa1cdfc48c761ef94f6f1d4e62d8fce13b`,
 [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42479456754) failed:

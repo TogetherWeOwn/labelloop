@@ -478,6 +478,88 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
         transaction.rollback()
 
 
+def _exercise_evaluation_groups(connection, release, annotation, canary, actor):
+    """Canonical grouping proof only; role selection and independent truth are separate."""
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+    from labelloop_api.schema import similarity_relation
+
+    arguments = dict(project_key=release.project_id, dataset_key=annotation.release_key)
+    expected_group = annotation.release_key + "-group"
+    for role in ("development", "calibration", "locked_final_test"):
+        assert load_evaluation_set(connection, **arguments, role=role).group_ids == (
+            expected_group,
+        )
+    canonical = (
+        connection.execute(
+            sa.select(canonical_dataset_release).where(
+                canonical_dataset_release.c.release_key == annotation.release_key
+            )
+        )
+        .mappings()
+        .one()
+    )
+    for change in (
+        {"sample_revisions": {"missing-source": 1}},
+        {"sample_revisions": dict.fromkeys(canonical["sample_revisions"], 999)},
+        {"assignment_version": "missing-evaluation-assignment"},
+        {"excluded_asset_ids": list(canonical["sample_revisions"])},
+        {"frozen": False},
+    ):
+        with connection.begin_nested() as transaction:
+            key = annotation.release_key + "-invalid-evaluation"
+            connection.execute(
+                sa.insert(canonical_dataset_release).values(
+                    **(
+                        {
+                            key: value
+                            for key, value in canonical.items()
+                            if key not in {"id", "created_at"}
+                        }
+                        | {"release_key": key}
+                        | change
+                    )
+                )
+            )
+            with pytest.raises((ValueError, sa.exc.NoResultFound)):
+                load_evaluation_set(
+                    connection, **(arguments | {"dataset_key": key}), role="development"
+                )
+            transaction.rollback()
+    with connection.begin_nested() as transaction:
+        dataset = load_evaluation_set(connection, **arguments, role="locked_final_test")
+        register_final_test(connection, dataset=dataset, actor_id=actor)
+        for role in ("development", "calibration"):
+            with pytest.raises(ValueError, match="role forbids"):
+                load_evaluation_set(connection, **arguments, role=role)
+        transaction.rollback()
+    with connection.begin_nested() as transaction:
+        identities = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                    source_asset.c.asset_key.in_(
+                        [annotation.release_key + "-positive", canary.release_key + "-positive"]
+                    )
+                )
+            )
+        }
+        connection.execute(
+            sa.insert(similarity_relation).values(
+                left_asset_id=identities[annotation.release_key + "-positive"],
+                right_asset_id=identities[canary.release_key + "-positive"],
+                reason="declared_metadata",
+                evidence="synthetic evaluation grouping conflict",
+                algorithm_version="synthetic-v1",
+            )
+        )
+        with pytest.raises(ValueError, match="merge pinned groups"):
+            load_evaluation_set(connection, **arguments, role="locked_final_test")
+        transaction.rollback()
+    assert load_evaluation_set(connection, **arguments, role="development").group_ids == (
+        expected_group,
+    )
+
+
 def exercise_context_assembly(engine, release, final, context, actor):
     scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
     with engine.begin() as connection:
@@ -532,6 +614,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
             ).scalar_one()
             == count
         )
+        _exercise_evaluation_groups(connection, release, annotation, canary, actor)
         loaded = load_qualification_context(connection, **arguments)
         assert set(training_groups) <= set(loaded.evidence.lineage.training_group_ids)
         assert loaded.evidence.annotation_audit != context.evidence.annotation_audit
@@ -611,6 +694,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
     return {
         "scope": "synthetic canonical assembly/acceptance mechanics, never domain quality or HTTP",
         "reconnected_model_report_policy_final_and_both_measured_outcomes": True,
+        "canonical_evaluation_groups_recover_and_reject_missing_or_conflicting_sources": True,
         "complete_fresh_canary_passes_and_partial_outcome_fails": True,
         "prior_audit_group_reuse_rejected_with_registry_unchanged": True,
         "locked_development_identity_rejected_by_assembly_acceptance_and_registry": True,
