@@ -15,6 +15,7 @@ from .management_details import (
     ProjectDetail,
     ReferenceLifecycleList,
     ReleaseDetail,
+    TrainingDetail,
 )
 from .management_freeze_plan import freeze_plan
 from .management_ports import ManagementPrincipal
@@ -291,6 +292,39 @@ class CanonicalManagementReads:
                     refuse("not_found")
                 try:
                     return evaluation_detail(connection, row, self.workspace_id)
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
+
+    def read_training(self, actor: ManagementPrincipal, run_id: str) -> TrainingDetail:
+        from .management_training_reads import training_detail
+        from .model_schema import training_run
+        from .schema import yolo_dataset_variant
+
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(training_run, owned.c.id.label("project_id"))
+                    .select_from(training_run)
+                    .join(
+                        yolo_dataset_variant,
+                        training_run.c.variant_id == yolo_dataset_variant.c.id,
+                    )
+                    .join(
+                        canonical_dataset_release,
+                        yolo_dataset_variant.c.release_id == canonical_dataset_release.c.id,
+                    )
+                    .join(owned, canonical_dataset_release.c.project_id == owned.c.id)
+                    .where(training_run.c.run_key == run_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                try:
+                    return training_detail(connection, row, self.workspace_id)
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 

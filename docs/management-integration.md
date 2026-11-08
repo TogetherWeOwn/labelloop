@@ -971,6 +971,36 @@ invisibility, enforced read-only operation, identity/workspace refusal, applicat
 generation/status, duplicate completion and hand-inserted/borrowed evidence.
 These new detail cases are not verified until their exact-head Actions completes.
 
+## Completed local-training detail
+
+`CanonicalManagementReads.read_training` resolves a persisted completed run only
+after human admin/reviewer workspace ownership, in one read-only repeatable
+snapshot. It checks the unique human intent and attributed completion, current
+successful queue application generation, saved training stage/hash, receipt-backed
+profile and compiler publication. The existing core training and runtime-evidence
+validators recheck the immutable result, selected checkpoints, persisted checkpoint
+reports, manifest, tensor shapes and lossless dataloader audit. The only project
+identity translation is the verified canonical UUID to the model store's public
+project key. It does not require current server profile configuration to retain a
+historical completed run.
+
+The existing DTO returns pinned requested/resolved arguments only, never additional
+provider arguments, paths, object keys or raw runtime metadata. `images` counts
+training derivatives; `epoch` counts completed epochs, while checkpoint epochs stay
+zero-based. Retention totals describe recorded dataloader audit observations, not
+unique source objects or a new independent identity audit. The checked baseline
+permits no drops, so its dropped-object and mismatch lists are empty. Completion
+time comes from the attributed receipt. This is execution evidence, not model
+quality or qualification. Queued/running/failed/cancelled jobs and live progress
+remain unsupported here rather than being represented as completed runs.
+
+Fourteen disposable Actions cases cover both recipes, precommit invisibility,
+enforced read-only operation, identity/workspace refusal, current training/compiler
+application generations, failed jobs, duplicate intent/completion and hand-inserted
+runs/borrowed receipts. These cases await exact-head Actions; synthetic DB training
+artifacts do not establish real CPU or full mounted HTTP acceptance. No schema,
+client, dependency, migration, runtime grant or default mounting change is needed.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

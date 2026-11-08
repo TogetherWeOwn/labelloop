@@ -256,6 +256,207 @@ def test_registered_evaluation_executes_or_resumes_and_links_once(
 
 
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_training_detail_is_read_only_and_exposes_only_pinned_arguments(
+    database, compilation, compiler_worker, recipe
+):
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    from labelloop_api.management_train_worker import decode_training
+
+    service, owner, role = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    record["result"]["resolved_arguments"]["provider_path"] = "/private/worker/output"
+    compiler_worker.store.save_stage(lease, "training", record)
+
+    def sink(connection, current, artifacts):
+        worker.publish(connection, current, artifacts)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read_training(Reader(), accepted.resource.id)
+
+    compiler_worker.store.complete(lease, ("training",), sink)
+    before = training_publication_state(owner, accepted)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_training(
+            Reader(), accepted.resource.id
+        )
+        assert detail == reads.read_training(Actor(), accepted.resource.id)
+    finally:
+        readonly.dispose()
+    result = decode_training(record["result"])
+    assert detail.resource == accepted.resource.model_copy(update={"state": "completed"})
+    assert detail.recipe_id == recipe
+    assert detail.dataset_release_id == result.request.dataset_release_id
+    assert detail.variant_id == lease.input["variant_id"]
+    assert detail.training_profile_id == lease.input["profile"]["id"]
+    assert detail.training_profile_revision == lease.input["profile"]["revision"]
+    assert detail.initialization_sha256 == result.request.initialization_sha256
+    assert detail.epoch == detail.epochs == result.request.epochs
+    assert detail.images == len(record["target_retention"])
+    assert detail.requested_arguments == detail.resolved_arguments == result.request.arguments()
+    assert detail.checkpoints == list(result.checkpoints)
+    assert detail.retention.before == detail.retention.after == 0
+    assert detail.retention.dropped_object_ids == detail.mismatches == []
+    assert detail.reason is None and detail.updated_at
+    encoded = detail.model_dump_json()
+    assert all(key not in encoded for key in ("provider_path", "/private/", "checkpoint_keys"))
+    assert training_publication_state(owner, accepted) == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"kind": "service"}, {"granted": False}, {"role": "worker_ml"}, {"id": ""}],
+)
+def test_training_detail_denies_untrusted_identity_before_database(database, overrides):
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_training(
+            Reader(**overrides), "unknown"
+        )
+
+
+def test_training_detail_hides_foreign_workspace_and_unknown_runs(
+    database, compilation, compiler_worker
+):
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    compiler_worker.store.complete(lease, ("training",), worker.publish)
+    service, _, _ = database
+    for workspace, run_id in [(uuid4(), accepted.resource.id), (service.workspace_id, "unknown")]:
+        with pytest.raises(ManagementFailure, match="not_found"):
+            CanonicalManagementReads(service.engine, workspace).read_training(Reader(), run_id)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["generation", "failed", "compile_generation", "duplicate_receipt", "duplicate_intent"],
+)
+def test_training_detail_requires_current_unique_fenced_publication(
+    database, compilation, compiler_worker, change
+):
+    worker, _, _, compiled, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    compiler_worker.store.complete(lease, ("training",), worker.publish)
+    service, owner, _ = database
+    with owner.begin() as connection:
+        if change == "duplicate_receipt":
+            receipt = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.training_completed",
+                        canonical_event.c.aggregate_id == accepted.resource.id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in receipt.items()
+                        if key not in {"id", "occurred_at"}
+                    }
+                )
+            )
+        elif change == "duplicate_intent":
+            intent = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.start_training",
+                        canonical_event.c.payload["evidence"]["job_id"].as_string()
+                        == accepted.job_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in intent.items()
+                        if key not in {"id", "occurred_at"}
+                    }
+                )
+            )
+        else:
+            assignment = "status='failed'" if change == "failed" else "generation=generation+1"
+            connection.execute(
+                text(f"UPDATE worker_job SET {assignment} WHERE job_id=:id"),
+                {"id": compiled.job_id if change == "compile_generation" else accepted.job_id},
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_training(
+            Reader(), accepted.resource.id
+        )
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_training_detail_refuses_hand_inserted_run_and_borrowed_receipt(
+    database, compilation, compiler_worker, receipt
+):
+    from copy import deepcopy
+
+    from labelloop_api.model_schema import training_run
+
+    worker, _, _, _, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", record)
+    compiler_worker.store.complete(lease, ("training",), worker.publish)
+    service, owner, _ = database
+    forged_id = str(uuid4())
+    with owner.begin() as connection:
+        run = connection.execute(
+            select(training_run).where(training_run.c.run_key == accepted.resource.id)
+        ).one()
+        forged = deepcopy(run.record)
+        forged["request"]["run_id"] = forged_id
+        connection.execute(
+            insert(training_run).values(
+                run_key=forged_id,
+                variant_id=run.variant_id,
+                input_manifest=run.input_manifest,
+                record=forged,
+            )
+        )
+        if receipt:
+            original = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.training_completed",
+                        canonical_event.c.aggregate_id == accepted.resource.id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in original.items()
+                        if key not in {"id", "occurred_at", "aggregate_id"}
+                    },
+                    aggregate_id=forged_id,
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_training(
+            Reader(), forged_id
+        )
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_evaluation_detail_is_read_only_and_never_qualifies(
     database, compilation, compiler_worker, recipe
 ):
