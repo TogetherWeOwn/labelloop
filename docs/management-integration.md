@@ -113,6 +113,57 @@ CI aggregator requires it for both. A successful Python generator alone cannot
 satisfy the client contract. These remain the isolated management contract, not
 a final combined app schema. No local suite is used as a substitute.
 
+## Canonical transaction adapter (partial, unmounted)
+
+`CanonicalManagementMutations` implements project creation and original-image
+ingestion using the existing canonical tables, `ingest_canonical_asset` and
+`canonical_event`; it is not a complete `ManagementOperations` implementation.
+No new table, migration, queue, grant or production binding is introduced.
+The workspace UUID comes only from trusted deployment configuration. The
+adapter rechecks human/admin authority and context attribution, scopes project
+lookups to that workspace, and authorizes ownership before returning a replay.
+Existing projects without management events fail closed pending explicit adoption.
+
+The engine must use READ COMMITTED; repeatable-snapshot configurations are
+refused so replay reads can see a commit made while awaiting a lock.
+Each transaction takes a Postgres transaction-scoped advisory lock on workspace,
+actor and retry key. A matching fingerprint returns the original resource before
+revision checks; changing the actor/operation/target/body cannot replay it.
+Creation additionally serializes the globally unique project key. Asset writes
+lock the canonical project row, check its management revision from canonical
+events, call the delivered orientation-normalizing ingest, append the initial
+unreviewed annotation revision, and commit one attributed event with the result.
+The asset's resource revision is its annotation revision (initially 1); the event
+also records the incremented **project** revision. Source group metadata and the
+pinned imaging toolchain are retained in that event. Materialized grouping/split
+assignment and setup publication are still unimplemented, not inferred from it.
+
+The supplied runtime role must have SELECT/INSERT on the touched canonical
+tables, permission to lock the project row (Postgres requires UPDATE privilege
+on at least one project column), and **no UPDATE, DELETE or TRUNCATE privilege on
+canonical_event**. Every transaction checks that last condition, refusing broad
+owner/superuser connections with `management_unavailable`. The adapter does not
+create or widen runtime roles. Final deployment must integrate real least-
+privilege role provisioning and shared auth, and independently verify all grants.
+The disposable Actions fixture uses a temporary NOLOGIN role with UPDATE(scope)
+on project for row locking; it removes that role's grants and role on teardown.
+
+A storage or database error rolls back canonical rows and the audit/replay
+receipt together. Object storage is not transactional: an event failure after
+upload may leave an unreferenced, immutable content-addressed object, never a
+successful asset receipt; retries normalize the original again and safely reuse
+those bytes. No remote URL is fetched. Async release/compile/train/evaluate and
+setup edits are not implemented by this class, so it cannot dispatch paid work
+or claim queue/qualification semantics.
+
+Actions runs `test_management_canonical_db.py` against the migrated disposable
+Postgres service in the existing ML job. Cases cover concurrent same-key retry,
+different-key stale-revision writers, workspace/actor isolation, event/storage
+failure rollback, normalized pixels/provenance, and direct runtime-role event
+mutation refusals. They are commissioned, **not passing evidence until exact-
+head Actions completes**. These cases do not establish sessions/CSRF, frozen
+release eligibility, full setup lifecycle, fenced jobs or project-to-export.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

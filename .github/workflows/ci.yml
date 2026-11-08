@@ -235,6 +235,10 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
+      - name: Canonical management transactions and runtime-role refusals
+        run: uv run pytest apps/api/tests/test_management_canonical_db.py -v
+        env:
+          LABELLOOP_MANAGEMENT_DB_TESTS: "1"
       - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
