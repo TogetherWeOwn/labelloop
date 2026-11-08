@@ -25,6 +25,7 @@ from labelloop_core.invalidation import (
 )
 from labelloop_core.lineage import LineageGraph
 from labelloop_core.references import (
+    GoldAdjudication,
     MemoryExample,
     ReferenceImport,
     ReferencePack,
@@ -306,6 +307,50 @@ def query_for(scope: EvidenceScope) -> ReferenceQuery:
     )
 
 
+def adjudication_for(asset_id: str) -> GoldAdjudication:
+    # Simulated audit metadata tests the port, not actual human/gold evidence.
+    return GoldAdjudication(
+        "audit-event-1",
+        asset_id,
+        1,
+        "real_image",
+        "human_blind",
+        "independent-adjudicator",
+        frozenset({"annotator"}),
+        frozenset({"reviewer"}),
+        True,
+    )
+
+
+def test_gold_requires_bound_independent_blind_human_provenance() -> None:
+    scope = scope_for()
+    anchor = memory_for(scope, "holdout")
+    revision = replace(anchor.revision, gold_eligible=True)
+    with pytest.raises(ValueError, match="adjudication provenance"):
+        replace(anchor, collection="gold", revision=revision)
+    evidence = adjudication_for("holdout")
+    for changes in (
+        {"pixel_origin": "constructive_synthetic"},
+        {"pixel_origin": "seeded_perturbation"},
+        {"truth_origin": "public_labels"},
+        {"truth_origin": "constructive_synthetic"},
+        {"truth_origin": "seeded_perturbation"},
+        {"blind": False},
+        {"adjudicator_id": "annotator"},
+        {"adjudicator_id": "reviewer"},
+        {"adjudicator_id": ""},
+        {"reviewer_ids": frozenset({""})},
+        {"evidence_id": ""},
+    ):
+        with pytest.raises(ValueError, match="gold"):
+            replace(evidence, **changes)
+    for unbound in (replace(evidence, asset_id="easy-a"), replace(evidence, revision=2)):
+        with pytest.raises(ValueError, match="bind"):
+            replace(anchor, collection="gold", revision=revision, gold_adjudication=unbound)
+    gold = replace(anchor, collection="gold", revision=revision, gold_adjudication=evidence)
+    assert ReferencePack("gold", "1", scope, (gold,)).examples == (gold,)
+
+
 def test_reference_enrollment_preserves_collections_teacher_and_distributions() -> None:
     scope = scope_for()
     anchor = memory_for(scope)
@@ -319,6 +364,7 @@ def test_reference_enrollment_preserves_collections_teacher_and_distributions() 
         memory_for(scope, "holdout"),
         collection="gold",
         revision=replace(revision_for(scope), gold_eligible=True),
+        gold_adjudication=adjudication_for("holdout"),
     )
     pack = ReferencePack("approved", "1", scope, (anchor, automatic, gold))
     distributions = collection_distributions(pack, small_max_px=16, medium_max_px=32)
@@ -445,6 +491,7 @@ def test_gold_enrollment_requires_source_group_quarantine_before_any_retrieval()
         collection="gold",
         revision=replace(anchor.revision, gold_eligible=True),
         reference=replace(anchor.reference, reference_id="gold:easy-a"),
+        gold_adjudication=adjudication_for("easy-a"),
     )
     with pytest.raises(ValueError, match="gold.*quarantin"):
         ReferencePack("pack", "1", scope, (anchor, gold))

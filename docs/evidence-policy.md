@@ -16,7 +16,10 @@ source group from training selection and reference retrieval. An unrecognized ID
 fails closed. Derivatives cannot masquerade as canonical sources; reference crops
 are explicit rectangles on original source pixels. Related/near-duplicate grouping
 must already have been computed by the delivered grouping module, not inferred by
-these ports. An incomplete inventory cannot establish independence.
+these ports. An incomplete inventory cannot establish independence. Evaluation results used to
+guide a change become development evidence; preserve the historical release and
+obtain a new independent final assessment rather than recycling its examples into
+training, active selection or references.
 
 ## Active selection (`labelloop_core.selection`)
 
@@ -53,8 +56,15 @@ and system-qualified acceptance. All training references require accepted comple
 non-gold revisions; positive crops must contain a complete labeled class instance.
 Gold enrollment requires its source group to be quarantined in the authoritative
 scope first, so another revision or pack cannot retrieve the same evaluation pixels.
-Provenance,
-validity scope/tags, scene, diversity cluster, utility and positive versus confusion
+It also requires a `GoldAdjudication` bound to the exact source/revision: real-image
+pixels, blind human truth and an adjudicator distinct from **every** prior annotator
+and reviewer. Public labels may seed review but are not gold truth. Constructive
+synthetic and seeded-perturbation truth cannot qualify for gold, even when the
+revision claims `gold_eligible`. Callers project this record from authenticated audit
+history, including the complete prior principal sets; these pure ports cannot verify
+that history or authenticate a principal. Canonical human/adjudicated states must be
+created by that authenticated producer, never by a synthetic-truth generator.
+Provenance, validity scope/tags, scene, diversity cluster, utility and positive versus confusion
 negative kind survive enrollment. Gold can remain in a pack for accounting but is
 never retrieved. `collection_distributions` reports object class/size/occlusion and
 example teacher/scene counts separately for all three collections, with explicit
@@ -101,4 +111,6 @@ or make persistence-state changes on their own.
 wildlife catalogs. GitHub Actions runs these fixtures with strict typing and the
 existing full offline CI gates. No dependency additions, live Platform calls or paid
 provider calls are needed. This slice does not claim the milestone's separate
-end-to-end measured improvement experiment or its persistence integrations.
+end-to-end measured improvement experiment or its persistence integrations. Simulated
+human/gold audit records exercise eligibility and invalidation branches only; they
+are not actual human adjudications, canonical domain gold or live-quality evidence.

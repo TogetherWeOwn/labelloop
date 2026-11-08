@@ -13,6 +13,38 @@ ReferenceKind = Literal["positive", "confusion_negative"]
 
 
 @dataclass(frozen=True, slots=True)
+class GoldAdjudication:
+    """Trusted audit projection; callers supply the complete prior human history."""
+
+    evidence_id: str
+    asset_id: str
+    revision: int
+    pixel_origin: Literal["real_image", "constructive_synthetic", "seeded_perturbation"]
+    truth_origin: Literal[
+        "human_blind", "public_labels", "constructive_synthetic", "seeded_perturbation"
+    ]
+    adjudicator_id: str
+    annotator_ids: frozenset[str]
+    reviewer_ids: frozenset[str]
+    blind: bool
+
+    def __post_init__(self) -> None:
+        if (
+            not self.evidence_id.strip()
+            or not self.asset_id.strip()
+            or type(self.revision) is not int
+            or self.revision < 1
+            or not self.adjudicator_id.strip()
+            or any(not principal.strip() for principal in self.annotator_ids | self.reviewer_ids)
+        ):
+            raise ValueError("gold adjudication requires identified audit evidence and principals")
+        if self.pixel_origin != "real_image" or self.truth_origin != "human_blind":
+            raise ValueError("gold requires real-image human truth, never synthetic or public labels")
+        if self.blind is not True or self.adjudicator_id in self.annotator_ids | self.reviewer_ids:
+            raise ValueError("gold requires blind adjudication distinct from every prior participant")
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryExample:
     reference: ReferenceExample
     revision: AnnotationRevision
@@ -23,6 +55,7 @@ class MemoryExample:
     validity_tags: frozenset[str]
     kind: ReferenceKind
     utility: float
+    gold_adjudication: GoldAdjudication | None = None
 
     def __post_init__(self) -> None:
         if self.collection not in {"anchor", "auto_expanded", "gold"}:
@@ -40,9 +73,17 @@ class MemoryExample:
                 raise ValueError("automatic expansions must retain machine acceptance provenance")
         elif self.revision.review_tier not in {"human_reviewed", "adjudicated"}:
             raise ValueError("anchor and gold collections require independent human review")
-        if self.collection == "gold" and not self.revision.gold_eligible:
-            raise ValueError("gold collection requires adjudicated gold eligibility")
-        if self.collection != "gold":
+        if self.collection == "gold":
+            if not self.revision.gold_eligible:
+                raise ValueError("gold collection requires adjudicated gold eligibility")
+            if self.gold_adjudication is None:
+                raise ValueError("gold collection requires independent adjudication provenance")
+            if (
+                self.gold_adjudication.asset_id != self.reference.asset_id
+                or self.gold_adjudication.revision != self.revision.revision
+            ):
+                raise ValueError("gold adjudication must bind the exact source and revision")
+        else:
             require_accepted(self.revision)
 
 
