@@ -6,3 +6,4 @@ ignoreScripts: true
 
 overrides:
   rollup: 4.67.5
+  '@typescript-eslint/typescript-estree@8.72.1>minimatch': 11.0.4
