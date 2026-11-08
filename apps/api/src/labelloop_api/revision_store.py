@@ -13,6 +13,7 @@ from labelloop_core.qualification import QualificationContext
 from labelloop_core.qualification_data import ScopeCell, require_name, require_scope
 
 from .acceptance_store import require_automatic_acceptance
+from .generated_label_store import proposal_teacher, record_generated_label_origin
 from .qualification_store import lock_project
 from .repository import source_uuid
 from .schema import annotation_revision, project, review_event, source_asset
@@ -64,7 +65,16 @@ def append_review(
     training_eligible: bool = False,
     gold_eligible: bool = False,
     automatic: AutomaticReview | None = None,
+    proposal_run_key: str | None = None,
 ) -> int:
+    """Append one authorized review, atomically retaining supplied proposal influence.
+
+    The service must supply every contributing proposal run; omission cannot prove
+    an annotation was made without a teacher. This is not an HTTP authorization port.
+    """
+    if proposal_run_key is not None:
+        require_name(proposal_run_key)
+        require_name(actor_id)
     if actor_kind not in {"human", "model", "system"} or expected_revision < 1:
         raise ValueError("invalid actor or expected revision")
     if actor_kind != "human" and (
@@ -86,7 +96,8 @@ def append_review(
         raise ValueError("automatic qualification cannot authorize a non-automatic revision")
     asset_uuid = source_uuid(connection, asset_id)
     with connection.begin_nested():
-        if needs_qualification:
+        teacher_key = None
+        if needs_qualification or proposal_run_key is not None:
             # Follow registry/audit lock order before locking the annotation asset.
             project_key = connection.execute(
                 select(project.c.project_key)
@@ -94,6 +105,14 @@ def append_review(
                 .where(source_asset.c.id == asset_uuid)
             ).scalar_one()
             lock_project(connection, project_key)
+        if proposal_run_key is not None:
+            teacher_key = proposal_teacher(
+                connection,
+                project_key=project_key,
+                asset_key=asset_id,
+                expected_revision=expected_revision,
+                proposal_run_key=proposal_run_key,
+            )
         connection.execute(
             text("SELECT id FROM source_asset WHERE id = :asset_id FOR UPDATE"),
             {"asset_id": asset_uuid},
@@ -240,6 +259,15 @@ def append_review(
             )
         )
         connection.execute(insert(annotation_revision).values(**values))
+        if teacher_key is not None:
+            record_generated_label_origin(
+                connection,
+                project_key=project_key,
+                asset_key=asset_id,
+                revision=expected_revision + 1,
+                teacher_model_key=teacher_key,
+                actor_id=actor_id,
+            )
         connection.execute(
             text(
                 """INSERT INTO completeness_assessment

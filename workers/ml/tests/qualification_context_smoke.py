@@ -202,6 +202,55 @@ def _outcome(connection, release, context, actor, *, canary):
     return AnnotationOutcomeRef(prefix, prefix, prefix)
 
 
+def _proposal_origin_fixture(connection, release, asset_key, revision):
+    """Synthetic completed producer rows; not a claim of inference execution."""
+    import hashlib
+    import json
+
+    from labelloop_api.model_store import json_record
+    from labelloop_core.json_records import canonical_json
+
+    run_key = asset_key + f"-proposal-{revision}"
+    binding = dict(
+        run_id=run_key,
+        source=dict(project_id=release.project_id, asset_id=asset_key),
+        expected_revision=revision,
+    )
+    teacher = json_record(release)
+    record = dict(
+        run_id=run_key,
+        project_id=release.project_id,
+        binding=binding,
+        teacher=teacher,
+        checkpoint_sha256=release.weights_sha256,
+        approval_state="proposed",
+        review_tier="unreviewed",
+        scope_completeness="unreviewed",
+        training_eligible=False,
+        gold_eligible=False,
+    )
+    inputs = dict(run_id=run_key, request=binding, registry={"champion": teacher})
+    digest = hashlib.sha256(canonical_json(record)).hexdigest()
+    parameters = dict(
+        key=run_key,
+        project=release.project_id,
+        inputs=json.dumps(inputs),
+        record=json.dumps(record),
+        digest=digest,
+    )
+    for statement in (
+        "INSERT INTO worker_job(job_id,project_key,operation_key,kind,input,status,max_attempts) "
+        "VALUES (:key,:project,:key,'proposals',CAST(:inputs AS jsonb),'succeeded',1)",
+        "INSERT INTO worker_application(job_id,generation) VALUES (:key,0)",
+        "INSERT INTO worker_stage_artifact(job_id,stage,sha256,payload,generation) "
+        "VALUES (:key,'proposal',:digest,CAST(:record AS jsonb),0)",
+        "INSERT INTO worker_proposal_run(run_id,job_id,project_key,sha256,record) "
+        "VALUES (:key,:key,:project,:digest,CAST(:record AS jsonb))",
+    ):
+        connection.execute(sa.text(statement), parameters)
+    return run_key
+
+
 def _exercise_annotation_write(connection, release, final, loaded, canary, actor):
     """Actual revision/event writes, followed by a persisted scoped-pause veto."""
     with connection.begin_nested() as transaction:
@@ -247,7 +296,28 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 training_eligible=True,
                 automatic=automatic,
             )
+            arguments["proposal_run_key"] = _proposal_origin_fixture(
+                connection, release, asset_key, 1
+            )
             assert append_review(connection, expected_revision=1, **arguments) == 2
+            from labelloop_api.generated_label_store import label_teacher_runs
+
+            project_id = connection.execute(
+                sa.select(project.c.id).where(project.c.project_key == release.project_id)
+            ).scalar_one()
+            assert label_teacher_runs(connection, project_id)[asset_key] == [
+                (
+                    2,
+                    connection.execute(
+                        sa.select(model_schema.model_release.c.training_run_id).where(
+                            model_schema.model_release.c.release_key == release.release_id
+                        )
+                    ).scalar_one(),
+                )
+            ]
+            arguments["proposal_run_key"] = _proposal_origin_fixture(
+                connection, release, asset_key, 2
+            )
             assert (
                 connection.execute(
                     sa.select(annotation_revision.c.actor_id).where(
@@ -283,6 +353,42 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 .where(review_event.c.asset_id == asset_id)
             ).scalar_one()
             assert event_count == 1
+            connection.execute(
+                sa.text(
+                    "CREATE FUNCTION pg_temp.reject_origin() RETURNS trigger LANGUAGE plpgsql "
+                    "AS $$ BEGIN RAISE EXCEPTION 'injected origin failure'; END $$"
+                )
+            )
+            connection.execute(
+                sa.text(
+                    "CREATE TRIGGER reject_origin BEFORE INSERT ON "
+                    "qualification_generated_label_origin "
+                    "FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_origin()"
+                )
+            )
+            with pytest.raises(sa.exc.DBAPIError, match="injected origin failure"):
+                append_review(connection, expected_revision=2, **arguments)
+            connection.execute(
+                sa.text("DROP TRIGGER reject_origin ON qualification_generated_label_origin")
+            )
+            connection.execute(sa.text("DROP FUNCTION pg_temp.reject_origin()"))
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count())
+                    .select_from(review_event)
+                    .where(review_event.c.asset_id == asset_id)
+                ).scalar_one()
+                == event_count
+            )
+            assert (
+                connection.execute(
+                    sa.select(sa.func.max(annotation_revision.c.revision)).where(
+                        annotation_revision.c.asset_id == asset_id
+                    )
+                ).scalar_one()
+                == 2
+            )
+            assert len(label_teacher_runs(connection, project_id)[asset_key]) == 1
             # Scope state is journaled; the same previously valid context must now fail.
             with connection.begin_nested() as pause_transaction:
                 pause_acceptance(

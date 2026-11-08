@@ -6,6 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Completed proposal evidence joins annotation provenance
+
+When the authorized service supplies a proposal run to `append_review`, teacher
+identity now comes from its completed fenced producer record, not a submitted
+teacher name or the current champion. The loader checks project, source, exact
+expected revision, immutable job binding, application generation, stage/result
+digests and the complete registered model release. Project-first locking and a
+shared job lock survive through the annotation transaction. Negative and partial
+proposals still retain teacher influence; they do not gain approval by doing so.
+Initial external detectors without registered lineage fail closed on this path.
+
+The resulting revision, principal-bound review event and exact-revision teacher
+link share one savepoint. Adapter cases cover substitution and failed lookups or
+origin writes. Synthetic Actions PostgreSQL cases exercise both positive and
+negative revisions, retain the pinned teacher and inject origin-write failure
+that must leave revisions, events and links unchanged. New assertions await
+exact-head Actions; no local tests or passing acceptance are claimed.
+
+The service still must select every contributing proposal from trusted work
+history. Omission of the optional run is not proof of teacher-free annotation;
+multiple-run provenance collection, original acceptance/pipeline/threshold and
+independent measurement producers and authenticated HTTP wiring remain required.
+This store integration adds no endpoint, migration or dependency and is not an
+inference-execution, domain-gold or authorization claim.
+
+At prior head `98299de`, [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42468848117)
+failed: unit **2 failed, 1328 passed, 80 skipped** (both global migration-head
+assertions); all 31 annotation repository cases passed. PostgreSQL annotation
+assertions did not run because ML smoke stopped at multiple-head migration setup.
+Queue/dev-stack separately failed setup-uv downloads with HTTP 504.
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42468847954), lint,
+types and import-contract passed. These results do not verify this new slice or
+clear migration, review, HTTP, recovery or operational-view gates.
+
 ## Annotation transaction consumes the current acceptance guard
 
 `append_review` now requires internal `AutomaticReview` inputs for automatic
