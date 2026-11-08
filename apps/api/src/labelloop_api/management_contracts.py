@@ -1,8 +1,10 @@
 """Untrusted management inputs and public, secret-free read models."""
 
+import base64
+import binascii
 from typing import Annotated, Literal, Self
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, model_validator
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")]
 Revision = Annotated[int, Field(ge=0)]
@@ -14,7 +16,7 @@ ResourceKind = Literal[
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, allow_inf_nan=False)
 
 
 class ClassInput(Contract):
@@ -47,9 +49,24 @@ class Mutation(Contract):
 
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
-    original_base64: Annotated[Base64Bytes, Field(min_length=1, max_length=12_582_912)]
+    original_base64: Annotated[
+        Base64Bytes, Field(strict=False, min_length=1, max_length=12_582_912)
+    ]
     source_uri: Annotated[str, Field(max_length=2048)] = ""
     source_group: Identifier
+
+    @field_validator("original_base64", mode="before")
+    @classmethod
+    def validate_base64_text(cls, value: object) -> str:
+        # JSON carries text, while the port receives decoded bytes. Relax only
+        # that conversion, not strict revisions or the base64 alphabet/bounds.
+        if not isinstance(value, str) or not 1 <= len(value) <= 16_777_216:
+            raise ValueError("invalid original encoding")
+        try:
+            base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("invalid original encoding") from None
+        return value
 
 
 class ReleaseFreeze(Mutation):

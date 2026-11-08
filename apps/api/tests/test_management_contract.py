@@ -184,6 +184,44 @@ def test_admin_dispatches_typed_payload_with_attributed_context(path, operation,
     assert received.expected_revision == payload.get("expected_revision", 0)
 
 
+def test_asset_json_text_is_decoded_for_the_port_without_relaxing_revisions():
+    client, service = client_for(Actor())
+    payload = MUTATIONS[1][2]
+    response = client.post(
+        "/projects/p/assets", json=payload, headers={"Idempotency-Key": "asset-1"}
+    )
+    assert response.status_code == 201, response.text
+    received = service.calls[0][1][2]
+    assert received.original_base64 == b"image"
+    assert received.model_dump(mode="json")["original_base64"] == payload["original_base64"]
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"original_base64": "%%%="},
+        {"original_base64": "aW1hZ2U=\n"},
+        {"original_base64": "aW1hZ2U"},
+        {"original_base64": ""},
+        {"original_base64": 123},
+        {"original_base64": None},
+        {"original_base64": [97, 98]},
+        {"expected_revision": "1"},
+        {"expected_revision": True},
+    ],
+)
+def test_asset_encoding_and_revision_refusals_do_not_reach_port(patch):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/assets",
+        json={**MUTATIONS[1][2], **patch},
+        headers={"Idempotency-Key": "asset-1"},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert not service.calls
+
+
 @pytest.mark.parametrize("path,operation,payload,status", MUTATIONS)
 @pytest.mark.parametrize("actor", [None, Actor(role="reviewer"), Actor(kind="service")])
 def test_mutations_deny_nonadmin_before_calling_port(path, operation, payload, status, actor):
@@ -323,8 +361,22 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 10
-    assert sum(len(methods) for methods in spec["paths"].values()) == 11
+    assert len(spec["paths"]) == 18
+    assert sum(len(methods) for methods in spec["paths"].values()) == 19
+    for model in (
+        "ProjectDetail",
+        "ReleaseDetail",
+        "FreezePlanRead",
+        "RecipePreviewRead",
+        "TrainingDetail",
+        "TrainingProfilesRead",
+        "EvaluationDetail",
+        "RegistryDetail",
+        "ModelRelease",
+        "EvaluationReport",
+        "AffineTransform",
+    ):
+        assert f"export type {model} =" in client
     assert "credentials: 'same-origin'" in client
     assert "redirect: 'error'" in client
     assert "X-CSRF-Token" in client

@@ -18,12 +18,23 @@ from .management_contracts import (
     ProjectCreate,
     PromotionRequest,
     PromotionResult,
+    RecipeId,
     ReleaseFreeze,
     Resource,
     ResourceKind,
     ResourcePage,
     TrainingStart,
     VariantCompile,
+)
+from .management_details import (
+    EvaluationDetail,
+    FreezePlanRead,
+    ProjectDetail,
+    RecipePreviewRead,
+    RegistryDetail,
+    ReleaseDetail,
+    TrainingDetail,
+    TrainingProfilesRead,
 )
 from .management_ports import (
     ManagementFailure,
@@ -268,5 +279,100 @@ def management_router(
         service: Annotated[ManagementOperations, Depends(operations)],
     ) -> ExportRead:
         return invoke(lambda: service.read_export(actor, model_id))
+
+    @router.get("/projects/{project_id}", response_model=ProjectDetail, operation_id="readProject")
+    def read_project(
+        project_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> ProjectDetail:
+        return invoke(lambda: service.read_project(actor, project_id))
+
+    @router.get(
+        "/projects/{project_id}/freeze-plan",
+        response_model=FreezePlanRead,
+        operation_id="readFreezePlan",
+    )
+    def read_freeze_plan(
+        project_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> FreezePlanRead:
+        return invoke(lambda: service.read_freeze_plan(actor, project_id))
+
+    @router.get(
+        "/dataset-releases/{release_id}",
+        response_model=ReleaseDetail,
+        operation_id="readDatasetRelease",
+    )
+    def read_release(
+        release_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> ReleaseDetail:
+        return invoke(lambda: service.read_release(actor, release_id))
+
+    @router.get(
+        "/dataset-releases/{release_id}/recipes/{recipe_id}/preview",
+        response_model=RecipePreviewRead,
+        operation_id="readRecipePreview",
+    )
+    def read_recipe_preview(
+        release_id: Identifier,
+        recipe_id: RecipeId,
+        asset_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> RecipePreviewRead:
+        return invoke(lambda: service.read_recipe_preview(actor, release_id, recipe_id, asset_id))
+
+    @router.get(
+        "/projects/{project_id}/training-profiles",
+        response_model=TrainingProfilesRead,
+        operation_id="listTrainingProfiles",
+    )
+    def list_training_profiles(
+        project_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> TrainingProfilesRead:
+        return invoke(lambda: service.list_training_profiles(actor, project_id))
+
+    @router.get(
+        "/training-runs/{run_id}", response_model=TrainingDetail, operation_id="readTrainingRun"
+    )
+    def read_training(
+        run_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> TrainingDetail:
+        return invoke(lambda: service.read_training(actor, run_id))
+
+    @router.get(
+        "/evaluations/{evaluation_id}",
+        response_model=EvaluationDetail,
+        operation_id="readEvaluation",
+    )
+    def read_evaluation(
+        evaluation_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> EvaluationDetail:
+        return invoke(lambda: service.read_evaluation(actor, evaluation_id))
+
+    @router.get(
+        "/projects/{project_id}/registry/{recipe_id}",
+        response_model=RegistryDetail,
+        operation_id="readRegistry",
+    )
+    def read_registry(
+        project_id: Identifier,
+        recipe_id: RecipeId,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+        cursor: Identifier | None = None,
+        limit: PageLimit = 50,
+    ) -> RegistryDetail:
+        return invoke(lambda: service.read_registry(actor, project_id, recipe_id, cursor, limit))
 
     return router

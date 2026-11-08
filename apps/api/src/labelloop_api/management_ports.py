@@ -30,6 +30,16 @@ from .management_contracts import (
     TrainingStart,
     VariantCompile,
 )
+from .management_details import (
+    EvaluationDetail,
+    FreezePlanRead,
+    ProjectDetail,
+    RecipePreviewRead,
+    RegistryDetail,
+    ReleaseDetail,
+    TrainingDetail,
+    TrainingProfilesRead,
+)
 
 
 class ManagementPrincipal(Protocol):
@@ -118,3 +128,32 @@ class ManagementOperations(Protocol):
     ) -> Resource: ...
 
     def read_export(self, actor: ManagementPrincipal, model_id: str) -> ExportRead: ...
+
+    def read_project(self, actor: ManagementPrincipal, project_id: str) -> ProjectDetail: ...
+
+    def read_release(self, actor: ManagementPrincipal, release_id: str) -> ReleaseDetail: ...
+
+    def read_freeze_plan(self, actor: ManagementPrincipal, project_id: str) -> FreezePlanRead: ...
+
+    def read_recipe_preview(
+        self, actor: ManagementPrincipal, release_id: str, recipe_id: str, asset_id: str
+    ) -> RecipePreviewRead: ...
+
+    def read_training(self, actor: ManagementPrincipal, run_id: str) -> TrainingDetail: ...
+
+    def list_training_profiles(
+        self, actor: ManagementPrincipal, project_id: str
+    ) -> TrainingProfilesRead: ...
+
+    def read_evaluation(
+        self, actor: ManagementPrincipal, evaluation_id: str
+    ) -> EvaluationDetail: ...
+
+    def read_registry(
+        self,
+        actor: ManagementPrincipal,
+        project_id: str,
+        recipe_id: str,
+        cursor: str | None,
+        limit: int,
+    ) -> RegistryDetail: ...
