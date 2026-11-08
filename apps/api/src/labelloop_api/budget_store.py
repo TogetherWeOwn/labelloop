@@ -526,7 +526,10 @@ class BudgetStore:
                     raise BudgetRefused("actual_conflict")
                 changed = gate.settle(operation_id, actual)
             if changed != gate:
-                self._save(connection, head, changed, operation_id, {"evidence": evidence})
+                # Preserve SQL NULL until real evidence exists; JSON null would
+                # activate the immutable-evidence guard and block later actuals.
+                extra = {"evidence": evidence} if evidence is not None else None
+                self._save(connection, head, changed, operation_id, extra)
                 self._event(
                     connection,
                     actor,

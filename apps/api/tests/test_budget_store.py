@@ -247,6 +247,8 @@ def test_uncertainty_then_attributed_usage_with_original_prices(store):
     claim(store)
     entry = store.reconcile("budget-fixture", "one", actor=LLM)
     assert entry.state == "unconfirmed" and entry.exposure == 40 and entry.actual is None
+    with store.engine.connect() as connection:
+        assert connection.execute(sa.select(db.operation.c.evidence.is_(None))).scalar_one()
     refused(
         "usage_attribution_mismatch",
         store.reconcile,
@@ -306,6 +308,7 @@ def test_platform_estimate_is_not_confirmed_billing_and_402_never_retries(store)
 def test_actual_overrun_counts_real_cost_and_pauses_even_after_policy_edit(store):
     reserve(store)
     claim(store)
+    assert store.reconcile("budget-fixture", "one", actor=LLM).actual is None
     entry = store.reconcile(
         "budget-fixture",
         "one",
@@ -365,7 +368,7 @@ def test_changed_estimate_intent_or_policy_invalidates_click(store):
     refused("stale_dry_run", claim, store)
     store.cancel(req.project_id, req.operation_id, actor=ADMIN)
     assert store.snapshot(req.project_id).entry(req.operation_id).exposure == 0
-    refused("operation_conflict", reserve, store)
+    refused("operation_conflict", reserve, store, intent=replace(INTENT, sends_pixels=False))
 
 
 def test_roles_privacy_forecast_and_current_dispatch_month(store):
