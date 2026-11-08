@@ -6,7 +6,20 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Canonical evaluation-group consumer — new assertions pending Actions
+## Canonical evaluation-group consumer — corrected assertions pending Actions
+
+At first consumer head `4304ffc34f1419b55053aea2cc93ba69d6987cde`,
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485253073/job/128745648441)
+reported **2 failed, 17 passed**. Both recipes successfully loaded the independent
+canonical fixtures, assembled the context and rejected declared-group substitution.
+The next new relation control correctly hit the production cross-split rejection,
+but the test expected the same-split group-merge message. The correction changes
+only that exact expected error; no production gate or fixture membership changed.
+Later smoke assertions did not complete; corrected-head Actions remain required.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485253073/job/128745648419),
+queue PostgreSQL, lint/types/import-contract and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485252713) succeeded;
+this is not overall CI or milestone acceptance.
 
 The persisted qualification assembler now requires the canonical evaluation-group
 producer for the committed selection's development and optional calibration release,

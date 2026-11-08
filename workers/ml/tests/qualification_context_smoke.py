@@ -659,7 +659,7 @@ def exercise_context_assembly(engine, release, final, context, actor):
                         algorithm_version="synthetic-v1",
                     )
                 )
-                with pytest.raises(ValueError, match="merge pinned groups"):
+                with pytest.raises(ValueError, match="cross pinned splits"):
                     load_qualification_context(connection, **arguments)
                 assert load_registry(connection, **scope) == before
                 assert (
