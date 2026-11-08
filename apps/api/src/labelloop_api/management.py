@@ -21,6 +21,7 @@ from .management_contracts import (
     PromotionRequest,
     PromotionResult,
     RecipeId,
+    ReferenceAccept,
     ReferenceEnroll,
     ReleaseFreeze,
     Resource,
@@ -224,6 +225,23 @@ def management_router(
             actor, idempotency_key, "enroll_reference", project_id, payload
         )
         return invoke(lambda: service.enroll_reference(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/references/accept",
+        response_model=Resource,
+        operation_id="acceptReference",
+    )
+    def accept_reference(
+        project_id: Identifier,
+        payload: ReferenceAccept,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "accept_reference", project_id, payload
+        )
+        return invoke(lambda: service.accept_reference(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/assets",

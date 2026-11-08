@@ -21,7 +21,7 @@ from .management_details import (
     SourcePairRead,
     SourcePolicyRead,
 )
-from .management_references import proposed_references
+from .management_references import read_references
 from .schema import (
     borderline_review,
     canonical_event,
@@ -273,7 +273,7 @@ def project_detail(
     guide = guide_draft(connection, project_row, workspace_id)
     catalog = class_catalog_draft(connection, project_row, workspace_id, ontology.ontology_key)
     source_policy = source_policy_draft(connection, project_row, workspace_id)
-    references = proposed_references(connection, project_row, workspace_id)
+    references = read_references(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:

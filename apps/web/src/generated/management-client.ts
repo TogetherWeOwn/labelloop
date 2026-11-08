@@ -35,6 +35,7 @@ export type PromotionRequest = { "candidate_id": string; "expected_incumbent_id"
 export type PromotionResult = { "decision": "promoted" | "retained"; "gate_codes": Array<string>; "incumbent_id": string | null; "project_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number };
 export type RecipeBoxRead = { "box": Box; "class_id": string; "clipped": boolean; "consequence": string; "flag": "none" | "warn" | "exclude"; "object_id": string; "review_tier": "machine_verified_no_human_review" | "human_reviewed" | "adjudicated" };
 export type RecipePreviewRead = { "below_minimum_targets": number; "boxes": Array<RecipeBoxRead>; "checks": Array<CheckRead>; "clipped_targets": number; "excluded_images": number; "manifest_artifact_id": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "recipe_revision": number; "source_asset_id": string; "source_height": number; "source_width": number; "tiny_targets": number; "transform": AffineTransform; "validation_artifact_id": string | null };
+export type ReferenceAccept = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "reason": string; "reference_id": string };
 export type ReferenceEnroll = { "asset_id": string; "assignment_version": string; "base_ontology_id": string; "class_id": string; "confused_with": Array<string>; "expected_revision": number; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
 export type ReferenceRead = { "approval": "proposed" | "admin_approved"; "asset_id": string; "class_id": string; "confused_with": Array<string>; "id": string; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
 export type RegistryDetail = { "candidate": ModelRelease | null; "champion": ModelRelease | null; "checks": Array<CheckRead>; "history": Array<RegistryHistoryRead>; "next_history_cursor": string | null; "project_id": string; "qualification": "unqualified" | "evaluating" | "qualified"; "qualification_id": string | null; "reason": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number; "rollback": ModelRelease | null };
@@ -157,6 +158,11 @@ export class ManagementClient {
 
   enrollReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceEnroll }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/references`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  acceptReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceAccept }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/references/accept`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 

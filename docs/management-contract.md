@@ -190,14 +190,43 @@ real prerequisite, not permission to infer browser splits.
 
 Records use the existing `reference_example` table with `approved: false`, no
 embedding or crop, and receipt-bound public metadata. `readProject.references`
-shows `proposed` evidence only when persisted rows and workspace-attributed audit
-receipts match; it grants no retrieval, training, gold or human approval.
+shows enrollment evidence only when persisted rows and workspace-attributed audit
+receipts match. Enrollment alone is `proposed`; acceptance requires the separate
+admin operation below. Neither operation publishes a retrieval pack or grants
+training/gold eligibility.
 Enrollment invalidates setup approvals/automatic acceptance and blocks new
 freezes pending validated publication. Existing frozen releases are unchanged.
 The mutation returns the project revision; refresh `readProject` for the
 server-issued reference ID. Real asset admission remains unbound under its
-exact-consuming-head Security condition. Reference acceptance, pack publication,
-revalidation after changes and retrieval binding remain incomplete.
+exact-consuming-head Security condition. Pack publication, revalidation/withdrawal
+commands after changes and retrieval binding remain incomplete.
+
+## Reference acceptance (unmounted)
+
+`acceptReference`, `POST /projects/{project_id}/references/accept`, accepts one
+already enrolled reference. Send `reference_id`, expected project revision,
+exact enrolled `base_ontology_id` and `assignment_version`, and a bounded reason.
+The request cannot replace metadata, source/class identity, permitted use or the
+authenticated reviewer. The admin gate, project/retry locks and atomic audit
+receipt are shared with enrollment. Retries return the original project resource;
+a different request with the same key conflicts. An already accepted reference
+cannot acquire a second acceptance through another key.
+
+Acceptance rechecks the current ontology, class membership, complete locked
+assignments, relation closure, pending pairs and lifetime holdout exclusion.
+Only the existing row's `approved` column changes; enrollment provenance stays
+unchanged. The attributed acceptance receipt binds the exact reference, ontology,
+assignment, reason and current scope/guide/source-policy context. Project reads
+show `admin_approved` only when both receipts and the stored row match, and recheck
+current source evidence in their SELECT-only snapshot. Stale context/grouping or
+changed ontology fails closed; these are not automatically reapproved. A future
+explicit revalidation/withdrawal path is required to recover stale acceptance.
+Shared grouping checks are cached only within that read snapshot, not across
+requests. No project step approval, publication, embedding, retrieval authority,
+model qualification, paid call or real asset admission is enabled. Setup
+approvals/automatic acceptance remain invalidated and new freezes remain gated.
+The disposable Actions test role alone receives the narrow approval-column grant;
+production runtime grants and final composition remain separate gated work.
 
 ## Remaining commands and accountable producer boundaries
 
@@ -210,7 +239,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 | Fixture command family | Producer and intended implementation boundary |
 |---|---|
 | Remaining `save_setup`, `add_class` | Management facade: proposed reference enrollment and typed setup draft saves above are implemented separately, not generic capture payloads or approval; source admission/grouping binding and effective ontology publication/migration remain missing |
-| `accept_class`, `accept_reference`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; reference provenance and evaluation-holdout exclusion enforced server-side |
+| `accept_class`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; `accept_reference` has the separate unmounted typed operation above |
 | `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |
 | `new_recipe_version` | Management facade's canonical recipe/version adapter; immutable released recipes and delivered compiler transform rules, not browser geometry |

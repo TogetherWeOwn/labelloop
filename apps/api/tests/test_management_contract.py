@@ -64,9 +64,17 @@ REFERENCE = {
     "validity_scope": "Wildlife fixture",
     "confused_with": [],
 }
+REFERENCE_ACCEPT = {
+    "expected_revision": 3,
+    "reference_id": "reference-a",
+    "base_ontology_id": "ontology-1",
+    "assignment_version": "assignment-1",
+    "reason": "Verified source provenance and class identity",
+}
 ASSET = {"expected_revision": 1, "original_base64": "aW1hZ2U=", "source_group": "session-a"}
 MUTATIONS = [
     ("/projects/p/references", "enroll_reference", REFERENCE, 201),
+    ("/projects/p/references/accept", "accept_reference", REFERENCE_ACCEPT, 200),
     ("/projects", "create_project", PROJECT, 201),
     (
         "/projects/p/assets",
@@ -216,6 +224,33 @@ def test_reference_enrollment_refuses_file_and_approval_authority(field, value):
         "/projects/p/references",
         json={**REFERENCE, field: value},
         headers={"Idempotency-Key": "reference"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("approved", True),
+        ("reviewer_id", "forged"),
+        ("class_id", "other"),
+        ("asset_id", "other"),
+        ("permitted_use", "replacement"),
+        ("reference_id", ""),
+        ("base_ontology_id", ""),
+        ("assignment_version", ""),
+        ("reason", ""),
+        ("reason", "x" * 4097),
+        ("expected_revision", True),
+    ],
+)
+def test_reference_acceptance_refuses_replacement_and_forged_authority(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/references/accept",
+        json={**REFERENCE_ACCEPT, field: value},
+        headers={"Idempotency-Key": "accept-reference"},
     )
     assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
     assert service.calls == []

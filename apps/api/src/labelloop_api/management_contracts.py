@@ -148,6 +148,13 @@ class ReferenceEnroll(Mutation):
         return self
 
 
+class ReferenceAccept(Mutation):
+    reference_id: Identifier
+    base_ontology_id: Identifier
+    assignment_version: Identifier
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

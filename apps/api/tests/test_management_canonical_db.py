@@ -22,6 +22,7 @@ from labelloop_api.management_contracts import (
     ClassCatalogDraft,
     GuideDraft,
     ProjectCreate,
+    ReferenceAccept,
     ReferenceEnroll,
     ReleaseFreeze,
     ScopeDraft,
@@ -82,6 +83,7 @@ def database(tmp_path):
             text(f'GRANT UPDATE (scope, domain, access_policy) ON project TO "{role}"')
         )
         connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (approved) ON reference_example TO "{role}"'))
     runtime = create_engine(
         os.environ["DATABASE_URL"],
         connect_args={
@@ -1054,6 +1056,244 @@ def test_reference_enrollment_excludes_reassigned_historical_holdouts(database):
             service, created.id, payload.model_copy(update={"assignment_version": "assignment-2"})
         )
     assert reference_count(owner, created.id) == 0
+
+
+def acceptance_inputs(service, owner):
+    created, _, source, enrollment = reference_inputs(service, owner, split="train")
+    enroll(service, created.id, enrollment)
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    payload = ReferenceAccept(
+        expected_revision=3,
+        reference_id=detail.references[0].id,
+        base_ontology_id=enrollment.base_ontology_id,
+        assignment_version=enrollment.assignment_version,
+        reason="Verified provenance, permitted use and visible class",
+    )
+    return created, source, payload
+
+
+def accept(service, project_id, payload, actor=None, key="accept-reference"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "accept_reference", project_id, payload)
+    return service.accept_reference(actor, context, payload)
+
+
+def test_reference_acceptance_is_attributed_atomic_and_replayable(database):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    result = accept(service, created.id, payload)
+    assert result.revision == 4 and result.state == "draft"
+    assert accept(service, created.id, payload) == result
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        accept(service, created.id, payload.model_copy(update={"reason": "different"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        accept(service, created.id, payload, key="stale")
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        accept(
+            service, created.id, payload.model_copy(update={"expected_revision": 4}), key="again"
+        )
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.references[0].approval == "admin_approved"
+    assert detail.approved_steps == [] and detail.published_release_id is None
+    with owner.connect() as connection:
+        reference = connection.execute(
+            select(reference_example).where(reference_example.c.id == payload.reference_id)
+        ).one()
+        assert reference.approved and reference.crop is None and reference.embedding_model is None
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.accept_reference",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.payload["evidence"]["reason"] == payload.reason
+        assert receipt.payload["evidence"]["reference"] == detail.references[0].model_dump()
+    assert counts(owner, created.id)[2] == 4
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_reference_acceptance_serializes_revision_and_replay(database, same_key):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return accept(service, created.id, payload, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(4) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id)[2] == 4
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_reference_acceptance_denies_nonadmin(database, actor):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        accept(service, created.id, payload, actor=actor)
+    assert counts(owner, created.id)[2] == 3
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("reference_id", "missing", "not_found"),
+        ("base_ontology_id", "other", "revision_conflict"),
+        ("assignment_version", "other", "revision_conflict"),
+    ],
+)
+def test_reference_acceptance_checks_enrollment_pins(database, field, value, code):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match=code):
+        accept(service, created.id, payload.model_copy(update={field: value}))
+    assert counts(owner, created.id)[2] == 3
+
+
+@pytest.mark.parametrize("when", ["before", "after"])
+@pytest.mark.parametrize("change", ["test", "unlocked", "new-version", "pending", "ontology"])
+def test_reference_acceptance_rechecks_current_source_evidence(database, when, change):
+    service, owner, _ = database
+    created, source, payload = acceptance_inputs(service, owner)
+    if when == "after":
+        accept(service, created.id, payload)
+    with owner.begin() as connection:
+        if change in {"test", "unlocked"}:
+            connection.execute(
+                source_split_assignment.update()
+                .where(source_split_assignment.c.asset_id == source.id)
+                .values(**({"split": "test"} if change == "test" else {"locked": False}))
+            )
+        elif change == "new-version":
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version="assignment-2",
+                    asset_id=source.id,
+                    group_id="group-1",
+                    split="train",
+                    seed=7,
+                    algorithm="union-find-grouped-stratified-v2",
+                    thresholds={"phash_max_distance": 8},
+                    reason="New assignment",
+                    locked=True,
+                )
+            )
+        elif change == "pending":
+            connection.execute(
+                insert(borderline_review).values(
+                    left_asset_id=source.id,
+                    right_asset_id=source.id,
+                    metric="phash",
+                    value="7",
+                    algorithm_version="fixture-v1",
+                    review_state="pending",
+                )
+            )
+        else:
+            connection.execute(
+                insert(ontology_release).values(
+                    ontology_key=str(uuid4()),
+                    project_id=created.id,
+                    version=2,
+                    classes=[{"stable_id": "package", "name": "Package", "definition": "Package"}],
+                    class_map={"package": 0},
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence|revision_conflict"):
+        if when == "before":
+            accept(service, created.id, payload)
+        else:
+            CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+                Reader(), created.id
+            )
+    assert counts(owner, created.id)[2] == (3 if when == "before" else 4)
+
+
+@pytest.mark.parametrize("failure", ["event-insert", "approval-update"])
+def test_reference_acceptance_rolls_back_on_runtime_grant_failure(database, failure):
+    service, owner, role = database
+    created, _, payload = acceptance_inputs(service, owner)
+    privilege = (
+        "INSERT ON canonical_event"
+        if failure == "event-insert"
+        else "UPDATE (approved) ON reference_example"
+    )
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        accept(service, created.id, payload)
+    with owner.connect() as connection:
+        assert not connection.execute(
+            select(reference_example.c.approved).where(
+                reference_example.c.id == payload.reference_id
+            )
+        ).scalar_one()
+    assert counts(owner, created.id)[2] == 3
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} TO "{role}"'))
+    assert accept(service, created.id, payload).revision == 4
+
+
+@pytest.mark.parametrize("field", ["scope", "domain", "annotation_guide", "source_permitted_use"])
+def test_reference_acceptance_is_bound_to_setup_context(database, field):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    accept(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        values = (
+            {field: "Changed scope"}
+            if field in {"scope", "domain"}
+            else {"access_policy": {**row.access_policy, field: "Changed policy"}}
+        )
+        connection.execute(project.update().where(project.c.id == created.id).values(**values))
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def test_accepted_reference_projection_requires_unchanged_persisted_approval(database):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    accept(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(
+            reference_example.update()
+            .where(reference_example.c.id == payload.reference_id)
+            .values(approved=False)
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def test_reference_acceptance_enforces_workspace_context_and_project_ownership(database):
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        accept(replace(service, workspace_id=uuid4()), created.id, payload)
+    context = MutationContext.bind(Actor(), "accept", "accept_reference", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.accept_reference(Actor(), replace(context, actor_id="forged"), payload)
+    other = create(service, key="other")
+    with pytest.raises(ManagementFailure, match="not_found"):
+        accept(
+            service, other.id, payload.model_copy(update={"expected_revision": 1}), key="other-ref"
+        )
+    assert counts(owner, created.id)[2] == 3
 
 
 def source_policy_payload(revision=1):

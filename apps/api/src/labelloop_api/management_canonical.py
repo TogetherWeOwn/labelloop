@@ -22,6 +22,7 @@ from .management_contracts import (
     GuideDraft,
     ManagementError,
     ProjectCreate,
+    ReferenceAccept,
     ReferenceEnroll,
     ReleaseFreeze,
     Resource,
@@ -29,7 +30,9 @@ from .management_contracts import (
     SourcePolicyDraft,
 )
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
+from .management_references import accept_reference as approve_reference
 from .management_references import enroll_reference as create_reference
+from .management_references import reference_context_sha256
 from .management_release import freeze_candidate
 from .repository import ingest_canonical_asset
 from .schema import canonical_dataset_release, canonical_event, ontology_release, project
@@ -465,6 +468,54 @@ class CanonicalManagementMutations:
                     "reference": reference.model_dump(mode="json"),
                     "ontology_id": payload.base_ontology_id,
                     "assignment_version": payload.assignment_version,
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
+
+    def accept_reference(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ReferenceAccept
+    ) -> Resource:
+        self.authorize(actor, context, "accept_reference", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            reference = approve_reference(connection, owned, self.workspace_id, payload)
+            policy = dict(owned.access_policy)
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "reference": reference.model_dump(mode="json"),
+                    "ontology_id": payload.base_ontology_id,
+                    "assignment_version": payload.assignment_version,
+                    "reason": payload.reason,
+                    "context_sha256": reference_context_sha256(owned),
                     "invalidated_steps": [
                         "scope",
                         "classes",
