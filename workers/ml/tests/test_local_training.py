@@ -3,7 +3,7 @@
 import json
 import os
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -323,6 +323,20 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         policy=request.policy,
         evidence=output / "export-equivalence.json",
     )
+    from labelloop_api.management_model_worker import collect_export
+
+    saved_exports = {}
+    export_stage = collect_export(
+        result,
+        manifest,
+        epoch_file.with_suffix(".onnx"),
+        asdict(exported),
+        SimpleNamespace(put=lambda key, data: saved_exports.__setitem__(key, data)),
+    )
+    assert saved_exports == {
+        export_stage["export_key"]: epoch_file.with_suffix(".onnx").read_bytes()
+    }
+    assert export_stage["evidence"] == asdict(exported)
     assert exported.static_input_signature == (1, 3, side, side)
     assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
     assert exported.sample_count == len(validation_images)

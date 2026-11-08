@@ -54,6 +54,33 @@ for drift before checking the client. Composed schema publication is not final
 adapter integration or route availability; do not hand-edit a second client from
 these tables.
 
+## Local model publication (unmounted)
+
+`CanonicalLocalModelPublisher` composes the existing training completion sink
+with candidate-model persistence in the same queue application transaction. It
+requires saved `training` and `export` stages; it is not an additional queue or
+scheduler. The trusted ML stage must call the delivered `export_and_compare`
+on the selected checkpoint and immutable recipe images, then pass its actual
+ONNX file/evidence through `collect_export`. The collector validates the fixed
+signature, policy, detection evidence, tolerances, file hash and size before a
+content-addressed upload. It does not itself prove ONNX equivalence.
+
+The completion sink revalidates the owned historical training/compiler intent,
+derives model identity/classes/preprocessing from that training, and reuses the
+model store's lineage/export gate. Training, development reports, candidate,
+evaluation links, attributed completion/export audits and the queue application
+fence commit or roll back together. No model identity, path, class, recipe or
+registry selection comes from exporter output. Candidate publication never
+promotes it, supplies quality targets, opens a final test or updates a champion.
+A runtime needs only the existing model/evaluation SELECT and INSERT grants,
+not registry writes or audit mutation privileges.
+
+Export-stage orchestration and final worker registration are still unbound.
+Synthetic database artifacts exercise transaction boundaries, not actual queued
+training/export acceptance. The separate CPU smoke passes real controlled
+export output through the collector; the complete new-project-to-export path
+and exact-head Security/QA acceptance remain required before default mounting.
+
 ## Mutation alignment
 
 - `startTraining`: resolve a profile from `listTrainingProfiles`, then send its

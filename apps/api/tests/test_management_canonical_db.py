@@ -106,6 +106,256 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_model_publication(
+    database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
+):
+    import hashlib
+
+    from labelloop_api.management_model_worker import CanonicalLocalModelPublisher
+
+    worker, training, created, compiled, accepted, lease, record = prepared_training_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    digest = hashlib.sha256(b"synthetic ONNX; not executable export evidence").hexdigest()
+    request = record["result"]["request"]
+    exported = {
+        "evidence": {
+            "weights_sha256": record["result"]["selected"]["sha256"],
+            "export_sha256": digest,
+            "static_input_signature": [
+                1,
+                3,
+                request["policy"]["imgsz"],
+                request["policy"]["imgsz"],
+            ],
+            "policy": request["policy"],
+            "sample_count": 1,
+            "detection_counts": [1],
+            "coordinate_atol_px": 0.01,
+            "confidence_atol": 1e-5,
+        },
+        "export_key": "sha256/" + digest[:2] + "/" + digest,
+        "weights_key": record["checkpoint_keys"][record["result"]["selected"]["sha256"]],
+    }
+    with database[1].begin() as connection:
+        connection.execute(
+            text(f'GRANT SELECT, INSERT ON model_release, model_evaluation TO "{database[2]}"')
+        )
+    return CanonicalLocalModelPublisher(worker), accepted, lease, record, exported
+
+
+def model_publication_state(owner, accepted):
+    with owner.connect() as connection:
+        models = connection.execute(
+            text("SELECT * FROM model_release WHERE release_key=:id"),
+            {"id": "model-" + accepted.resource.id},
+        ).all()
+        links = connection.execute(
+            text(
+                "SELECT e.run_key FROM model_evaluation l JOIN model_release m ON m.id=l.model_id "
+                "JOIN evaluation_run e ON e.id=l.evaluation_id WHERE m.release_key=:id"
+            ),
+            {"id": "model-" + accepted.resource.id},
+        ).all()
+        events = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.model_exported",
+                canonical_event.c.aggregate_id == "model-" + accepted.resource.id,
+            )
+        ).all()
+    return models, links, events
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_model_publication_commits_training_export_and_audit_once(
+    database, compilation, compiler_worker, recipe
+):
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+        assert model_publication_state(database[1], accepted) == ([], [], [])
+
+    compiler_worker.store.complete(lease, ("training", "export"), sink)
+    models, links, events = model_publication_state(database[1], accepted)
+    assert len(models) == len(links) == len(events) == 1
+    model = models[0]
+    assert model.record["project_id"] == lease.project_key
+    assert model.record["release_id"] == "model-" + accepted.resource.id
+    assert model.record["evaluation_run_ids"] == [
+        training["result"]["selected"]["evaluation_run_id"]
+    ]
+    assert links[0].run_key == model.record["evaluation_run_ids"][0]
+    assert model.export_evidence == exported["evidence"]
+    assert events[0].actor_kind == "system" and events[0].actor_id == lease.worker_id
+    assert events[0].payload["project_id"] == training["result"]["request"]["project_id"]
+    assert events[0].payload["export_key"] == exported["export_key"]
+    assert events[0].payload["requested_by"] == Actor().id
+    assert training_publication_state(database[1], accepted)[4].status == "succeeded"
+
+
+@pytest.mark.parametrize("grant", ["INSERT ON model_release", "INSERT ON model_evaluation"])
+def test_model_publication_grant_failure_rolls_back_training_and_resumes(
+    database, compilation, compiler_worker, grant
+):
+    import psycopg
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    with database[1].begin() as connection:
+        connection.execute(text(f'REVOKE {grant} FROM "{database[2]}"'))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+    with database[1].begin() as connection:
+        connection.execute(text(f'GRANT {grant} TO "{database[2]}"'))
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    assert len(model_publication_state(database[1], accepted)[0]) == 1
+
+
+@pytest.mark.parametrize("failure", ["caller", "deadline"])
+def test_model_publication_late_failure_rolls_back_whole_application(
+    database, compilation, compiler_worker, failure
+):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        if failure == "caller":
+            raise RuntimeError("synthetic caller failure")
+        connection.execute(
+            "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+            "WHERE job_id=%s",
+            (lease.job_id,),
+        )
+
+    with pytest.raises(RuntimeError if failure == "caller" else LeaseLost):
+        compiler_worker.store.complete(lease, ("training", "export"), sink)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["weights", "policy", "shape", "empty", "counts", "tolerance", "export_key", "weights_key"],
+)
+def test_model_publication_rejects_forged_export_and_rolls_back_training(
+    database, compilation, compiler_worker, change
+):
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    evidence = exported["evidence"]
+    if change == "weights":
+        evidence["weights_sha256"] = "0" * 64
+    elif change == "policy":
+        evidence["policy"] = evidence["policy"] | {"tile": True}
+    elif change == "shape":
+        evidence["static_input_signature"] = [1, 3, 352, 352]
+    elif change == "empty":
+        evidence["detection_counts"] = [0]
+    elif change == "counts":
+        evidence["detection_counts"] = [-1]
+    elif change == "tolerance":
+        evidence["confidence_atol"] = 0.1
+    else:
+        exported[change] = "sha256/00/" + "0" * 64
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    with pytest.raises(ValueError):
+        compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+
+
+@pytest.mark.parametrize("terminal", ["expired", "cancelled", "superseded"])
+def test_model_publication_refuses_lost_lease(database, compilation, compiler_worker, terminal):
+    from labelloop_worker_core.jobs import LeaseLost
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    if terminal == "cancelled":
+        compiler_worker.store.cancel(lease.project_key, lease.job_id)
+    else:
+        with database[1].begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                    "WHERE job_id=:id"
+                ),
+                {"id": lease.job_id},
+            )
+        if terminal == "superseded":
+            assert compiler_worker.store.claim("train_local", "replacement", job_id=lease.job_id)
+    with pytest.raises(LeaseLost):
+        compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
+    assert model_publication_state(database[1], accepted) == ([], [], [])
+
+
+def test_model_publication_resumes_saved_stages_without_ml_or_object_io(
+    database, compilation, compiler_worker
+):
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    with database[1].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE worker_job SET lease_until=clock_timestamp()-interval '1 second' "
+                "WHERE job_id=:id"
+            ),
+            {"id": lease.job_id},
+        )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("saved stages must not run ML or access objects")
+
+    publisher = replace(
+        publisher,
+        training=replace(
+            publisher.training,
+            objects=SimpleNamespace(read=unexpected, put=unexpected),
+            backend=unexpected,
+        ),
+    )
+    runner = JobRunner(
+        compiler_worker.store,
+        "train_local",
+        (Stage("training", unexpected), Stage("export", unexpected)),
+        publisher.publish,
+        job_id=lease.job_id,
+    )
+    assert runner.run_once("replacement")
+    assert not runner.run_once("replacement")
+    assert len(model_publication_state(database[1], accepted)[0]) == 1
+    assert training_publication_state(database[1], accepted)[4].generation == 2
+
+
 def prepared_training_publication(
     database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
 ):

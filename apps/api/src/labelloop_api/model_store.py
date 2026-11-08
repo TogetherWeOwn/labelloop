@@ -234,21 +234,8 @@ def save_training(
         )
 
 
-def save_model(
-    connection: sa.Connection,
-    *,
-    training_run_key: str,
-    release: ModelRelease,
-    export_evidence: dict,
-) -> None:
-    run = (
-        connection.execute(
-            sa.select(db.training_run).where(db.training_run.c.run_key == training_run_key)
-        )
-        .mappings()
-        .one()
-    )
-    context = variant_context(connection, run["variant_id"])
+def validate_model(context, run, release: ModelRelease, export_evidence: dict, evaluations) -> None:
+    """One lineage/export gate for both transaction adapters; never promotion authority."""
     result = run["record"]
     request = result["request"]
     inputs = run["input_manifest"]
@@ -271,20 +258,97 @@ def save_model(
         or result["selected"]["evaluation_run_id"] not in release.evaluation_run_ids
     ):
         raise ValueError("model release disagrees with persisted training lineage")
+    validate_export(release, export_evidence)
+    if len(evaluations) != len(release.evaluation_run_ids) or {
+        row["run_key"] for row in evaluations
+    } != set(release.evaluation_run_ids):
+        raise ValueError("model release evaluation is not persisted for this run")
+    for evaluation in evaluations:
+        report = decode_report(evaluation["record"])
+        if report.weights_sha256 != release.weights_sha256 or report.policy != release.policy:
+            raise ValueError("model release evaluation artifact mismatch")
+
+
+def validate_export(release: ModelRelease, export_evidence: dict) -> None:
     if (
         export_evidence.get("weights_sha256") != release.weights_sha256
         or export_evidence.get("export_sha256") != release.export_sha256
         or tuple(export_evidence.get("static_input_signature", ()))
         != release.static_input_signature
         or export_evidence.get("policy") != asdict(release.policy)
-        or export_evidence.get("sample_count", 0) < 1
-        or len(export_evidence.get("detection_counts", ())) != export_evidence["sample_count"]
+        or type(export_evidence.get("sample_count")) is not int
+        or export_evidence["sample_count"] < 1
+        or not isinstance(export_evidence.get("detection_counts"), (list, tuple))
+        or len(export_evidence["detection_counts"]) != export_evidence["sample_count"]
         or any(type(count) is not int or count < 0 for count in export_evidence["detection_counts"])
         or sum(export_evidence["detection_counts"]) < 1
         or export_evidence.get("coordinate_atol_px") != 0.01
         or export_evidence.get("confidence_atol") != 1e-5
     ):
         raise ValueError("model release needs matching static export verification")
+
+
+def save_model_transaction(
+    connection: psycopg.Connection,
+    *,
+    training_run_key: str,
+    release: ModelRelease,
+    export_evidence: dict,
+) -> None:
+    """Append a candidate and its links inside the queue's caller-owned transaction."""
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("model publication requires an active caller transaction")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM training_run WHERE run_key=%s", (training_run_key,))
+        run = cursor.fetchone()
+        if run is None:
+            raise ValueError("missing persisted training run")
+        query = variant_context_query(run["variant_id"]).compile(dialect=dialect())
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+        if context is None:
+            raise ValueError("missing model variant")
+        cursor.execute(
+            "SELECT * FROM evaluation_run WHERE training_run_id=%s AND run_key=ANY(%s)",
+            (run["id"], list(release.evaluation_run_ids)),
+        )
+        evaluations = cursor.fetchall()
+    validate_model(context, run, release, export_evidence, evaluations)
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO model_release(release_key,training_run_id,project_id,recipe_id,"
+            "record,export_evidence) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (
+                release.release_id,
+                run["id"],
+                context["project_id"],
+                context["recipe_id"],
+                Jsonb(json_record(release)),
+                Jsonb(export_evidence),
+            ),
+        )
+        model_id = cursor.fetchone()[0]
+        cursor.executemany(
+            "INSERT INTO model_evaluation(model_id,evaluation_id) VALUES (%s,%s)",
+            [(model_id, row["id"]) for row in evaluations],
+        )
+
+
+def save_model(
+    connection: sa.Connection,
+    *,
+    training_run_key: str,
+    release: ModelRelease,
+    export_evidence: dict,
+) -> None:
+    run = (
+        connection.execute(
+            sa.select(db.training_run).where(db.training_run.c.run_key == training_run_key)
+        )
+        .mappings()
+        .one()
+    )
+    context = variant_context(connection, run["variant_id"])
     evaluations = (
         connection.execute(
             sa.select(db.evaluation_run).where(
@@ -295,12 +359,7 @@ def save_model(
         .mappings()
         .all()
     )
-    if len(evaluations) != len(release.evaluation_run_ids):
-        raise ValueError("model release evaluation is not persisted for this run")
-    for evaluation in evaluations:
-        report = decode_report(evaluation["record"])
-        if report.weights_sha256 != release.weights_sha256 or report.policy != release.policy:
-            raise ValueError("model release evaluation artifact mismatch")
+    validate_model(context, run, release, export_evidence, evaluations)
     with connection.begin_nested():
         model_id = connection.execute(
             sa.insert(db.model_release).values(
