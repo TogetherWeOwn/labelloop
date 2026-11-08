@@ -145,6 +145,17 @@ def test_paired_cpu_experiment_preserves_m2_contracts(tmp_path: Path) -> None:
     for index, cell in enumerate(manifest.cells()):
         original = backends[cell.recipe_id]
         if cell.initialization == "base" and cell.augmentation_id == BASELINE.profile_id:
+            image_path = next(
+                s["image_path"] for s in datasets[cell.recipe_id]["samples"] if s["split"] == "val"
+            )
+            image = original.dataset / image_path
+            saved = image.read_bytes()
+            # A trailing newline leaves decoding/predictions unchanged, but changes frozen bytes.
+            image.write_bytes(saved + b"\n")
+            with pytest.raises(ValueError, match="compiled dataset file digest mismatch"):
+                collect_arm(manifest, cell, original, base_results[cell.recipe_id])
+            assert not (original.output / "experiment-inputs").exists()
+            image.write_bytes(saved)
             arms.append(collect_arm(manifest, cell, original, base_results[cell.recipe_id]))
             continue
         warm = base_results[cell.recipe_id]

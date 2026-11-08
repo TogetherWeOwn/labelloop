@@ -16,7 +16,8 @@ Construct an `ExperimentManifest` before dispatch. Its SHA-256 covers:
 - source IDs, source groups, pixel and complete-truth digests and distinct curated,
   expansion, development, calibration and locked-final roles;
 - two independently pinned 320/640 recipes and their complete recipe digests;
-- per-recipe warm checkpoints, their approved-base ancestry and training groups;
+- per-recipe warm checkpoints, their approved-base ancestry and curated-only
+  training groups (any expansion ancestry, even within a mixed group, is rejected);
 - per-recipe/per-cohort dataset release, manifest and exact training membership;
 - class-map digest and explicit class mirror-safety declarations;
 - all seeds, epochs, batch, augmentation profiles, declared metric, class/slice
@@ -50,6 +51,10 @@ arguments are then verified by the existing backend.
 trains one cell. Both retain actual training, validation and inference shapes,
 loader before/after counts including small targets and negatives, selected epoch,
 resolved arguments, static ONNX signature and native/export prediction checks.
+Every compiled file is hash/membership checked again at collection, and inference
+and export use a private, hash-verified copy of the validation pixels. Complete
+and group evaluation reports carry per-source truth digests; imported evidence
+must bind those digests to the experiment, not merely reuse source IDs/counts.
 The existing `EvaluationRunner` scores the complete source-frame development
 release and each source group from the same predictions. Full-frame coverage is
 required, so difficult regions cannot disappear from a comparison.
@@ -73,8 +78,14 @@ and a nominal 95% interval. A single group gives no interval and reports
 insufficient evidence. Few groups, nonrepresentative sampling, label uncertainty,
 and adaptive development reuse limit interpretation; the interval is conditional
 on these pinned seeds/data and does not establish universal quality or cover
-unknown training-environment variation. Aggregate gains cannot conceal a
-class/critical-slice regression. Other outcomes distinguish observed unqualified
+unknown training-environment variation. Every group needs positive target support
+for this AP metric. Negative-only groups make this metric unsupported; they are
+not silently dropped. Negative images within a supported group remain included
+in scoring. Likewise, an arm without a non-vacuous export check (at least one
+operating-threshold detection) remains incomplete rather than being scored as
+qualified. A future negative-scene metric/export policy requires its own explicit
+contract; this harness does not weaken the existing M2 export guard to fill a
+comparison. Aggregate gains cannot conceal a class/critical-slice regression. Other outcomes distinguish observed unqualified
 gain, plateau/inconclusive evidence, regression and fixture-only wiring.
 
 Calibration and locked-final sets are never accepted as comparison evidence.

@@ -125,6 +125,7 @@ def evidence(manifest: ExperimentManifest) -> tuple[ArmEvidence, ...]:
                         metrics(score, len(members)),
                         {"source_small": metrics(score, len(members))},
                         tuple(Coverage(s.asset_id, 1, 0, 0) for s in members),
+                        tuple((s.asset_id, s.truth_sha256) for s in members),
                     ),
                 )
             )
@@ -134,6 +135,7 @@ def evidence(manifest: ExperimentManifest) -> tuple[ArmEvidence, ...]:
             overall=metrics(score, len(dev)),
             slices={"source_small": metrics(score, len(dev))},
             coverage=tuple(Coverage(s.asset_id, 1, 0, 0) for s in dev),
+            source_truth_sha256=tuple((s.asset_id, s.truth_sha256) for s in dev),
         )
         ids = next(
             d.training_asset_ids
@@ -187,15 +189,18 @@ def test_observed_gain_still_requires_external_adjudicated_quality_and_declared_
 
 
 @pytest.mark.parametrize(
-    "change",
+    "field,value",
     [
-        {"fliplr": 0.5},
-        {"scale": 0.5},
-        {"translate": 0.1},
-        {"hsv_s": 0.6},
+        ("fliplr", 0.5),
+        ("scale", 0.5),
+        ("translate", 0.1),
+        ("hsv_s", 0.6),
     ],
 )
-def test_reserved_baseline_cannot_drift(change: dict[str, float]) -> None:
+def test_reserved_baseline_cannot_drift(field: str, value: float) -> None:
+    from typing import Any
+
+    change: dict[str, Any] = {field: value}
     with pytest.raises(ValueError, match="baseline augmentation drift"):
         replace(BASELINE, **change)
 
@@ -237,6 +242,7 @@ def test_checkpoint_ancestry_and_curated_anchor_cannot_change_silently() -> None
     for changed in (
         replace(recipe, warm_start_base_sha256=digest("wrong-base")),
         replace(recipe, warm_start_training_groups=("test",)),
+        replace(recipe, warm_start_training_groups=("extra",)),
         replace(recipe, warm_start_training_groups=()),
     ):
         with pytest.raises(ValueError, match="base checkpoint|ancestry"):
@@ -359,6 +365,60 @@ def test_one_group_does_not_create_a_spurious_uncertainty_interval() -> None:
     assert all(
         r.bootstrap_95_interval is None and r.outcome == "insufficient-evidence" for r in results
     )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.1, 1.1])
+@pytest.mark.parametrize("where", ["overall", "group", "slice"])
+def test_nonfinite_per_class_scores_cannot_bypass_regression(value: float, where: str) -> None:
+    manifest = experiment()
+    arms = list(evidence(manifest))
+    arm = arms[0]
+    if where == "group":
+        report = arm.group_reports[0][1]
+    else:
+        report = arm.evaluation
+    invalid = replace(report.overall.per_class["object"], map50_95=value)
+    if where == "slice":
+        report = replace(
+            report,
+            slices={
+                "source_small": replace(
+                    report.slices["source_small"], per_class={"object": invalid}
+                )
+            },
+        )
+    else:
+        report = replace(report, overall=replace(report.overall, per_class={"object": invalid}))
+    arms[0] = (
+        replace(arm, group_reports=((arm.group_reports[0][0], report),) + arm.group_reports[1:])
+        if where == "group"
+        else replace(arm, evaluation=report)
+    )
+    with pytest.raises(ValueError, match="nonfinite or invalid"):
+        compare_experiment(manifest, tuple(arms))
+
+
+@pytest.mark.parametrize("where", ["overall", "group"])
+def test_report_truth_binding_must_match_frozen_source_digests(where: str) -> None:
+    manifest = experiment()
+    arms = list(evidence(manifest))
+    arm = arms[0]
+    report = arm.evaluation if where == "overall" else arm.group_reports[0][1]
+    changed = replace(
+        report,
+        source_truth_sha256=tuple(
+            (asset_id, digest("changed-boxes")) for asset_id, _ in report.source_truth_sha256
+        ),
+    )
+    arms[0] = (
+        replace(arm, evaluation=changed)
+        if where == "overall"
+        else replace(
+            arm, group_reports=((arm.group_reports[0][0], changed),) + arm.group_reports[1:]
+        )
+    )
+    with pytest.raises(ValueError, match="truth binding"):
+        compare_experiment(manifest, tuple(arms))
 
 
 def test_support_drift_between_paired_arms_is_rejected() -> None:

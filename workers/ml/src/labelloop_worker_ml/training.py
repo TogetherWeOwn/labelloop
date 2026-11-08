@@ -45,6 +45,19 @@ def write_record(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
+def verify_dataset_files(dataset: Path, manifest: dict) -> None:
+    """Validate bytes and exact membership at every consumer of compiled artifacts."""
+    entries = tuple(dataset.rglob("*"))
+    if any(path.is_symlink() for path in entries) or {
+        path.relative_to(dataset).as_posix() for path in entries if path.is_file()
+    } != set(manifest["file_hashes"]) | {"manifest.json"}:
+        raise ValueError("compiled dataset membership differs from frozen manifest")
+    for relative, expected in manifest["file_hashes"].items():
+        path = (dataset / relative).resolve()
+        if not path.is_relative_to(dataset) or file_digest(path) != expected:
+            raise ValueError("compiled dataset file digest mismatch")
+
+
 @dataclass(frozen=True)
 class TargetRetention:
     sample: str
@@ -225,15 +238,7 @@ class LocalUltralyticsBackend:
         class_ids = tuple(sorted(class_map, key=class_map.__getitem__))
         if request.augmentation.fliplr and set(dict(request.class_mirror_safety)) != set(class_ids):
             raise ValueError("mirror safety must cover the complete dataset class catalog")
-        entries = tuple(self.dataset.rglob("*"))
-        if any(path.is_symlink() for path in entries) or {
-            path.relative_to(self.dataset).as_posix() for path in entries if path.is_file()
-        } != set(manifest["file_hashes"]) | {"manifest.json"}:
-            raise ValueError("compiled dataset membership differs from frozen manifest")
-        for relative, expected in manifest["file_hashes"].items():
-            path = (self.dataset / relative).resolve()
-            if not path.is_relative_to(self.dataset) or file_digest(path) != expected:
-                raise ValueError("compiled dataset file digest mismatch")
+        verify_dataset_files(self.dataset, manifest)
         samples = [sample for sample in manifest["samples"] if sample["split"] == "val"]
         validation_ids = {image.asset_id for image in self.validation_images}
         if (

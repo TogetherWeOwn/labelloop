@@ -157,7 +157,11 @@ class ExperimentManifest:
             raise ValueError("paired 320/640 recipes are required")
         if len({r.recipe_id for r in self.recipes}) != len(self.recipes):
             raise ValueError("recipe identities must be unique")
-        training_groups = {s.group_id for s in self.sources if s.role in {"curated", "expansion"}}
+        # A shared warm checkpoint initializes both cohorts: expansion must never have
+        # influenced it, including through a group containing both kinds of source.
+        training_groups = {s.group_id for s in self.sources if s.role == "curated"} - {
+            s.group_id for s in self.sources if s.role == "expansion"
+        }
         for recipe in self.recipes:
             for digest in (
                 recipe.recipe_sha256,
@@ -173,7 +177,9 @@ class ExperimentManifest:
                 not recipe.warm_start_training_groups
                 or not set(recipe.warm_start_training_groups) <= training_groups
             ):
-                raise ValueError("warm-start ancestry missing or leaking evaluation groups")
+                raise ValueError(
+                    "warm-start ancestry missing or includes expansion/evaluation groups"
+                )
         expected = set(product((r.recipe_id for r in self.recipes), self.cohorts()))
         if {(d.recipe_id, d.cohort) for d in self.datasets} != expected or len(
             self.datasets
@@ -299,6 +305,11 @@ def _validate_report(
         or report.overall.images != len(source_ids)
     ):
         raise ValueError("evaluation membership differs from frozen sources")
+    truth_pins = {s.asset_id: s.truth_sha256 for s in manifest.sources if s.asset_id in source_ids}
+    if dict(report.source_truth_sha256) != truth_pins or len(report.source_truth_sha256) != len(
+        truth_pins
+    ):
+        raise ValueError("evaluation truth binding differs from frozen sources")
     if set(report.overall.per_class) != dict(manifest.class_mirror_safety).keys():
         raise ValueError("evaluation class catalog mismatch")
     if any(
@@ -307,9 +318,10 @@ def _validate_report(
     ):
         raise ValueError("comparison cannot hide targets through reduced coverage")
     for metrics in (report.overall, *report.slices.values()):
-        for value in (metrics.map50, metrics.map50_95, metrics.precision, metrics.recall):
-            if value is not None and (not math.isfinite(value) or not 0 <= value <= 1):
-                raise ValueError("nonfinite or invalid evaluation metric")
+        for scores in (metrics, *metrics.per_class.values()):
+            for value in (scores.map50, scores.map50_95, scores.precision, scores.recall):
+                if value is not None and (not math.isfinite(value) or not 0 <= value <= 1):
+                    raise ValueError("nonfinite or invalid evaluation metric")
 
 
 def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:

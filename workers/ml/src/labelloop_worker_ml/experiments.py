@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from labelloop_worker_ml.training import (
     LocalUltralyticsBackend,
     file_digest,
     predict_samples,
+    verify_dataset_files,
     write_record,
 )
 
@@ -31,6 +33,7 @@ def validate_inputs(
     dataset = json.loads((backend.dataset / "manifest.json").read_text())
     if file_digest(backend.dataset / "manifest.json") != expected.dataset_manifest_sha256:
         raise ValueError("dataset manifest digest mismatch")
+    verify_dataset_files(backend.dataset, dataset)
     recipe = next(r for r in manifest.recipes if r.recipe_id == cell.recipe_id)
     digest = hashlib.sha256(
         json.dumps(dataset["recipe"], sort_keys=True, separators=(",", ":")).encode()
@@ -88,10 +91,22 @@ def collect_arm(
     if file_digest(weights) != result.selected.sha256:
         raise ValueError("selected checkpoint digest mismatch")
     samples = [s for s in dataset["samples"] if s["split"] == "val"]
+    # Inference/export read a private snapshot, never the mutable compiled directory.
+    snapshot = backend.output / "experiment-inputs"
+    snapshot.mkdir(exist_ok=False)
+    for sample in samples:
+        relative = sample["image_path"]
+        if relative not in dataset["file_hashes"]:
+            raise ValueError("experiment image is outside frozen file membership")
+        target = snapshot / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(backend.dataset / relative, target)
+        if file_digest(target) != dataset["file_hashes"][relative]:
+            raise ValueError("compiled dataset changed while copying experiment inputs")
     shapes = json.loads((backend.output / "tensor-shapes.json").read_text())
     observed: list[tuple[int, ...]] = []
     classes = tuple(sorted(dataset["class_map"], key=dataset["class_map"].__getitem__))
-    derived = predict_samples(weights, backend.dataset, samples, classes, expected.policy, observed)
+    derived = predict_samples(weights, snapshot, samples, classes, expected.policy, observed)
     runner = EvaluationRunner(classes, expected.policy)
     arguments = {
         "dataset_release_id": expected.dataset_release_id,
@@ -128,7 +143,7 @@ def collect_arm(
         exported = export_and_compare(
             weights=weights,
             expected_weights_sha256=result.selected.sha256,
-            images=tuple(backend.dataset / s["image_path"] for s in samples),
+            images=tuple(snapshot / s["image_path"] for s in samples),
             policy=expected.policy,
             evidence=backend.output / "experiment-export.json",
         )
