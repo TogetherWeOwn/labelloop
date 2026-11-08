@@ -288,8 +288,9 @@ def test_fixture_truth_is_explicit_and_cannot_qualify_real_targets() -> None:
         replace(audit, truth_basis="trusted_system_truth").require_quality(
             current.current_pipeline, current.evidence.scope, targets
         )
+    malformed: Any = 1
     with pytest.raises(ValueError, match="explicit boolean"):
-        replace(current.evidence.targets, fixture_only=1)
+        replace(current.evidence.targets, fixture_only=malformed)
 
 
 def test_declared_error_target_requires_independent_group_sample_bound() -> None:
