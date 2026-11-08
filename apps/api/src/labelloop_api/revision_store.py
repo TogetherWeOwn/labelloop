@@ -10,7 +10,7 @@ from sqlalchemy import Connection, insert, select, text
 from labelloop_core.domain import AnnotationRevision, DatasetObject
 from labelloop_core.geometry import Box
 from labelloop_core.qualification import QualificationContext
-from labelloop_core.qualification_data import ScopeCell, require_name, require_scope
+from labelloop_core.qualification_data import ScopeCell, require_name, require_names, require_scope
 
 from .acceptance_store import require_automatic_acceptance
 from .generated_label_store import proposal_teacher, record_generated_label_origin
@@ -66,14 +66,20 @@ def append_review(
     gold_eligible: bool = False,
     automatic: AutomaticReview | None = None,
     proposal_run_key: str | None = None,
+    proposal_run_keys: tuple[str, ...] = (),
 ) -> int:
     """Append one authorized review, atomically retaining supplied proposal influence.
 
     The service must supply every contributing proposal run; omission cannot prove
     an annotation was made without a teacher. This is not an HTTP authorization port.
     """
+    require_names(proposal_run_keys, allow_empty=True)
     if proposal_run_key is not None:
+        if proposal_run_keys:
+            raise ValueError("supply either one proposal run or a collection, not both")
         require_name(proposal_run_key)
+        proposal_run_keys = (proposal_run_key,)
+    if proposal_run_keys:
         require_name(actor_id)
     if actor_kind not in {"human", "model", "system"} or expected_revision < 1:
         raise ValueError("invalid actor or expected revision")
@@ -96,8 +102,8 @@ def append_review(
         raise ValueError("automatic qualification cannot authorize a non-automatic revision")
     asset_uuid = source_uuid(connection, asset_id)
     with connection.begin_nested():
-        teacher_key = None
-        if needs_qualification or proposal_run_key is not None:
+        teacher_keys = set()
+        if needs_qualification or proposal_run_keys:
             # Follow registry/audit lock order before locking the annotation asset.
             project_key = connection.execute(
                 select(project.c.project_key)
@@ -105,13 +111,16 @@ def append_review(
                 .where(source_asset.c.id == asset_uuid)
             ).scalar_one()
             lock_project(connection, project_key)
-        if proposal_run_key is not None:
-            teacher_key = proposal_teacher(
-                connection,
-                project_key=project_key,
-                asset_key=asset_id,
-                expected_revision=expected_revision,
-                proposal_run_key=proposal_run_key,
+        # Resolve every run even when several share a teacher; one invalid run vetoes all.
+        for key in sorted(proposal_run_keys):
+            teacher_keys.add(
+                proposal_teacher(
+                    connection,
+                    project_key=project_key,
+                    asset_key=asset_id,
+                    expected_revision=expected_revision,
+                    proposal_run_key=key,
+                )
             )
         connection.execute(
             text("SELECT id FROM source_asset WHERE id = :asset_id FOR UPDATE"),
@@ -259,7 +268,7 @@ def append_review(
             )
         )
         connection.execute(insert(annotation_revision).values(**values))
-        if teacher_key is not None:
+        for teacher_key in sorted(teacher_keys):
             record_generated_label_origin(
                 connection,
                 project_key=project_key,

@@ -202,7 +202,7 @@ def _outcome(connection, release, context, actor, *, canary):
     return AnnotationOutcomeRef(prefix, prefix, prefix)
 
 
-def _proposal_origin_fixture(connection, release, asset_key, revision):
+def _proposal_origin_fixture(connection, release, asset_key, revision, suffix=""):
     """Synthetic completed producer rows; not a claim of inference execution."""
     import hashlib
     import json
@@ -210,7 +210,7 @@ def _proposal_origin_fixture(connection, release, asset_key, revision):
     from labelloop_api.model_store import json_record
     from labelloop_core.json_records import canonical_json
 
-    run_key = asset_key + f"-proposal-{revision}"
+    run_key = asset_key + f"-proposal-{revision}" + suffix
     binding = dict(
         run_id=run_key,
         source=dict(project_id=release.project_id, asset_id=asset_key),
@@ -296,8 +296,9 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 training_eligible=True,
                 automatic=automatic,
             )
-            arguments["proposal_run_key"] = _proposal_origin_fixture(
-                connection, release, asset_key, 1
+            arguments["proposal_run_keys"] = (
+                _proposal_origin_fixture(connection, release, asset_key, 1, "-a"),
+                _proposal_origin_fixture(connection, release, asset_key, 1, "-b"),
             )
             assert append_review(connection, expected_revision=1, **arguments) == 2
             from labelloop_api.generated_label_store import label_teacher_runs
@@ -315,9 +316,39 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     ).scalar_one(),
                 )
             ]
-            arguments["proposal_run_key"] = _proposal_origin_fixture(
-                connection, release, asset_key, 2
+            from labelloop_api.model_store import load_release
+
+            alternate_id = connection.execute(
+                sa.select(model_schema.model_release.c.id)
+                .where(
+                    model_schema.model_release.c.project_id == project_id,
+                    model_schema.model_release.c.release_key != release.release_id,
+                )
+                .order_by(model_schema.model_release.c.release_key)
+                .limit(1)
+            ).scalar_one()
+            alternate = load_release(connection, alternate_id)
+            assert alternate is not None
+            teachers = sorted((release, alternate), key=lambda item: item.release_id)
+            arguments["proposal_run_keys"] = tuple(
+                _proposal_origin_fixture(connection, teacher, asset_key, 2, f"-{index}")
+                for index, teacher in enumerate(teachers)
             )
+            # A missing later run must not leave the first teacher or revision behind.
+            with pytest.raises(sa.exc.NoResultFound):
+                append_review(
+                    connection,
+                    expected_revision=2,
+                    **(
+                        arguments
+                        | {
+                            "proposal_run_keys": (
+                                arguments["proposal_run_keys"][0],
+                                "zz-missing-proposal",
+                            )
+                        }
+                    ),
+                )
             assert (
                 connection.execute(
                     sa.select(annotation_revision.c.actor_id).where(
@@ -356,7 +387,9 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
             connection.execute(
                 sa.text(
                     "CREATE FUNCTION pg_temp.reject_origin() RETURNS trigger LANGUAGE plpgsql "
-                    "AS $$ BEGIN RAISE EXCEPTION 'injected origin failure'; END $$"
+                    "AS $$ BEGIN IF EXISTS (SELECT 1 FROM qualification_generated_label_origin "
+                    "WHERE asset_id = NEW.asset_id AND revision = NEW.revision) THEN "
+                    "RAISE EXCEPTION 'injected origin failure'; END IF; RETURN NEW; END $$"
                 )
             )
             connection.execute(
@@ -421,6 +454,27 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     == 2
                 )
                 pause_transaction.rollback()
+            assert append_review(connection, expected_revision=2, **arguments) == 3
+            expected_runs = {
+                connection.execute(
+                    sa.select(model_schema.model_release.c.training_run_id).where(
+                        model_schema.model_release.c.release_key == teacher.release_id,
+                        model_schema.model_release.c.project_id == project_id,
+                    )
+                ).scalar_one()
+                for teacher in teachers
+            }
+            links = label_teacher_runs(connection, project_id)[asset_key]
+            assert len(links) == 3
+            assert {run for revision, run in links if revision == 3} == expected_runs
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count())
+                    .select_from(review_event)
+                    .where(review_event.c.asset_id == asset_id)
+                ).scalar_one()
+                == event_count + 1
+            )
         transaction.rollback()
 
 

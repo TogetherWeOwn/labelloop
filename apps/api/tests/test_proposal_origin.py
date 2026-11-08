@@ -181,3 +181,115 @@ def test_review_commits_proposal_influence_with_exact_revision_or_rolls_back(
         assert not any(
             getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
         )
+
+
+@pytest.mark.parametrize("positive", [False, True])
+@pytest.mark.parametrize("same_teacher", [False, True])
+@pytest.mark.parametrize("failure", [None, "lookup", "origin"])
+def test_multiple_proposals_resolve_all_runs_and_atomically_retain_distinct_teachers(
+    monkeypatch, positive, same_teacher, failure
+):
+    monkeypatch.setattr(revision_store, "source_uuid", lambda *_: "uuid")
+    events = []
+    monkeypatch.setattr(revision_store, "lock_project", lambda *_: events.append("project"))
+
+    def resolve(_connection, **kwargs):
+        key = kwargs["proposal_run_key"]
+        events.append(key)
+        assert kwargs == dict(
+            project_key="project-key", asset_key="asset", expected_revision=1, proposal_run_key=key
+        )
+        if failure == "lookup" and key == "proposal-b":
+            raise ValueError("injected lookup failure")
+        return "teacher-a" if same_teacher else key.replace("proposal", "teacher")
+
+    teacher = MagicMock(side_effect=resolve)
+    origin = MagicMock()
+    if failure == "origin":
+        origin.side_effect = (
+            ValueError("injected origin failure")
+            if same_teacher
+            else [None, ValueError("injected origin failure")]
+        )
+    monkeypatch.setattr(revision_store, "proposal_teacher", teacher)
+    monkeypatch.setattr(revision_store, "record_generated_label_origin", origin)
+    objects = [{"object_id": "one", "class_id": "item", "box": [0, 0, 5, 5]}] if positive else []
+    connection = review_connection(
+        objects, actor_kind="model", approval_state="proposed", review_tier="unreviewed"
+    )
+    execute = connection.execute.side_effect
+
+    def observed(statement, parameters=None):
+        if "SELECT id FROM source_asset" in str(statement):
+            events.append("asset")
+        return execute(statement, parameters)
+
+    connection.execute.side_effect = observed
+    args = dict(
+        asset_id="asset",
+        actor_kind="model",
+        actor_id="worker",
+        expected_revision=1,
+        approval_state="proposed",
+        review_tier="unreviewed",
+        scope_completeness="unreviewed",
+        objects=objects,
+        proposal_run_keys=("proposal-b", "proposal-a"),
+    )
+    if failure:
+        with pytest.raises(ValueError, match="injected"):
+            revision_store.append_review(connection, **args)
+        assert connection.begin_nested.return_value.__exit__.call_args.args[0] is ValueError
+    else:
+        assert revision_store.append_review(connection, **args) == 2
+    assert teacher.call_count == 2
+    assert events == ["project", "proposal-a", "proposal-b"] + (
+        [] if failure == "lookup" else ["asset"]
+    )
+    if failure == "lookup":
+        origin.assert_not_called()
+        assert not any(
+            getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+        )
+    else:
+        expected = ["teacher-a"] if same_teacher else ["teacher-a", "teacher-b"]
+        assert [call.kwargs["teacher_model_key"] for call in origin.call_args_list] == expected
+        for call in origin.call_args_list:
+            assert call.args == (connection,)
+            assert call.kwargs == dict(
+                project_key="project-key",
+                asset_key="asset",
+                revision=2,
+                teacher_model_key=call.kwargs["teacher_model_key"],
+                actor_id="worker",
+            )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"proposal_run_keys": "proposal"},
+        {"proposal_run_keys": ["proposal"]},
+        {"proposal_run_keys": ("proposal", "proposal")},
+        {"proposal_run_keys": ("proposal", " ")},
+        {"proposal_run_keys": ("proposal", None)},
+        {"proposal_run_key": "single", "proposal_run_keys": ("proposal",)},
+    ],
+)
+def test_invalid_proposal_collection_is_rejected_before_database_access(changes):
+    connection = MagicMock()
+    with pytest.raises(ValueError):
+        revision_store.append_review(
+            connection,
+            asset_id="asset",
+            actor_kind="model",
+            actor_id="worker",
+            expected_revision=1,
+            approval_state="proposed",
+            review_tier="unreviewed",
+            scope_completeness="unreviewed",
+            objects=[],
+            **changes,
+        )
+    connection.execute.assert_not_called()
+    connection.begin_nested.assert_not_called()
