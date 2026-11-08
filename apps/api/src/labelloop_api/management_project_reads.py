@@ -21,6 +21,7 @@ from .management_details import (
     SourcePairRead,
     SourcePolicyRead,
 )
+from .management_references import proposed_references
 from .schema import (
     borderline_review,
     canonical_event,
@@ -272,6 +273,7 @@ def project_detail(
     guide = guide_draft(connection, project_row, workspace_id)
     catalog = class_catalog_draft(connection, project_row, workspace_id, ontology.ontology_key)
     source_policy = source_policy_draft(connection, project_row, workspace_id)
+    references = proposed_references(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:
@@ -307,7 +309,7 @@ def project_detail(
             for item in canonical.classes
         ],
         class_catalog_draft=catalog,
-        references=None,
+        references=references,
         annotation_guide=policy["annotation_guide"],
         guide=GuideRead.model_validate(
             guide.model_dump(exclude={"expected_revision", "annotation_guide"})
@@ -316,7 +318,7 @@ def project_detail(
         else None,
         sources=sources,
         source_policy_draft=source_policy,
-        approved_steps=[] if draft or guide or catalog or source_policy else None,
+        approved_steps=[] if draft or guide or catalog or source_policy or references else None,
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

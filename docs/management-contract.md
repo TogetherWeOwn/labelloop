@@ -169,6 +169,36 @@ held-out sets or historical releases. New freezes fail closed until validated
 source-policy approval/publication and grouping binding are implemented.
 Real admission remains unbound pending exact-consuming-head Security acceptance.
 
+## Proposed reference enrollment (unmounted)
+
+`enrollReference`, `POST /projects/{project_id}/references`, enrolls **metadata
+for an existing canonical source**, not a file selection, upload or URL fetch.
+Send expected project revision, current `base_ontology_id`, current
+`assignment_version`, owned `asset_id`, published `class_id`, source/permitted-use,
+view, lighting, scale, validity scope and distinct optional confusion class IDs.
+Provenance text is untrusted data and never grants a licence or external access.
+No crop, embedding model, approval, reviewer identity or new class is accepted.
+
+The canonical project/retry locks and atomic attributed receipt are reused.
+Freeze and enrollment share the same authoritative grouping validator: complete,
+current, unambiguous locked assignments, consistent exact hashes/declared groups,
+materialized relation closure and no pending pairs. Only training sources are
+accepted; historical holdouts, their byte-identical copies and members of their
+current groups are excluded conservatively. An unpublished class-catalog draft
+cannot supply effective reference identities. Missing grouping binding is a
+real prerequisite, not permission to infer browser splits.
+
+Records use the existing `reference_example` table with `approved: false`, no
+embedding or crop, and receipt-bound public metadata. `readProject.references`
+shows `proposed` evidence only when persisted rows and workspace-attributed audit
+receipts match; it grants no retrieval, training, gold or human approval.
+Enrollment invalidates setup approvals/automatic acceptance and blocks new
+freezes pending validated publication. Existing frozen releases are unchanged.
+The mutation returns the project revision; refresh `readProject` for the
+server-issued reference ID. Real asset admission remains unbound under its
+exact-consuming-head Security condition. Reference acceptance, pack publication,
+revalidation after changes and retrieval binding remain incomplete.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.
@@ -179,7 +209,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 
 | Fixture command family | Producer and intended implementation boundary |
 |---|---|
-| Remaining `save_setup`, `add_class` | Management facade: reference enrollment, source admission/grouping binding and effective ontology publication/migration remain missing; typed scope/guide/class-catalog/source-policy draft saves above are implemented separately, not generic capture payloads or approval |
+| Remaining `save_setup`, `add_class` | Management facade: proposed reference enrollment and typed setup draft saves above are implemented separately, not generic capture payloads or approval; source admission/grouping binding and effective ontology publication/migration remain missing |
 | `accept_class`, `accept_reference`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; reference provenance and evaluation-holdout exclusion enforced server-side |
 | `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |

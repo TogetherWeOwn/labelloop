@@ -50,7 +50,22 @@ CATALOG = {
         }
     ],
 }
+REFERENCE = {
+    "expected_revision": 2,
+    "base_ontology_id": "ontology-1",
+    "assignment_version": "assignment-1",
+    "asset_id": "source-a",
+    "class_id": "bird",
+    "source": "Generated fixture",
+    "permitted_use": "CC0 fixture",
+    "view": "Side",
+    "lighting": "Daylight",
+    "scale": "Full frame",
+    "validity_scope": "Wildlife fixture",
+    "confused_with": [],
+}
 MUTATIONS = [
+    ("/projects/p/references", "enroll_reference", REFERENCE, 201),
     ("/projects", "create_project", PROJECT, 201),
     (
         "/projects/p/assets",
@@ -172,6 +187,34 @@ def test_source_policy_refuses_file_capture_split_and_approval_authority(field, 
     }
     response = client.post(
         "/projects/p/setup/sources", json=body, headers={"Idempotency-Key": "source-policy"}
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("approved", True),
+        ("reviewer_id", "forged"),
+        ("original_base64", "aW1hZ2U="),
+        ("object_key", "sha256/aa/file"),
+        ("crop", [0, 0, 1, 1]),
+        ("confused_with", ["bird"]),
+        ("confused_with", ["other", "other"]),
+        ("permitted_use", ""),
+        ("view", ""),
+        ("expected_revision", True),
+        ("source", "x" * 4097),
+        ("embedding_model", "unapproved"),
+    ],
+)
+def test_reference_enrollment_refuses_file_and_approval_authority(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/references",
+        json={**REFERENCE, field: value},
+        headers={"Idempotency-Key": "reference"},
     )
     assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
     assert service.calls == []
@@ -609,8 +652,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 22
-    assert sum(len(methods) for methods in spec["paths"].values()) == 23
+    assert len(spec["paths"]) == 23
+    assert sum(len(methods) for methods in spec["paths"].values()) == 24
+    assert (
+        spec["paths"]["/projects/{project_id}/references"]["post"]["operationId"]
+        == "enrollReference"
+    )
+    assert "export type ReferenceEnroll =" in client
     assert (
         spec["paths"]["/projects/{project_id}/setup/sources"]["post"]["operationId"]
         == "saveSourcePolicyDraft"

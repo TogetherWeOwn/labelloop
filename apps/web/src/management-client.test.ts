@@ -154,6 +154,26 @@ describe('generated management client', () => {
     });
   });
 
+  it('enrolls proposed reference metadata against server-owned source and version pins', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 2, base_ontology_id: 'ontology-1', assignment_version: 'assignment-1',
+      asset_id: 'source-a', class_id: 'bird', source: 'Generated fixture', permitted_use: 'CC0',
+      view: 'Side', lighting: 'Diffuse', scale: 'Full frame', validity_scope: 'Fixture',
+      confused_with: [],
+    };
+    await client.enrollReference({ project_id: 'p', 'idempotency-key': 'reference-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/references', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'reference-1',
+      },
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error', body: JSON.stringify(body),
+    });
+  });
+
   it('saves source policy intent without file, grouping or split authority', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

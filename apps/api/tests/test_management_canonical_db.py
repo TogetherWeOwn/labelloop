@@ -22,6 +22,7 @@ from labelloop_api.management_contracts import (
     ClassCatalogDraft,
     GuideDraft,
     ProjectCreate,
+    ReferenceEnroll,
     ReleaseFreeze,
     ScopeDraft,
     SourcePolicyDraft,
@@ -37,6 +38,7 @@ from labelloop_api.schema import (
     completeness_assessment,
     ontology_release,
     project,
+    reference_example,
     similarity_relation,
     source_asset,
     source_split_assignment,
@@ -71,6 +73,7 @@ def database(tmp_path):
             text(
                 f"GRANT SELECT, INSERT ON project, ontology_release, source_asset, "
                 f"annotation_revision, canonical_event, canonical_dataset_release, "
+                f"reference_example, "
                 f"completeness_assessment, source_split_assignment, similarity_relation, "
                 f'borderline_review TO "{role}"'
             )
@@ -815,6 +818,242 @@ def test_catalog_projection_requires_matching_attributed_current_draft(database,
         CanonicalManagementReads(service.engine, service.workspace_id).read_project(
             Reader(), created.id
         )
+
+
+def reference_inputs(service, owner, **kwargs):
+    created, asset, source, frozen = release_inputs(service, owner, **kwargs)
+    payload = ReferenceEnroll(
+        expected_revision=2,
+        base_ontology_id=frozen.ontology_id,
+        assignment_version=frozen.assignment_version,
+        asset_id=asset.id,
+        class_id="package",
+        source="Generated fixture",
+        permitted_use="CC0 fixture",
+        view="Side",
+        lighting="Diffuse",
+        scale="Full frame",
+        validity_scope="Visible packages",
+        confused_with=[],
+    )
+    return created, asset, source, payload
+
+
+def enroll(service, project_id, payload, actor=None, key="reference"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "enroll_reference", project_id, payload)
+    return service.enroll_reference(actor, context, payload)
+
+
+def reference_count(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(func.count())
+            .select_from(reference_example)
+            .join(source_asset)
+            .where(source_asset.c.project_id == project_id)
+        ).scalar_one()
+
+
+def test_reference_enrollment_is_proposed_attributed_and_replayable(database):
+    service, owner, _ = database
+    created, asset, _, payload = reference_inputs(service, owner, split="train")
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == row.id)
+            .values(
+                access_policy={
+                    **row.access_policy,
+                    "auto_accept_qualification": {"qualified": True},
+                    "management_setup_approvals": {"evidence": "old"},
+                }
+            )
+        )
+    saved = enroll(service, created.id, payload)
+    assert saved.revision == 3 and enroll(service, created.id, payload) == saved
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        enroll(service, created.id, payload.model_copy(update={"view": "Top"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        enroll(service, created.id, payload, key="stale")
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert len(detail.references) == 1
+    ref = detail.references[0]
+    assert ref.asset_id == asset.id and ref.approval == "proposed"
+    assert ref.source == payload.source and detail.approved_steps == []
+    assert detail.published_release_id is None
+    with owner.connect() as connection:
+        row = connection.execute(
+            select(reference_example).where(reference_example.c.id == ref.id)
+        ).one()
+        assert not row.approved and row.crop is None and row.embedding_model is None
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.enroll_reference",
+            )
+        ).one()
+        assert receipt.actor_id == Actor().id and receipt.actor_kind == "human"
+        assert receipt.payload["evidence"]["reference"] == ref.model_dump()
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert (
+            "auto_accept_qualification" not in policy and policy["management_setup_approvals"] == {}
+        )
+    assert reference_count(owner, created.id) == 1
+    assert counts(owner, created.id)[2] == 3
+
+
+@pytest.mark.parametrize("split,locked", [("val", True), ("test", True), ("train", False)])
+def test_reference_enrollment_refuses_holdouts_and_unlocked_sources(database, split, locked):
+    service, owner, _ = database
+    created, _, _, payload = reference_inputs(service, owner, split=split, locked=locked)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        enroll(service, created.id, payload)
+    assert reference_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("base_ontology_id", "foreign", "revision_conflict"),
+        ("assignment_version", "foreign", "missing_evidence"),
+        ("class_id", "unknown", "unsupported_classes"),
+        ("confused_with", ["unknown"], "unsupported_classes"),
+        ("asset_id", "unknown", "not_found"),
+    ],
+)
+def test_reference_enrollment_validates_authoritative_pins(database, field, value, code):
+    service, owner, _ = database
+    created, _, _, payload = reference_inputs(service, owner, split="train")
+    with pytest.raises(ManagementFailure, match=code):
+        enroll(service, created.id, payload.model_copy(update={field: value}))
+    assert reference_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_reference_enrollment_concurrency_uses_project_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created, _, _, payload = reference_inputs(service, owner, split="train")
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return enroll(service, created.id, payload, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(3) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert reference_count(owner, created.id) == 1
+
+
+def test_reference_event_failure_rolls_back_and_retry_succeeds(database):
+    service, owner, role = database
+    created, _, _, payload = reference_inputs(service, owner, split="train")
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        enroll(service, created.id, payload)
+    assert reference_count(owner, created.id) == 0
+    assert counts(owner, created.id)[2] == 2
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    assert enroll(service, created.id, payload).revision == 3
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_reference_enrollment_denies_nonadmin(database, actor):
+    service, owner, _ = database
+    created, _, _, payload = reference_inputs(service, owner, split="train")
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        enroll(service, created.id, payload, actor=actor)
+    assert reference_count(owner, created.id) == 0
+
+
+def test_reference_enrollment_checks_context_workspace_and_asset_ownership(database):
+    service, owner, _ = database
+    created, asset, _, payload = reference_inputs(service, owner, split="train")
+    enroll(service, created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        enroll(replace(service, workspace_id=uuid4()), created.id, payload)
+    context = MutationContext.bind(Actor(), "reference", "enroll_reference", created.id, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.enroll_reference(Actor(), replace(context, actor_id="forged"), payload)
+    other = create(service, key="other")
+    with pytest.raises(ManagementFailure, match="not_found"):
+        enroll(
+            service,
+            other.id,
+            payload.model_copy(
+                update={
+                    "expected_revision": 1,
+                    "asset_id": asset.id,
+                    "base_ontology_id": catalog_payload(service, other.id).base_ontology_id,
+                }
+            ),
+            key="other-ref",
+        )
+
+
+@pytest.mark.parametrize("tamper", ["approved", "provenance", "removed"])
+def test_reference_projection_requires_matching_attributed_row(database, tamper):
+    service, owner, _ = database
+    created, _, _, payload = reference_inputs(service, owner, split="train")
+    enroll(service, created.id, payload)
+    with owner.begin() as connection:
+        ids = select(source_asset.c.id).where(source_asset.c.project_id == created.id)
+        if tamper == "removed":
+            connection.execute(
+                reference_example.delete().where(reference_example.c.asset_id.in_(ids))
+            )
+        else:
+            connection.execute(
+                reference_example.update()
+                .where(reference_example.c.asset_id.in_(ids))
+                .values(
+                    **(
+                        {"approved": True}
+                        if tamper == "approved"
+                        else {"evidence_provenance": "{}"}
+                    )
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def test_reference_enrollment_excludes_reassigned_historical_holdouts(database):
+    service, owner, _ = database
+    created, _, source, payload = reference_inputs(service, owner, split="val")
+    with owner.begin() as connection:
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-2",
+                asset_id=source.id,
+                group_id="group-1",
+                split="train",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture reassignment",
+                locked=True,
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        enroll(
+            service, created.id, payload.model_copy(update={"assignment_version": "assignment-2"})
+        )
+    assert reference_count(owner, created.id) == 0
 
 
 def source_policy_payload(revision=1):

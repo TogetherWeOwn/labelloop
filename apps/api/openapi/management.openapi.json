@@ -2097,6 +2097,107 @@
         "title": "RecipePreviewRead",
         "type": "object"
       },
+      "ReferenceEnroll": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "assignment_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "base_ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Base Ontology Id",
+            "type": "string"
+          },
+          "class_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Class Id",
+            "type": "string"
+          },
+          "confused_with": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Confused With",
+            "type": "array"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "lighting": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Lighting",
+            "type": "string"
+          },
+          "permitted_use": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Permitted Use",
+            "type": "string"
+          },
+          "scale": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Scale",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "validity_scope": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Validity Scope",
+            "type": "string"
+          },
+          "view": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "View",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "base_ontology_id",
+          "assignment_version",
+          "asset_id",
+          "class_id",
+          "source",
+          "permitted_use",
+          "view",
+          "lighting",
+          "scale",
+          "validity_scope",
+          "confused_with"
+        ],
+        "title": "ReferenceEnroll",
+        "type": "object"
+      },
       "ReferenceRead": {
         "additionalProperties": false,
         "properties": {
@@ -4846,6 +4947,123 @@
           }
         },
         "summary": "Promote Model",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/references": {
+      "post": {
+        "operationId": "enrollReference",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferenceEnroll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Enroll Reference",
         "tags": [
           "management"
         ]

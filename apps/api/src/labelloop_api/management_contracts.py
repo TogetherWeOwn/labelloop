@@ -125,6 +125,29 @@ class SourcePolicyDraft(Mutation):
         return self
 
 
+class ReferenceEnroll(Mutation):
+    base_ontology_id: Identifier
+    assignment_version: Identifier
+    asset_id: Identifier
+    class_id: Identifier
+    source: Annotated[str, Field(min_length=1, max_length=4096)]
+    permitted_use: Annotated[str, Field(min_length=1, max_length=4096)]
+    view: Annotated[str, Field(min_length=1, max_length=4096)]
+    lighting: Annotated[str, Field(min_length=1, max_length=4096)]
+    scale: Annotated[str, Field(min_length=1, max_length=4096)]
+    validity_scope: Annotated[str, Field(min_length=1, max_length=4096)]
+    confused_with: Annotated[list[Identifier], Field(max_length=64)]
+
+    @model_validator(mode="after")
+    def distinct_confusion_classes(self) -> Self:
+        if (
+            len(set(self.confused_with)) != len(self.confused_with)
+            or self.class_id in self.confused_with
+        ):
+            raise ValueError("confusion classes must be unique and distinct from the target")
+        return self
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[
