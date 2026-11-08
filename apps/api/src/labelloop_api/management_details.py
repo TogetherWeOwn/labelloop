@@ -86,6 +86,11 @@ class ClassCatalogRead(Contract):
     classes: list[ClassDraftInput]
 
 
+class SourcePolicyRead(Contract):
+    metadata_keys: list[Literal["session", "sequence", "subject"]]
+    collection_notes: Text
+
+
 class ProjectDetail(Contract):
     resource: Resource
     name: Text | None
@@ -104,6 +109,8 @@ class ProjectDetail(Contract):
     annotation_guide: Text
     guide: GuideRead | None
     sources: SourceGroupsRead
+    # Configuration intent is separate from observed grouping/split facts.
+    source_policy_draft: SourcePolicyRead | None = None
     approved_steps: list[SetupStep] | None
     versions: dict[Identifier, Identifier]
     published_release_id: Identifier | None

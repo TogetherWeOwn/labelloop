@@ -84,6 +84,7 @@ def freeze_candidate(
                     "management.save_scope_draft",
                     "management.save_guide_draft",
                     "management.save_class_catalog_draft",
+                    "management.save_source_policy_draft",
                 ]
             ),
         )
@@ -95,6 +96,7 @@ def freeze_candidate(
             "management_scope_draft",
             "management_guide_draft",
             "management_class_catalog_draft",
+            "management_source_policy_draft",
         )
     ):
         reject("missing_evidence")

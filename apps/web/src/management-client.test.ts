@@ -154,6 +154,30 @@ describe('generated management client', () => {
     });
   });
 
+  it('saves source policy intent without file, grouping or split authority', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 5,
+      metadata_keys: ['session', 'sequence'] as ('session' | 'sequence')[],
+      collection_notes: 'Independent capture sessions',
+    };
+    await client.saveSourcePolicyDraft({ project_id: 'p', 'idempotency-key': 'sources-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/setup/sources', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'sources-1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('uses the server training profile and reads a fresh CSRF token per mutation', async () => {
     const { request } = mockRequest();
     const csrf = vi.fn().mockReturnValueOnce('first').mockReturnValueOnce('second');

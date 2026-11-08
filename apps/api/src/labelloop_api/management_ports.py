@@ -30,6 +30,7 @@ from .management_contracts import (
     ResourceKind,
     ResourcePage,
     ScopeDraft,
+    SourcePolicyDraft,
     TrainingStart,
     VariantCompile,
 )
@@ -99,6 +100,10 @@ class ManagementOperations(Protocol):
 
     def save_class_catalog_draft(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ClassCatalogDraft
+    ) -> Resource: ...
+
+    def save_source_policy_draft(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePolicyDraft
     ) -> Resource: ...
 
     def ingest_asset(

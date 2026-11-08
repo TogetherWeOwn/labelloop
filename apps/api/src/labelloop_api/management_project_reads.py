@@ -5,7 +5,13 @@ from sqlalchemy import Connection, func, select
 from labelloop_core.domain import ClassDefinition, OntologyRelease
 
 from .management_canonical import refuse
-from .management_contracts import ClassCatalogDraft, GuideDraft, Resource, ScopeDraft
+from .management_contracts import (
+    ClassCatalogDraft,
+    GuideDraft,
+    Resource,
+    ScopeDraft,
+    SourcePolicyDraft,
+)
 from .management_details import (
     ClassCatalogRead,
     ClassRead,
@@ -13,6 +19,7 @@ from .management_details import (
     ProjectDetail,
     SourceGroupsRead,
     SourcePairRead,
+    SourcePolicyRead,
 )
 from .schema import (
     borderline_review,
@@ -199,6 +206,34 @@ def class_catalog_draft(
     return ClassCatalogRead.model_validate(draft.model_dump(exclude={"expected_revision"}))
 
 
+def source_policy_draft(
+    connection: Connection, project_row, workspace_id
+) -> SourcePolicyRead | None:
+    receipt = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type == "management.save_source_policy_draft",
+            canonical_event.c.actor_kind == "human",
+            canonical_event.c.payload["workspace_id"].as_string() == str(workspace_id),
+        )
+        .order_by(canonical_event.c.expected_revision.desc())
+        .limit(1)
+    ).one_or_none()
+    stored = project_row.access_policy.get("management_source_policy_draft")
+    if receipt is None:
+        if stored is not None:
+            refuse("missing_evidence")
+        return None
+    evidence = receipt.payload["evidence"]["source_policy_draft"]
+    draft = SourcePolicyDraft.model_validate(
+        {**evidence, "expected_revision": receipt.expected_revision}
+    )
+    if stored != evidence or project_row.access_policy.get("management_setup_approvals") != {}:
+        refuse("missing_evidence")
+    return SourcePolicyRead.model_validate(draft.model_dump(exclude={"expected_revision"}))
+
+
 def project_detail(
     connection: Connection, project_row, revision: int, workspace_id
 ) -> ProjectDetail:
@@ -236,6 +271,7 @@ def project_detail(
     draft = scope_draft(connection, project_row, workspace_id)
     guide = guide_draft(connection, project_row, workspace_id)
     catalog = class_catalog_draft(connection, project_row, workspace_id, ontology.ontology_key)
+    source_policy = source_policy_draft(connection, project_row, workspace_id)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:
@@ -279,7 +315,8 @@ def project_detail(
         if guide
         else None,
         sources=sources,
-        approved_steps=[] if draft or guide or catalog else None,
+        source_policy_draft=source_policy,
+        approved_steps=[] if draft or guide or catalog or source_policy else None,
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

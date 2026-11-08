@@ -132,7 +132,51 @@ MUTATIONS = [
         200,
     ),
     ("/projects/p/setup/classes", "save_class_catalog_draft", CATALOG, 200),
+    (
+        "/projects/p/setup/sources",
+        "save_source_policy_draft",
+        {
+            "expected_revision": 1,
+            "metadata_keys": ["session", "sequence"],
+            "collection_notes": "Independent capture sessions",
+        },
+        200,
+    ),
 ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("metadata_keys", []),
+        ("metadata_keys", ["session", "session"]),
+        ("metadata_keys", ["class_id"]),
+        ("metadata_keys", "session"),
+        ("collection_notes", ""),
+        ("collection_notes", "x" * 8193),
+        ("files", [{"name": "fixture.png", "bytes": 100}]),
+        ("original_base64", "aW1hZ2U="),
+        ("assignments", {"asset": "test"}),
+        ("holdout_references_allowed", True),
+        ("approved", True),
+        ("expected_revision", True),
+    ],
+)
+def test_source_policy_refuses_file_capture_split_and_approval_authority(field, value):
+    client, service = client_for(Actor())
+    body = {
+        "expected_revision": 1,
+        "metadata_keys": ["session"],
+        "collection_notes": "Independent capture sessions",
+        field: value,
+    }
+    response = client.post(
+        "/projects/p/setup/sources", json=body, headers={"Idempotency-Key": "source-policy"}
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
 READS = [
     "/projects",
     "/projects/p/resources?kind=variant",
@@ -565,8 +609,14 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 21
-    assert sum(len(methods) for methods in spec["paths"].values()) == 22
+    assert len(spec["paths"]) == 22
+    assert sum(len(methods) for methods in spec["paths"].values()) == 23
+    assert (
+        spec["paths"]["/projects/{project_id}/setup/sources"]["post"]["operationId"]
+        == "saveSourcePolicyDraft"
+    )
+    assert "export type SourcePolicyDraft =" in client
+    assert "export type SourcePolicyRead =" in client
     assert (
         spec["paths"]["/projects/{project_id}/setup/classes"]["post"]["operationId"]
         == "saveClassCatalogDraft"

@@ -1725,6 +1725,16 @@
             "title": "Source Permitted Use",
             "type": "string"
           },
+          "source_policy_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourcePolicyRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sources": {
             "$ref": "#/components/schemas/SourceGroupsRead"
           },
@@ -3031,6 +3041,71 @@
           "right_asset_id"
         ],
         "title": "SourcePairRead",
+        "type": "object"
+      },
+      "SourcePolicyDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "collection_notes": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Collection Notes",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "metadata_keys": {
+            "items": {
+              "enum": [
+                "session",
+                "sequence",
+                "subject"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Metadata Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "metadata_keys",
+          "collection_notes"
+        ],
+        "title": "SourcePolicyDraft",
+        "type": "object"
+      },
+      "SourcePolicyRead": {
+        "additionalProperties": false,
+        "properties": {
+          "collection_notes": {
+            "maxLength": 16384,
+            "title": "Collection Notes",
+            "type": "string"
+          },
+          "metadata_keys": {
+            "items": {
+              "enum": [
+                "session",
+                "sequence",
+                "subject"
+              ],
+              "type": "string"
+            },
+            "title": "Metadata Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "metadata_keys",
+          "collection_notes"
+        ],
+        "title": "SourcePolicyRead",
         "type": "object"
       },
       "TrainingDetail": {
@@ -5406,6 +5481,123 @@
           }
         },
         "summary": "Save Scope Draft",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/setup/sources": {
+      "post": {
+        "operationId": "saveSourcePolicyDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePolicyDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Save Source Policy Draft",
         "tags": [
           "management"
         ]

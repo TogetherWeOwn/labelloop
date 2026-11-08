@@ -112,6 +112,19 @@ class ClassCatalogDraft(Mutation):
         return self
 
 
+class SourcePolicyDraft(Mutation):
+    metadata_keys: Annotated[
+        list[Literal["session", "sequence", "subject"]], Field(min_length=1, max_length=3)
+    ]
+    collection_notes: Annotated[str, Field(min_length=1, max_length=8192)]
+
+    @model_validator(mode="after")
+    def unique_metadata_keys(self) -> Self:
+        if len(set(self.metadata_keys)) != len(self.metadata_keys):
+            raise ValueError("source metadata keys must be unique")
+        return self
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

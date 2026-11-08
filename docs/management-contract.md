@@ -149,6 +149,26 @@ is not an effective identity migration. Scope, guide and class drafts preserve
 each other but consume one shared project revision sequence. Historical frozen
 releases remain readable. This does not enable real asset admission.
 
+## Source policy draft save (unmounted)
+
+`saveSourcePolicyDraft`, `POST /projects/{project_id}/setup/sources`, persists
+only source-collection intent: a nonempty unique list of the delivered grouping
+keys (`session`, `sequence`, `subject`) and bounded collection notes. Use the
+expected **project** revision and a new idempotency key for each edit. File
+capture metadata, bytes, URLs, storage keys, assignments, pair decisions, class
+keys and approval/holdout/spend overrides are not accepted in this operation.
+Notes are untrusted text, not executable grouping instructions.
+
+The canonical project lock, retry reconciliation and attributed atomic receipt
+are shared with the other setup writes. Saves clear every setup approval and
+automatic-acceptance qualification. The receipt-bound `source_policy_draft`
+projection is distinct from `sources`, whose observed group/split facts remain
+unchanged. Draft keys are not reported as effective `sources.metadata_keys`.
+The save neither creates assets nor changes relations, assignments, references,
+held-out sets or historical releases. New freezes fail closed until validated
+source-policy approval/publication and grouping binding are implemented.
+Real admission remains unbound pending exact-consuming-head Security acceptance.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.
@@ -159,7 +179,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 
 | Fixture command family | Producer and intended implementation boundary |
 |---|---|
-| Remaining `save_setup`, `add_class` | Management facade: source draft writes and effective ontology publication/migration remain missing; typed scope/guide/class-catalog draft saves above are implemented separately, not generic capture payloads or class approval |
+| Remaining `save_setup`, `add_class` | Management facade: reference enrollment, source admission/grouping binding and effective ontology publication/migration remain missing; typed scope/guide/class-catalog/source-policy draft saves above are implemented separately, not generic capture payloads or approval |
 | `accept_class`, `accept_reference`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; reference provenance and evaluation-holdout exclusion enforced server-side |
 | `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |

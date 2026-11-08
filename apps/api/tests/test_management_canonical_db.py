@@ -24,6 +24,7 @@ from labelloop_api.management_contracts import (
     ProjectCreate,
     ReleaseFreeze,
     ScopeDraft,
+    SourcePolicyDraft,
 )
 from labelloop_api.management_ports import ManagementFailure, MutationContext
 from labelloop_api.management_reads import CanonicalManagementReads
@@ -807,6 +808,209 @@ def test_catalog_projection_requires_matching_attributed_current_draft(database,
                     class_map={"package": 0},
                 )
             )
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def source_policy_payload(revision=1):
+    return SourcePolicyDraft(
+        expected_revision=revision,
+        metadata_keys=["session", "sequence", "subject"],
+        collection_notes="Independent capture sessions and subjects",
+    )
+
+
+def save_sources(service, project_id, payload=None, actor=None, key="sources"):
+    actor = actor or Actor()
+    payload = payload or source_policy_payload()
+    context = MutationContext.bind(actor, key, "save_source_policy_draft", project_id, payload)
+    return service.save_source_policy_draft(actor, context, payload)
+
+
+def test_source_policy_is_attributed_replayable_and_not_effective_grouping(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = source_policy_payload()
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_project(Reader(), created.id).source_policy_draft is None
+    saved = save_sources(service, created.id, payload)
+    assert saved.revision == 2 and saved.state == "draft"
+    assert save_sources(service, created.id, payload) == saved
+    changed = payload.model_copy(update={"metadata_keys": ["subject"]})
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        save_sources(service, created.id, changed)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_sources(service, created.id, payload, key="stale")
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.source_policy_draft.model_dump() == payload.model_dump(
+        exclude={"expected_revision"}
+    )
+    assert detail.sources.metadata_keys is None and detail.sources.assignment_version is None
+    assert detail.sources.images == 0 and detail.sources.groups is None
+    assert detail.approved_steps == [] and detail.references is None
+    assert detail.published_release_id is None
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.save_source_policy_draft",
+            )
+        ).one()
+        assert receipt.actor_id == Actor().id and receipt.actor_kind == "human"
+        assert (
+            receipt.payload["evidence"]["source_policy_draft"]
+            == detail.source_policy_draft.model_dump()
+        )
+        assert "publish" in receipt.payload["evidence"]["invalidated_steps"]
+    save_sources(
+        service, created.id, changed.model_copy(update={"expected_revision": 2}), key="next"
+    )
+    assert save_sources(service, created.id, payload) == saved
+    assert reads.read_project(Reader(), created.id).source_policy_draft.metadata_keys == ["subject"]
+    assert counts(owner, created.id) == (0, 0, 3)
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_source_policy_parallel_saves_share_revision_and_retry_locks(database, same_key):
+    service, owner, _ = database
+    created = create(service)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return save_sources(service, created.id, key="same" if same_key else key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(2) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+def test_source_policy_preserves_other_drafts_and_shared_revision_order(database):
+    service, owner, _ = database
+    created = create(service)
+    catalog = catalog_payload(service, created.id, 2)
+    save_scope(service, created.id)
+    save_catalog(service, created.id, catalog)
+    save_guide(service, created.id, guide_payload(3))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        save_sources(service, created.id)
+    save_sources(service, created.id, source_policy_payload(4))
+    save_scope(service, created.id, scope_payload(5), key="next-scope")
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.resource.revision == 6 and detail.approved_steps == []
+    assert detail.class_catalog_draft.classes[0].name == "Parcel"
+    assert detail.name == scope_payload().name and detail.guide.min_target_px == 4.0
+    assert detail.source_policy_draft.metadata_keys == ["session", "sequence", "subject"]
+    assert counts(owner, created.id) == (0, 0, 6)
+
+
+def test_source_policy_audit_failure_rolls_back_and_retry_succeeds(database):
+    service, owner, role = database
+    created = create(service)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        save_sources(service, created.id)
+    assert reads.read_project(Reader(), created.id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT INSERT ON canonical_event TO "{role}"'))
+    assert save_sources(service, created.id).revision == 2
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_source_policy_denies_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created = create(service)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        save_sources(service, created.id, actor=actor)
+    assert counts(owner, created.id) == (0, 0, 1)
+
+
+def test_source_policy_checks_workspace_and_context_before_replay(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = source_policy_payload()
+    save_sources(service, created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_sources(replace(service, workspace_id=uuid4()), created.id, payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        save_sources(service, "not-a-uuid", payload)
+    context = MutationContext.bind(
+        Actor(), "sources", "save_source_policy_draft", created.id, payload
+    )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.save_source_policy_draft(Actor(), replace(context, actor_id="forged"), payload)
+    assert counts(owner, created.id) == (0, 0, 2)
+
+
+def test_source_policy_invalidates_acceptance_not_historical_grouping_or_release(database):
+    service, owner, _ = database
+    created, _, _, freeze_payload = release_inputs(service, owner)
+    frozen = freeze(service, created.id, freeze_payload)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id).sources
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = {
+            **row.access_policy,
+            "auto_accept_qualification": {"qualified": True},
+            "management_setup_approvals": {"sources": "old"},
+        }
+        connection.execute(
+            project.update().where(project.c.id == row.id).values(access_policy=policy)
+        )
+    save_sources(service, created.id, source_policy_payload(3))
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert (
+            "auto_accept_qualification" not in policy and policy["management_setup_approvals"] == {}
+        )
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.sources == before and detail.sources.metadata_keys is None
+    assert reads.read_release(Reader(), frozen.id).resource == frozen
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(
+            service,
+            created.id,
+            freeze_payload.model_copy(update={"expected_revision": 4}),
+            key="new",
+        )
+
+
+@pytest.mark.parametrize("tamper", ["no_receipt", "notes", "removed", "approval"])
+def test_source_policy_projection_requires_matching_attributed_draft(database, tamper):
+    service, owner, _ = database
+    created = create(service)
+    payload = source_policy_payload()
+    if tamper != "no_receipt":
+        save_sources(service, created.id, payload)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        policy = dict(row.access_policy)
+        policy["management_source_policy_draft"] = payload.model_dump(exclude={"expected_revision"})
+        if tamper == "notes":
+            policy["management_source_policy_draft"]["collection_notes"] = "Unattributed"
+        if tamper == "removed":
+            del policy["management_source_policy_draft"]
+        if tamper == "approval":
+            policy["management_setup_approvals"] = {"sources": "forged"}
         connection.execute(
             project.update().where(project.c.id == row.id).values(access_policy=policy)
         )
