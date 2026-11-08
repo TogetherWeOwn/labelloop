@@ -48,7 +48,7 @@ SHARED: tuple[Stage, ...] = (
     "release",
 )
 PER_RECIPE: tuple[Stage, ...] = ("compile", "sync", "train", "evaluate", "promote_retain")
-STOP_REASONS = frozenset(
+STOP_REASONS: frozenset[StopReason] = frozenset(
     {
         "sufficient_scoped_quality",
         "no_informative_data",
