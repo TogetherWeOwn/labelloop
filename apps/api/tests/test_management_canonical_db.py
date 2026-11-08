@@ -106,7 +106,51 @@ def database(tmp_path):
         owner.dispose()
 
 
-def test_shared_session_canonical_project_create_read_and_replay(database, monkeypatch):
+@pytest.fixture
+def restricted_auth_store(database, monkeypatch):
+    from labelloop_api import auth
+    from labelloop_api.auth_store import AuthStore
+
+    _, owner, _ = database
+    role = "auth_fixture_" + uuid4().hex
+    with owner.begin() as connection:
+        connection.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
+        connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+        connection.execute(text(f'GRANT SELECT ON auth_principal, auth_service_token TO "{role}"'))
+        connection.execute(
+            text(
+                f"GRANT UPDATE (password_hash, failed_attempts, locked_until) "
+                f'ON auth_principal TO "{role}"'
+            )
+        )
+        connection.execute(text(f'GRANT SELECT, INSERT, DELETE ON auth_session TO "{role}"'))
+        # Expired-session cleanup takes FOR UPDATE locks before deleting its bounded batch.
+        connection.execute(text(f'GRANT UPDATE (expires_at) ON auth_session TO "{role}"'))
+        connection.execute(text(f'GRANT INSERT ON auth_event TO "{role}"'))
+    runtime = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={
+            "options": f"-c role={role} -c statement_timeout=15000 -c lock_timeout=10000"
+        },
+    )
+    store = AuthStore(runtime)
+    from datetime import UTC, datetime
+
+    monkeypatch.setattr(auth, "auth_store", lambda: store)
+    monkeypatch.setattr(auth, "clock", lambda: datetime(2026, 11, 8, tzinfo=UTC))
+    monkeypatch.setenv("AUTH_ORIGIN", "https://testserver")
+    try:
+        yield store, role
+    finally:
+        runtime.dispose()
+        with owner.begin() as connection:
+            connection.execute(text(f'DROP OWNED BY "{role}"'))
+            connection.execute(text(f'DROP ROLE "{role}"'))
+
+
+def test_shared_session_canonical_project_create_read_and_replay(
+    database, restricted_auth_store, monkeypatch
+):
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
@@ -114,7 +158,7 @@ def test_shared_session_canonical_project_create_read_and_replay(database, monke
 
     from labelloop_api import auth
     from labelloop_api.auth_schema import principal
-    from labelloop_api.auth_store import PASSWORDS, AuthStore
+    from labelloop_api.auth_store import PASSWORDS
     from labelloop_api.main import create_app
 
     service, owner, _ = database
@@ -132,8 +176,11 @@ def test_shared_session_canonical_project_create_read_and_replay(database, monke
                 failed_attempts=0,
             )
         )
-    store = AuthStore(owner)
-    monkeypatch.setattr(auth, "auth_store", lambda: store)
+    store, auth_role = restricted_auth_store
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT current_user")).scalar_one() == auth_role
+    with service.engine.connect() as connection:
+        assert connection.execute(text("SELECT current_user")).scalar_one() != auth_role
     monkeypatch.setattr(auth, "clock", lambda: datetime(2026, 11, 8, tzinfo=UTC))
     monkeypatch.setenv("AUTH_ORIGIN", origin)
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
@@ -192,6 +239,201 @@ def test_shared_session_canonical_project_create_read_and_replay(database, monke
         assert counts(owner, created.json()["id"]) == (0, 0, 1)
         assert client.post("/auth/logout", headers=headers).status_code == 204
         assert client.get("/projects").status_code == 401
+
+
+@pytest.fixture
+def auth_account(database):
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.auth_store import PASSWORDS
+
+    _, owner, _ = database
+    identity, name = str(uuid4()), "fixture-" + uuid4().hex
+    password = "synthetic-password-only"
+    with owner.begin() as connection:
+        connection.execute(
+            insert(principal).values(
+                id=identity,
+                name=name,
+                kind="human",
+                role="admin",
+                password_hash=PASSWORDS.hash(password),
+                enabled=True,
+                failed_attempts=2,
+            )
+        )
+    return identity, {"name": name, "password": password}
+
+
+@pytest.fixture
+def auth_management_client(database, restricted_auth_store):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    operations = SimpleNamespace(
+        create_project=service.create_project, list_projects=reads.list_projects
+    )
+    with TestClient(create_app(lambda: operations), base_url="https://testserver") as client:
+        yield client
+
+
+def auth_snapshot(owner, identity):
+    from labelloop_api.auth_schema import auth_event, principal, session
+
+    with owner.connect() as connection:
+        return (
+            connection.execute(select(principal).where(principal.c.id == identity)).all(),
+            connection.execute(
+                select(session)
+                .where(session.c.principal_id == identity)
+                .order_by(session.c.token_hash)
+            ).all(),
+            connection.execute(
+                select(auth_event)
+                .where(auth_event.c.principal_id == identity)
+                .order_by(auth_event.c.id)
+            ).all(),
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE auth_principal SET role = 'admin'",
+        "UPDATE auth_principal SET enabled = true",
+        "UPDATE auth_principal SET kind = 'human'",
+        "DELETE FROM auth_principal",
+        "INSERT INTO auth_principal DEFAULT VALUES",
+        "INSERT INTO auth_service_token DEFAULT VALUES",
+        "UPDATE auth_service_token SET expires_at = now()",
+        "DELETE FROM auth_service_token",
+        "UPDATE auth_session SET principal_id = 'foreign'",
+        "UPDATE auth_session SET csrf_hash = 'forged'",
+        "UPDATE auth_event SET action = 'logout'",
+        "DELETE FROM auth_event",
+        "TRUNCATE auth_event",
+        "SELECT * FROM canonical_event",
+        "INSERT INTO canonical_event DEFAULT VALUES",
+    ],
+)
+def test_auth_runtime_role_cannot_provision_or_rewrite_authority(restricted_auth_store, statement):
+    store, role = restricted_auth_store
+    with store.engine.connect() as connection:
+        assert connection.execute(
+            text(
+                "SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls "
+                "FROM pg_roles WHERE rolname = current_user"
+            )
+        ).one() == (role, False, False, False, False)
+    with pytest.raises(DBAPIError) as error, store.engine.begin() as connection:
+        connection.execute(text(statement))
+    assert error.value.orig.sqlstate == "42501"
+
+
+@pytest.mark.parametrize(
+    "privilege, table",
+    [
+        ("INSERT", "auth_event"),
+        ("INSERT", "auth_session"),
+        ("DELETE", "auth_session"),
+        ("UPDATE (failed_attempts)", "auth_principal"),
+        ("UPDATE (expires_at)", "auth_session"),
+    ],
+)
+def test_auth_runtime_login_grant_failure_rolls_back(
+    database, restricted_auth_store, auth_account, auth_management_client, privilege, table
+):
+    from datetime import timedelta
+
+    from labelloop_api import auth
+    from labelloop_api.auth_schema import session
+    from labelloop_api.auth_store import digest
+
+    _, owner, _ = database
+    _, role = restricted_auth_store
+    identity, credentials = auth_account
+    with owner.begin() as connection:
+        connection.execute(
+            insert(session).values(
+                token_hash=digest(uuid4().hex),
+                principal_id=identity,
+                csrf_hash=digest(uuid4().hex),
+                expires_at=auth.clock() - timedelta(seconds=1),
+            )
+        )
+        connection.execute(text(f'REVOKE {privilege} ON {table} FROM "{role}"'))
+    before = auth_snapshot(owner, identity)
+    response = auth_management_client.post(
+        "/auth/login", json=credentials, headers={"origin": "https://testserver"}
+    )
+    assert response.status_code == 503 and response.json() == {
+        "detail": "authentication_unavailable"
+    }
+    assert response.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in response.headers
+    assert auth_snapshot(owner, identity) == before
+    assert auth_management_client.get("/projects").status_code == 401
+
+
+@pytest.mark.parametrize("privilege, table", [("INSERT", "auth_event"), ("DELETE", "auth_session")])
+def test_auth_runtime_logout_grant_failure_preserves_session(
+    database, restricted_auth_store, auth_account, auth_management_client, privilege, table
+):
+    _, owner, _ = database
+    _, role = restricted_auth_store
+    identity, credentials = auth_account
+    login = auth_management_client.post(
+        "/auth/login", json=credentials, headers={"origin": "https://testserver"}
+    )
+    assert login.status_code == 200, login.text
+    before = auth_snapshot(owner, identity)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} ON {table} FROM "{role}"'))
+    response = auth_management_client.post(
+        "/auth/logout",
+        headers={"origin": "https://testserver", "x-csrf-token": login.json()["csrf_token"]},
+    )
+    assert response.status_code == 503 and response.json() == {
+        "detail": "authentication_unavailable"
+    }
+    assert response.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in response.headers
+    assert auth_snapshot(owner, identity) == before
+    assert auth_management_client.get("/auth/me").json()["id"] == identity
+
+
+def test_auth_runtime_csrf_audit_failure_cannot_reach_canonical_mutation(
+    database, restricted_auth_store, auth_account, auth_management_client
+):
+    _, owner, _ = database
+    _, role = restricted_auth_store
+    identity, credentials = auth_account
+    login = auth_management_client.post(
+        "/auth/login", json=credentials, headers={"origin": "https://testserver"}
+    )
+    assert login.status_code == 200, login.text
+    before = auth_snapshot(owner, identity)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON auth_event FROM "{role}"'))
+    payload = pack().model_dump(mode="json")
+    response = auth_management_client.post(
+        "/projects", json=payload, headers={"Idempotency-Key": "audit-denied"}
+    )
+    assert response.status_code == 503 and response.json() == {
+        "detail": "authentication_unavailable"
+    }
+    assert auth_snapshot(owner, identity) == before
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                select(project.c.id).where(project.c.project_key == payload["project_key"])
+            ).first()
+            is None
+        )
 
 
 def pack():

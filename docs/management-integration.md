@@ -39,10 +39,47 @@ authentication and refusal before operations resolution. Recording-port cases
 prove only the identity boundary. One disposable Postgres case additionally binds
 real canonical project creation and reads under the existing restricted canonical
 role, checks a single attributed receipt on replay, rejects changed-key content
-and verifies logout. Its auth store uses the fixture owner connection; it does
+and verifies logout. Its auth store now uses a **separate restricted NOLOGIN role**,
+not the fixture owner. The owner connection seeds only synthetic principals and
+configures disposable grants; neither request-time adapter uses it. This does
 **not** prove production auth-role provisioning, full adapter composition, shared
 queue dispatch or the project-to-export acceptance path. Newly added cases require
 exact-head Actions verification; test source is not a passing result.
+
+### Disposable authentication-role contract
+
+The composition fixture exercises the delivered `AuthStore` without changing its
+implementation, tables, migration history or production grants. Authentication
+and canonical requests use distinct temporary roles and engines. The auth role
+has no superuser, role-creation, database-creation or RLS-bypass capability and no
+canonical-table privileges. Its grants are limited to:
+
+| Table | Disposable auth runtime grant | Purpose |
+| --- | --- | --- |
+| `auth_principal` | SELECT; UPDATE(password_hash, failed_attempts, locked_until) | Read identity and current role; lock/recheck credentials; maintain lockout and password-parameter upgrades |
+| `auth_service_token` | SELECT | Authenticate already-provisioned service credentials, never issue or rotate them |
+| `auth_session` | SELECT, INSERT, DELETE; UPDATE(expires_at) | Issue/revoke sessions and take PostgreSQL FOR UPDATE locks for bounded expired-session cleanup |
+| `auth_event` | INSERT only | Append attributed login/logout/denial evidence |
+
+PostgreSQL requires UPDATE privilege on at least one session column for the
+cleanup row locks; the narrow expiry grant is explicit, not a hidden table-wide
+UPDATE. Session issuance/deletion is already trusted auth-store authority. The
+fixture grants no principal INSERT/DELETE, role/kind/enablement changes, service
+credential mutations, session-principal/CSRF updates or auth-event rewrites.
+The immutable event triggers remain additional protection, not a substitute for
+restricted grants. No principal, service token or deployment credential is
+provisioned outside the disposable test database.
+
+Actions cases assert direct forbidden statements fail with insufficient privilege,
+not merely a constraint error. Missing login audit/session/lock grants must return
+generic no-store 503 without cookies, preserving the principal counters, expired
+sessions and audit rows atomically. Missing logout audit/delete grants preserve
+the session and event history; the response does not falsely clear the cookie.
+A CSRF-denial audit failure fails closed before canonical project creation.
+The existing create/read/replay/CSRF/logout composition runs with the positive
+grants above. These are commissioned cases, not verified results until exact-head
+Actions passes. Final operational role provisioning, service-credential lifecycle,
+perimeter controls, full producer composition and deployment remain separate gates.
 
 | Method/path | Port | Result |
 | --- | --- | --- |
