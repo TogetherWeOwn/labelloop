@@ -333,7 +333,9 @@ def check_authentication_concurrency() -> None:
         pool_size=6,
         max_overflow=0,
         connect_args={
-            "options": "-csearch_path=migration_smoke -cstatement_timeout=15000 -clock_timeout=10000"
+            "options": (
+                "-csearch_path=migration_smoke -cstatement_timeout=15000 -clock_timeout=10000"
+            )
         },
     )
     now = datetime(2026, 11, 7, tzinfo=UTC)
