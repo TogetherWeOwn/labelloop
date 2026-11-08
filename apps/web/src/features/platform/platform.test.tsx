@@ -10,7 +10,7 @@ import { fixturePort, platformFixture } from './fixtures.ts';
 // Static rendering checks do not claim browser/a11y coverage; Actions runs that separately.
 describe('Platform fixture modules', () => {
   it('hides connection records and management controls from reviewers', () => {
-    const html = renderToStaticMarkup(<ConnectionsView role="reviewer" snapshot={platformFixture} />);
+    const html = renderToStaticMarkup(<ConnectionsView role="reviewer" snapshot={platformFixture} now={Date.parse('2026-11-07T02:17:00Z')} />);
     expect(html).toContain('Only an admin');
     expect(html).not.toContain('workspace-fixture-01');
     expect(html).not.toContain('9f3c');
@@ -19,7 +19,7 @@ describe('Platform fixture modules', () => {
   });
 
   it('uses exact workspace identity and fingerprint-only presentation', () => {
-    const html = renderToStaticMarkup(<ConnectionsView role="admin" snapshot={platformFixture} />);
+    const html = renderToStaticMarkup(<ConnectionsView role="admin" snapshot={platformFixture} now={Date.parse('2026-11-07T02:17:00Z')} />);
     expect(html).toContain('workspace-fixture-01');
     expect(html).toContain('shelf-team');
     expect(html).toContain('ul_••••9f3c');

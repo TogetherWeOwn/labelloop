@@ -1,7 +1,7 @@
 import { checkedTime, fingerprintText } from './contracts.ts';
 import type { PlatformSnapshot, ViewerRole } from './contracts.ts';
 
-export function ConnectionsView({ role, snapshot, now = Date.now() }: { role: ViewerRole; snapshot: PlatformSnapshot; now?: number }) {
+export function ConnectionsView({ role, snapshot, now }: { role: ViewerRole; snapshot: PlatformSnapshot; now: number }) {
   if (role !== 'admin') return <p>Only an admin can manage connections.</p>;
   const { connection, providers } = snapshot;
   return <>
