@@ -437,6 +437,78 @@ def test_confusion_negatives_remain_typed_and_diversity_caps_are_explicit() -> N
     assert len(retrieve_references(scope, (clustered,), query_for(scope))) == 1
 
 
+def test_gold_enrollment_requires_source_group_quarantine_before_any_retrieval() -> None:
+    scope = scope_for()
+    anchor = memory_for(scope)
+    gold = replace(
+        anchor,
+        collection="gold",
+        revision=replace(anchor.revision, gold_eligible=True),
+        reference=replace(anchor.reference, reference_id="gold:easy-a"),
+    )
+    with pytest.raises(ValueError, match="gold.*quarantin"):
+        ReferencePack("pack", "1", scope, (anchor, gold))
+    with pytest.raises(ValueError, match="gold.*quarantin"):
+        ReferencePack("gold-only", "1", scope, (gold,))
+    quarantined = replace(scope, evaluation_asset_ids=frozenset({"easy-a"}))
+    with pytest.raises(ValueError, match="evaluation"):
+        ReferencePack("pack", "1", quarantined, (anchor, gold))
+    assignment = replace(
+        scope.assignment, group_ids={**scope.assignment.group_ids, "easy-b": "easy-a"}
+    )
+    grouped = replace(scope, assignment=assignment, evaluation_asset_ids=frozenset({"easy-a"}))
+    with pytest.raises(ValueError, match="evaluation"):
+        ReferencePack("pack", "1", grouped, (gold, memory_for(scope, "easy-b")))
+    assert ReferencePack("gold-only", "1", quarantined, (gold,)).examples == (gold,)
+
+
+def test_positive_crop_must_contain_the_advertised_class_instance() -> None:
+    scope = scope_for()
+    positive = memory_for(scope)
+    for crop in (Box(50, 40, 80, 70), Box(10, 10, 30, 30)):
+        cropped = replace(positive, reference=replace(positive.reference, crop=crop))
+        with pytest.raises(ValueError, match="positive.*crop"):
+            ReferencePack("pack", "1", scope, (cropped,))
+    whole_source = replace(positive, reference=replace(positive.reference, crop=None))
+    assert ReferencePack("pack", "1", scope, (whole_source,)).examples == (whole_source,)
+
+
+def test_retrieval_reserves_class_coverage_before_extra_high_utility_examples() -> None:
+    scope = scope_for()
+    second = ClassDefinition("mouse", "Mouse", "physical mouse")
+    scope = replace(
+        scope,
+        ontology=replace(
+            scope.ontology,
+            classes=(*scope.ontology.classes, second),
+            class_map={**scope.ontology.class_map, "mouse": 1},
+        ),
+    )
+    a1 = memory_for(scope)
+    a2 = replace(memory_for(scope, "easy-b"), utility=0.8)
+    b1 = replace(
+        memory_for(scope, "novel"),
+        utility=0.7,
+        reference=replace(memory_for(scope, "novel").reference, class_id="mouse"),
+        revision=replace(
+            revision_for(scope), objects=(DatasetObject("mouse", "mouse", Box(1, 2, 15, 20)),)
+        ),
+    )
+    query = replace(query_for(scope), max_items=2)
+    pack = ReferencePack("pack", "1", scope, (a1, a2, b1))
+    result = retrieve_references(scope, (pack,), query)
+    assert {item.reference_id for item in result} == {"ref:easy-a", "ref:novel"}
+    assert retrieve_references(scope, (replace(pack, examples=(b1, a2, a1)),), query) == result
+    # The first class has an alternative cluster; the second has only this one.
+    shared = replace(pack, examples=(a1, a2, replace(b1, cluster_id=a1.cluster_id)))
+    assert {item.reference_id for item in retrieve_references(scope, (shared,), query)} == {
+        "ref:easy-b",
+        "ref:novel",
+    }
+    with pytest.raises(ValueError, match="insufficient"):
+        retrieve_references(scope, (pack,), replace(query, max_items=1))
+
+
 def lineage_fixture() -> tuple[LineageGraph, tuple[EvidenceArtifact, ...]]:
     revision = revision_for(scope_for())
     artifacts = (

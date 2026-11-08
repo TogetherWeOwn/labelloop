@@ -50,7 +50,10 @@ score and consumed units. Candidate and inventory ordering does not change it.
 `MemoryExample` keeps anchor, auto-expanded and gold membership separate. Curated
 anchor/gold requires human review; auto-expansions require retained teacher identity
 and system-qualified acceptance. All training references require accepted complete
-non-gold revisions; positive references need a labeled class instance. Provenance,
+non-gold revisions; positive crops must contain a complete labeled class instance.
+Gold enrollment requires its source group to be quarantined in the authoritative
+scope first, so another revision or pack cannot retrieve the same evaluation pixels.
+Provenance,
 validity scope/tags, scene, diversity cluster, utility and positive versus confusion
 negative kind survive enrollment. Gold can remain in a pack for accounting but is
 never retrieved. `collection_distributions` reports object class/size/occlusion and
@@ -58,7 +61,10 @@ example teacher/scene counts separately for all three collections, with explicit
 source-pixel size thresholds.
 
 `retrieve_references` only returns approved, query-compatible entries within explicit
-item/class/cluster budgets. Empty or unsupported class coverage is insufficient
+item/class/cluster budgets. Before filling optional high-utility slots, a deterministic
+class-to-cluster augmenting assignment reserves one reference per requested class;
+flexible classes can move to an alternative cluster to preserve scarce coverage.
+Empty or unsupported class coverage is insufficient
 evidence, not a successful empty retrieval. Local packs must use the current pinned
 scope. Cross-project reuse requires one approved `ReferenceImport` binding a named
 pack/version, target ontology/version, complete explicit class mapping and import

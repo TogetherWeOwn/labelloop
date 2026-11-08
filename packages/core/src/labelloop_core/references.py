@@ -74,10 +74,22 @@ class ReferencePack:
                 ref.crop.within(source.width, source.height)
             for obj in item.revision.objects:
                 obj.box.within(source.width, source.height)
-            matching = [obj for obj in item.revision.objects if obj.class_id == ref.class_id]
+            matching = [
+                obj
+                for obj in item.revision.objects
+                if obj.class_id == ref.class_id
+                and (ref.crop is None or obj.box.intersect(ref.crop) == obj.box)
+            ]
             if item.kind == "positive" and not matching:
-                raise ValueError("positive references need a labeled instance of their class")
-            if item.collection != "gold":
+                raise ValueError(
+                    "positive references need a complete labeled class instance in crop"
+                )
+            if item.collection == "gold":
+                if self.scope.assignment.group_ids[root] not in self.scope.evaluation_groups():
+                    raise ValueError(
+                        "gold enrollment requires authoritative source-group quarantine"
+                    )
+            else:
                 self.scope.require_training_source(ref.asset_id)
 
 
@@ -210,11 +222,61 @@ def retrieve_references(
             row[0].reference.reference_id,
         )
     )
+    if len(query.class_ids) > query.max_items:
+        raise ValueError("insufficient item budget for requested class coverage")
+    by_class: dict[str, list[int]] = {class_id: [] for class_id in sorted(query.class_ids)}
+    for index, row in enumerate(pool):
+        by_class[row[2]].append(index)
+    cluster_members: dict[tuple[str, str], list[str]] = {}
+    reservations: dict[str, int] = {}
+
+    def cluster_for(index: int) -> tuple[str, str]:
+        item, pack, _, _ = pool[index]
+        return pack.scope.ontology.project_id, item.cluster_id
+
+    for root_class in sorted(query.class_ids):
+        pending = [root_class]
+        visited = {root_class}
+        seen_clusters: set[tuple[str, str]] = set()
+        previous: dict[str, tuple[str, int]] = {}
+        found: tuple[str, int] | None = None
+        for class_id in pending:
+            for index in by_class[class_id]:
+                cluster = cluster_for(index)
+                if cluster in seen_clusters:
+                    continue
+                seen_clusters.add(cluster)
+                members = cluster_members.setdefault(cluster, [])
+                if len(members) < query.max_per_cluster:
+                    found = class_id, index
+                    break
+                for member in members:
+                    if member not in visited:
+                        visited.add(member)
+                        previous[member] = class_id, index
+                        pending.append(member)
+            if found is not None:
+                break
+        if found is None:
+            raise ValueError("insufficient approved reference coverage within cluster budgets")
+        class_id, index = found
+        while True:
+            if class_id in reservations:
+                cluster_members[cluster_for(reservations[class_id])].remove(class_id)
+            reservations[class_id] = index
+            cluster_members[cluster_for(index)].append(class_id)
+            if class_id == root_class:
+                break
+            class_id, index = previous[class_id]
+
+    reserved = set(reservations.values())
+    indices = sorted(reserved) + [index for index in range(len(pool)) if index not in reserved]
     classes: Counter[str] = Counter()
     clusters: Counter[tuple[str, str]] = Counter()
     seen_sources: set[tuple[str, str, str]] = set()
     result: list[RetrievedReference] = []
-    for item, pack, class_id, imported in pool:
+    for index in indices:
+        item, pack, class_id, imported = pool[index]
         cluster = (pack.scope.ontology.project_id, item.cluster_id)
         identity = (pack.scope.ontology.project_id, item.reference.asset_id, class_id)
         if (
