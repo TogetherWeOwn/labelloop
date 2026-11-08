@@ -661,6 +661,27 @@ def exercise_context_assembly(engine, release, final, context, actor):
                 )
                 with pytest.raises(ValueError, match="cross pinned splits"):
                     load_qualification_context(connection, **arguments)
+                # An earlier assembled success cannot authorize either consuming
+                # transaction after canonical grouping has changed.
+                with pytest.raises(ValueError, match="cross pinned splits"):
+                    require_automatic_acceptance(
+                        connection,
+                        **scope,
+                        evaluation_key=final.run_id,
+                        qualification=loaded,
+                        scope=context.evidence.scope[0],
+                    )
+                with pytest.raises(ValueError, match="cross pinned splits"):
+                    change_registry(
+                        connection,
+                        **scope,
+                        actor_id=actor,
+                        expected_revision=before.revision,
+                        candidate_key=release.release_id,
+                        evaluation_key=final.run_id,
+                        policy=PromotionPolicy(1, 0.0),
+                        qualification=loaded,
+                    )
                 assert load_registry(connection, **scope) == before
                 assert (
                     connection.execute(

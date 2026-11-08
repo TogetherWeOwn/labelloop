@@ -8,6 +8,7 @@ import pytest
 from qualification_fixture import qualification_context, synthetic_final
 from test_m5_integration_contract import make_release, make_report
 
+from labelloop_api import evaluation_group_store
 from labelloop_api import final_test_store as store
 from labelloop_core.evaluation_lifecycle import (
     CandidateSelection,
@@ -162,6 +163,14 @@ def test_current_context_rechecks_development_and_calibration_identities(failure
     with (
         patch.object(store, "load_final_test", return_value=context.current_final_test),
         patch.object(
+            evaluation_group_store,
+            "load_evaluation_set",
+            side_effect=lambda _, **args: {
+                "development": context.evidence.lineage.development,
+                "locked_final_test": context.evidence.final_test.dataset,
+            }[args["role"]],
+        ),
+        patch.object(
             store,
             "require_development_uses",
             side_effect=ValueError("locked test") if failure else None,
@@ -178,3 +187,59 @@ def test_current_context_rechecks_development_and_calibration_identities(failure
             development_set_key=context.evidence.lineage.development.release_id,
             calibration_set_key=None,
         )
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize(
+    ("target", "failure"),
+    [
+        (target, failure)
+        for target in ("development", "calibration", "locked_final_test")
+        for failure in ("none", "groups", "missing")
+    ]
+    + [("current-final", "groups")],
+)
+def test_current_context_reloads_every_canonical_evaluation_population(side, target, failure):
+    release = make_release(side, "challenger")
+    report = synthetic_final(make_report(release), run_id="final", dataset_id="final-set")
+    release = replace(release, evaluation_run_ids=(*release.evaluation_run_ids, report.run_id))
+    context = qualification_context(release, report, PromotionPolicy(1, 0.9))
+    calibration = EvaluationSet("calibration", release.project_id, ("cal-group",), "calibration")
+    context = replace(
+        context,
+        evidence=replace(
+            context.evidence, lineage=replace(context.evidence.lineage, calibration=calibration)
+        ),
+    )
+    expected = {
+        "development": context.evidence.lineage.development,
+        "calibration": calibration,
+        "locked_final_test": context.evidence.final_test.dataset,
+    }
+    current = context.current_final_test
+    if target == "current-final" and failure != "none":
+        current = replace(current, dataset=replace(current.dataset, group_ids=("substituted",)))
+
+    def canonical(connection, **args):
+        assert connection is None
+        value = expected[args["role"]]
+        assert args["project_key"] == release.project_id
+        assert args["dataset_key"] == value.release_id
+        if target == args["role"]:
+            if failure == "missing":
+                raise ValueError("missing canonical membership")
+            if failure == "groups":
+                return replace(value, group_ids=("substituted",))
+        return value
+
+    with (
+        patch.object(store, "require_development_uses"),
+        patch.object(store, "load_final_test", return_value=current),
+        patch.object(evaluation_group_store, "load_evaluation_set", side_effect=canonical) as load,
+    ):
+        if failure == "none":
+            assert store.current_qualification_context(None, context) == context
+            assert [call.kwargs["role"] for call in load.call_args_list] == list(expected)
+        else:
+            with pytest.raises(ValueError, match="canonical membership"):
+                store.current_qualification_context(None, context)

@@ -6,7 +6,38 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Canonical evaluation-group consumer — corrected assertions pending Actions
+## Canonical evaluation reload in consuming transactions — pending Actions
+
+The shared current-context loader now rechecks development, optional calibration
+and final canonical populations before registry promotion, automatic acceptance or
+drift resumption can consume an older context. Both the historical final snapshot
+and current journal must match canonical membership. Missing frozen members or new
+transitive conflicts fail closed, with canonical locks held to outer commit.
+This is not HTTP authorization or proof of reference/ancestor-selection lineage,
+original pipeline execution, independent audit truth or complete training lineage
+in direct callers. Those remaining producer/consumer obligations remain explicit.
+
+Twenty new both-recipe adapter cases cover successful current reads, each missing
+population, group substitution, calibration and current-journal substitution.
+PostgreSQL smoke replays an assembled context through both actual registry and
+acceptance transactions after new development/final relations, requiring rejection
+and unchanged complete heads/event counts. Registry/drift fixtures now use separate
+synthetic canonical populations, not declared groups over copied training members.
+Copied scores are still fixture-only, not independent measurements or model gold.
+No schema, dependency, endpoint or second grouping/qualification engine was added.
+These new assertions await exact-head Actions; no local tests or builds ran.
+
+Previous exact `f97be6b5e5683c8c9afbbad4e627bbf8307f77b2`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485473501) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485473034) succeeded.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485473501/job/128746394470),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485473501/job/128746394560),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485473501/job/128746394519),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract passed. This verifies the earlier assembler and corrected assertion,
+not the new direct reload or remaining HTTP/UI/expanded-restore acceptance.
+
+## Canonical evaluation-group consumer — historical assertion correction
 
 At first consumer head `4304ffc34f1419b55053aea2cc93ba69d6987cde`,
 [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42485253073/job/128745648441)

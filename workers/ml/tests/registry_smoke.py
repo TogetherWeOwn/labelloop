@@ -50,12 +50,11 @@ from labelloop_api.schema import (
     yolo_dataset_variant,
 )
 from labelloop_core.audit import AuditObservation
-from labelloop_core.evaluation_lifecycle import EvaluationSet
 from labelloop_core.registry import ModelRelease, PromotionPolicy
 
 
 def synthetic_final_variant(connection, source_variant_id, dataset_key):
-    """Copy frozen fixture membership solely for journal mechanics, never domain gold."""
+    """Persist independent synthetic membership for journal mechanics, never domain gold."""
     source = (
         connection.execute(
             sa.select(yolo_dataset_variant).where(yolo_dataset_variant.c.id == source_variant_id)
@@ -73,28 +72,9 @@ def synthetic_final_variant(connection, source_variant_id, dataset_key):
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-    canonical = (
-        connection.execute(
-            sa.select(canonical_dataset_release).where(
-                canonical_dataset_release.c.id == source["release_id"]
-            )
-        )
-        .mappings()
-        .one()
-    )
-    values = {key: value for key, value in canonical.items() if key not in {"id", "created_at"}}
-    values["release_key"] = dataset_key
-    release_id = connection.execute(
-        sa.insert(canonical_dataset_release).values(**values)
-    ).inserted_primary_key[0]
-    values = {key: value for key, value in source.items() if key not in {"id", "created_at"}}
-    values.update(
-        release_id=release_id,
-        file_manifest=source["file_manifest"] | {"release_id": dataset_key},
-    )
-    return connection.execute(
-        sa.insert(yolo_dataset_variant).values(**values)
-    ).inserted_primary_key[0]
+    from evaluation_fixture import independent_evaluation_variant
+
+    return independent_evaluation_variant(connection, source_variant_id, dataset_key)
 
 
 def fixture_change_registry(connection, **kwargs):
@@ -129,7 +109,32 @@ def fixture_change_registry(connection, **kwargs):
             ).scalar_one()
             variant_id = synthetic_final_variant(connection, variant_id, final.dataset_release_id)
             save_evaluation(connection, model_key=model_key, variant_id=variant_id, report=final)
-        return load_release(connection, model_id), final, source
+        development = replace(
+            source,
+            run_id=evaluation_key + "-synthetic-development-" + model_key + "-for-" + candidate_key,
+            dataset_release_id=source.dataset_release_id
+            + "-synthetic-development-"
+            + candidate_key,
+        )
+        release = load_release(connection, model_id)
+        if development.run_id not in release.evaluation_run_ids:
+            source_variant_id = connection.execute(
+                sa.select(db.evaluation_run.c.variant_id).where(
+                    db.evaluation_run.c.run_key == evaluation_key
+                )
+            ).scalar_one()
+            development_variant_id = synthetic_final_variant(
+                connection, source_variant_id, development.dataset_release_id
+            )
+            save_evaluation(
+                connection,
+                model_key=model_key,
+                variant_id=development_variant_id,
+                report=development,
+            )
+        return load_release(connection, model_id), final, development
+
+    from labelloop_api.evaluation_group_store import load_evaluation_set
 
     candidate, final, development = final_for(candidate_key, kwargs["evaluation_key"])
     kwargs["evaluation_key"] = final.run_id
@@ -137,8 +142,11 @@ def fixture_change_registry(connection, **kwargs):
     if state.champion and kwargs.get("incumbent_evaluation_key"):
         _, incumbent, _ = final_for(state.champion.release_id, kwargs["incumbent_evaluation_key"])
         kwargs["incumbent_evaluation_key"] = incumbent.run_id
-    development_set = EvaluationSet(
-        development.dataset_release_id, candidate.project_id, ("dev-group",), "development"
+    development_set = load_evaluation_set(
+        connection,
+        project_key=candidate.project_id,
+        dataset_key=development.dataset_release_id,
+        role="development",
     )
     selection_key = "fixture-selection-" + final.run_id
     actor = kwargs["actor_id"]
@@ -154,11 +162,11 @@ def fixture_change_registry(connection, **kwargs):
         register_final_test(
             connection,
             actor_id=actor,
-            dataset=EvaluationSet(
-                final.dataset_release_id,
-                candidate.project_id,
-                ("final-group",),
-                "locked_final_test",
+            dataset=load_evaluation_set(
+                connection,
+                project_key=candidate.project_id,
+                dataset_key=final.dataset_release_id,
+                role="locked_final_test",
             ),
         )
         record_candidate_selection(

@@ -31,7 +31,6 @@ from labelloop_api.model_store import (
     save_model,
 )
 from labelloop_api.schema import preprocessing_recipe, project
-from labelloop_core.evaluation_lifecycle import EvaluationSet
 from labelloop_core.qualification_wire import dumps
 from labelloop_core.registry import PromotionPolicy
 
@@ -160,11 +159,16 @@ def exercise_acceptance(
     def qualify(connection, model_key, suffix, *, incumbent=None):
         # Separately frozen synthetic membership and copied scores, not model gold.
         dataset_key = result.request.dataset_release_id + f"-drift-{release.policy.imgsz}-{suffix}"
-        variant_id = seed_variant(
-            connection,
-            replace(result.request, dataset_release_id=dataset_key),
-            manifest | {"release_id": dataset_key},
-        )
+        from evaluation_fixture import independent_evaluation_variant
+
+        from labelloop_api.evaluation_group_store import load_evaluation_set
+
+        source_variant_id = connection.execute(
+            sa.select(model_schema.evaluation_run.c.variant_id).where(
+                model_schema.evaluation_run.c.run_key == final.run_id
+            )
+        ).scalar_one()
+        variant_id = independent_evaluation_variant(connection, source_variant_id, dataset_key)
         report = synthetic_final(
             final, run_id=model_key + "-drift-final-" + suffix, dataset_id=dataset_key
         )
@@ -189,8 +193,11 @@ def exercise_acceptance(
         register_final_test(
             connection,
             actor_id=actor,
-            dataset=EvaluationSet(
-                dataset_key, release.project_id, ("final-group",), "locked_final_test"
+            dataset=load_evaluation_set(
+                connection,
+                project_key=release.project_id,
+                dataset_key=dataset_key,
+                role="locked_final_test",
             ),
         )
         selection = record_candidate_selection(

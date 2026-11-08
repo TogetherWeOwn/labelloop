@@ -253,11 +253,14 @@ def invalidate_final_test(
 def current_qualification_context(
     connection: sa.Connection, context: QualificationContext
 ) -> QualificationContext:
-    """Replace a historical final snapshot, never trust a serialized old success.
+    """Recheck canonical evaluation groups and replace a historical final snapshot.
 
     The promotion service must also load authoritative policy, pipeline, audit and
     canary records. This helper alone does not authorize or qualify a promotion.
+    Keep the outer transaction alive through the consuming state change.
     """
+    from labelloop_api.evaluation_group_store import load_evaluation_set
+
     dataset = context.evidence.final_test.dataset
     lineage = context.evidence.lineage
     require_development_uses(
@@ -266,9 +269,20 @@ def current_qualification_context(
         development_set_key=lineage.development.release_id,
         calibration_set_key=lineage.calibration.release_id if lineage.calibration else None,
     )
-    return replace(
-        context,
-        current_final_test=load_final_test(
-            connection, project_key=dataset.project_id, dataset_key=dataset.release_id
-        ),
+    current = load_final_test(
+        connection, project_key=dataset.project_id, dataset_key=dataset.release_id
     )
+    for expected in (lineage.development, lineage.calibration, dataset):
+        if expected is None:
+            continue
+        canonical = load_evaluation_set(
+            connection,
+            project_key=dataset.project_id,
+            dataset_key=expected.release_id,
+            role=expected.role,
+        )
+        if expected != canonical or (expected is dataset and current.dataset != canonical):
+            raise ValueError(
+                "qualification evaluation groups differ from current canonical membership"
+            )
+    return replace(context, current_final_test=current)
