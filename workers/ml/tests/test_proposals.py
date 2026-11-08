@@ -13,6 +13,7 @@ from labelloop_core.registry import ModelRelease, RegistryState
 from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy
 from labelloop_worker_ml.proposals import (
     DiscoveryResult,
+    InitialDetectorRelease,
     PredictionBatch,
     ProposalProvider,
     ProposalRequest,
@@ -137,7 +138,9 @@ def test_no_champion_is_unsupported_and_discovery_still_runs():
     assert result["supported"] is False
     assert result["checkpoint_sha256"] is None
     assert result["teacher_candidates"] == []
-    assert result["discovery_candidates"][0]["label_state"] == "unknown"
+    assert result["source"] == "none"
+    assert result["discovery_candidates"] == []
+    assert result["discovery"]["boxes"]  # Blind inspection evidence remains separate.
 
 
 def test_no_fine_grained_evidence_keeps_class_uncertain():
@@ -194,3 +197,112 @@ def test_rejects_untrusted_lineage_before_inference(bad):
     with pytest.raises(ValueError):
         provider.propose(request, original, discovery, registry, evidence)
     assert events == ["discovery"]
+
+
+@pytest.mark.parametrize("nms,expected", [("external", 1), ("end2end", 2)])
+def test_full_frame_end2end_preserves_overlapping_instances(nms, expected):
+    original, request, registry, evidence = inputs()
+    events = []
+
+    class Overlapping(FakePredictor):
+        def predict(self, request, original, champion):
+            batch = super().predict(request, original, champion)
+            item = batch.derived[0]
+            detection = item.detections[0]
+            return replace(
+                batch,
+                derived=(
+                    replace(
+                        item,
+                        detections=(detection, replace(detection, score=0.019)),
+                    ),
+                ),
+            )
+
+    registry = replace(
+        registry,
+        champion=replace(
+            registry.champion,
+            policy=replace(registry.champion.policy, nms=nms),
+        ),
+    )
+    provider = ProposalProvider(Overlapping(events))
+    discovery = provider.discover(request, original, BlindDiscovery(events))
+    result = provider.propose(request, original, discovery, registry, evidence)
+    assert len(result["teacher_candidates"]) == expected
+    assert result["parameters"]["nms"] is (nms == "external")
+
+
+def initial_detector(model):
+    return InitialDetectorRelease(
+        "initial",
+        model.project_id,
+        "frozen-project-v1",
+        model.recipe_id,
+        model.weights_sha256,
+        model.preprocessing_sha256,
+        model.class_ids,
+        model.policy,
+        model.ultralytics_version,
+        model.torch_version,
+        "constructive-fixture",
+        "seed0-v1",
+        "CC0-1.0",
+        "fixture-admin",
+        "admin",
+        True,
+        "frozen-project-v1",
+    )
+
+
+@pytest.mark.parametrize("mapping,expected", [((), None), ((("sku", "sku"),), "sku")])
+@pytest.mark.parametrize("side", [320, 640])
+def test_initial_detector_requires_explicit_frozen_mapping(side, mapping, expected):
+    original, request, registry, evidence = inputs(side)
+    request = replace(request, project_release_id="frozen-project-v1")
+    initial = replace(initial_detector(registry.champion), class_mapping=mapping)
+    events = []
+    provider = ProposalProvider(FakePredictor(events))
+    discovery = provider.discover(request, original, BlindDiscovery(events))
+    result = provider.propose(
+        request, original, discovery, replace(registry, champion=None), evidence, initial
+    )
+    assert result["source"] == "initial"
+    assert result["checkpoint_sha256"] == initial.weights_sha256
+    assert result["teacher"]["licence"] == "CC0-1.0"
+    assert result["teacher"]["project_release_id"] == "frozen-project-v1"
+    assert result["teacher_candidates"][0]["class_id"] == expected
+    assert result["teacher_candidates"][0]["label_state"] == (
+        "identified" if expected else "unknown"
+    )
+    assert result["approval_state"] == "proposed"
+    assert result["scope_completeness"] == "unreviewed"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"frozen": False},
+        {"approved_role": "worker-ml"},
+        {"approved_role": "reviewer"},
+        {"mapping_release_id": "not-the-frozen-release"},
+        {"approved_principal_id": ""},
+        {"licence": ""},
+        {"checkpoint_source": ""},
+    ],
+)
+def test_initial_detector_refuses_unfrozen_or_worker_mapping(changes):
+    _, _, registry, _ = inputs()
+    with pytest.raises(ValueError):
+        replace(initial_detector(registry.champion), **changes)
+
+
+def test_qualifying_champion_precedes_initial_detector():
+    original, request, registry, evidence = inputs()
+    events = []
+    provider = ProposalProvider(FakePredictor(events))
+    discovery = provider.discover(request, original, BlindDiscovery(events))
+    initial = replace(initial_detector(registry.champion), weights_sha256="f" * 64)
+    result = provider.propose(request, original, discovery, registry, evidence, initial)
+    assert result["source"] == "champion"
+    assert result["checkpoint_sha256"] == registry.champion.weights_sha256

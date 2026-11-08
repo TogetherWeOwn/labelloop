@@ -4,6 +4,8 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Event, Thread
+from time import monotonic
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -67,7 +69,7 @@ class JobStore:
         if not all((project_key, operation_key, kind)) or not 1 <= max_attempts <= 10:
             raise ValueError("jobs need scoped identity and 1..10 attempts")
         canonical(payload)
-        with self.connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "INSERT INTO worker_job(job_id,project_key,operation_key,kind,input,max_attempts) "
                 "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (project_key,operation_key) DO NOTHING",
@@ -83,22 +85,26 @@ class JobStore:
                 raise ReplayConflict("operation key already pins different inputs")
             return row["job_id"]
 
-    def claim(self, kind: str, worker_id: str, *, lease_seconds: int = 60) -> Lease | None:
+    def claim(
+        self, kind: str, worker_id: str, *, lease_seconds: int = 60, job_id: str | None = None
+    ) -> Lease | None:
         self._duration(lease_seconds)
         if not kind or not worker_id:
             raise ValueError("claim requires trusted kind and worker identity")
-        with self.connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
             # SKIP LOCKED applies to exhaustion too: no head-of-line blocking on active commits.
             cur.execute(
                 "WITH exhausted AS (SELECT job_id FROM worker_job WHERE kind=%s "
+                "AND (%s::text IS NULL OR job_id=%s) "
                 "AND status='running' AND lease_until <= clock_timestamp() "
                 "AND attempts >= max_attempts FOR UPDATE SKIP LOCKED) "
                 "UPDATE worker_job SET status='failed', lease_until=NULL, worker_id=NULL, "
                 "error_code='attempts_exhausted' WHERE job_id IN (SELECT job_id FROM exhausted)",
-                (kind,),
+                (kind, job_id, job_id),
             )
             cur.execute(
                 "WITH candidate AS (SELECT job_id FROM worker_job WHERE kind=%s "
+                "AND (%s::text IS NULL OR job_id=%s) "
                 "AND attempts < max_attempts AND ((status='queued' "
                 "AND available_at <= clock_timestamp()) OR (status='running' "
                 "AND lease_until <= clock_timestamp())) "
@@ -107,7 +113,7 @@ class JobStore:
                 "generation=generation+1, worker_id=%s, error_code=NULL, "
                 "lease_until=clock_timestamp() + %s * interval '1 second' "
                 "FROM candidate c WHERE j.job_id=c.job_id RETURNING j.*",
-                (kind, worker_id, lease_seconds),
+                (kind, job_id, job_id, worker_id, lease_seconds),
             )
             row = cur.fetchone()
             if row is None:
@@ -128,10 +134,15 @@ class JobStore:
 
     @staticmethod
     def _lock(cur: Any, lease: Lease) -> None:
+        cur.execute("SELECT job_id FROM worker_job WHERE job_id=%s FOR UPDATE", (lease.job_id,))
+        if cur.fetchone() is None:
+            raise LeaseLost("worker job no longer exists")
+        # Lock acquisition may wait past expiration even when nobody changes the row.
+        # Check time in a separate statement after owning the row, never before waiting.
         cur.execute(
             "SELECT job_id FROM worker_job WHERE job_id=%s AND project_key=%s "
             "AND kind=%s AND status='running' AND generation=%s AND worker_id=%s "
-            "AND lease_until > clock_timestamp() FOR UPDATE",
+            "AND lease_until > clock_timestamp()",
             (lease.job_id, lease.project_key, lease.kind, lease.generation, lease.worker_id),
         )
         if cur.fetchone() is None:
@@ -139,16 +150,19 @@ class JobStore:
 
     def heartbeat(self, lease: Lease, *, lease_seconds: int = 60) -> None:
         self._duration(lease_seconds)
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '10s'")
             self._lock(cur, lease)
             cur.execute(
                 "UPDATE worker_job SET lease_until=clock_timestamp() + %s * interval '1 second' "
-                "WHERE job_id=%s",
+                "WHERE job_id=%s AND lease_until > clock_timestamp() RETURNING job_id",
                 (lease_seconds, lease.job_id),
             )
+            if cur.fetchone() is None:
+                raise LeaseLost("expired lease cannot be renewed")
 
     def artifacts(self, lease: Lease) -> dict:
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             self._lock(cur, lease)
             cur.execute(
                 "SELECT stage,payload FROM worker_stage_artifact WHERE job_id=%s ORDER BY stage",
@@ -160,7 +174,7 @@ class JobStore:
         if not stage:
             raise ValueError("stage identity is required")
         sha256 = digest(payload)
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             self._lock(cur, lease)
             cur.execute(
                 "INSERT INTO worker_stage_artifact(job_id,stage,sha256,payload,generation) "
@@ -178,7 +192,7 @@ class JobStore:
     def complete(
         self, lease: Lease, required_stages: tuple[str, ...], sink: TransactionalSink
     ) -> None:
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             self._lock(cur, lease)
             cur.execute(
                 "SELECT stage,payload FROM worker_stage_artifact WHERE job_id=%s",
@@ -203,7 +217,7 @@ class JobStore:
             )
 
     def fail(self, lease: Lease) -> None:
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             self._lock(cur, lease)
             cur.execute(
                 "UPDATE worker_job SET status=CASE WHEN attempts < max_attempts THEN 'queued' "
@@ -214,7 +228,7 @@ class JobStore:
             )
 
     def cancel(self, project_key: str, job_id: str) -> bool:
-        with self.connect() as conn, conn.cursor() as cur:
+        with self.connect() as conn, conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 "UPDATE worker_job SET status='cancelled', generation=generation+1, "
                 "lease_until=NULL,worker_id=NULL WHERE project_key=%s AND job_id=%s "
@@ -240,25 +254,97 @@ class Stage:
     execute: Callable[[StageContext], dict]
 
 
+class LeaseKeeper:
+    """Renew blocking stages without sharing a connection with their work.
+
+    A hung provider cannot renew forever. Cancellation, renewal errors or the stage
+    runtime ceiling revoke application authority; provider computation may still finish.
+    """
+
+    def __init__(
+        self,
+        store: JobStore,
+        lease: Lease,
+        *,
+        lease_seconds: int = 60,
+        max_stage_seconds: int = 3600,
+    ) -> None:
+        store._duration(lease_seconds)
+        if not 1 <= max_stage_seconds <= 3600:
+            raise ValueError("stage runtime ceiling must be 1..3600 seconds")
+        self.store, self.lease = store, lease
+        self.lease_seconds, self.max_stage_seconds = lease_seconds, max_stage_seconds
+        self.deadline = monotonic() + max_stage_seconds
+        self.stop = Event()
+        self.lost = Event()
+        self.thread = Thread(target=self._renew, name="worker-lease-heartbeat", daemon=True)
+
+    def _renew(self) -> None:
+        while not self.stop.wait(min(self.lease_seconds / 3, max(0, self.deadline - monotonic()))):
+            if monotonic() >= self.deadline:
+                self.lost.set()
+                return
+            try:
+                self.store.heartbeat(self.lease, lease_seconds=self.lease_seconds)
+            except Exception:
+                self.lost.set()
+                return
+
+    def __enter__(self) -> "LeaseKeeper":
+        self.store.heartbeat(self.lease, lease_seconds=self.lease_seconds)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop.set()
+        self.thread.join(timeout=12)
+        if self.thread.is_alive() or self.lost.is_set() or monotonic() >= self.deadline:
+            raise LeaseLost("stage lost lease renewal authority")
+
+
 class JobRunner:
     """One bounded claim per invocation; process supervision is deployment-owned."""
 
     def __init__(
-        self, store: JobStore, kind: str, stages: tuple[Stage, ...], sink: TransactionalSink
+        self,
+        store: JobStore,
+        kind: str,
+        stages: tuple[Stage, ...],
+        sink: TransactionalSink,
+        *,
+        job_id: str | None = None,
+        lease_seconds: int = 60,
+        max_stage_seconds: int = 3600,
     ) -> None:
         if not stages or len({stage.name for stage in stages}) != len(stages):
             raise ValueError("runner needs distinct code-owned stages")
+        store._duration(lease_seconds)
+        if not 1 <= max_stage_seconds <= 3600:
+            raise ValueError("stage runtime ceiling must be 1..3600 seconds")
         self.store, self.kind, self.stages, self.sink = store, kind, stages, sink
+        self.job_id, self.lease_seconds = job_id, lease_seconds
+        self.max_stage_seconds = max_stage_seconds
 
     def run_once(self, worker_id: str) -> bool:
-        lease = self.store.claim(self.kind, worker_id)
+        lease = self.store.claim(
+            self.kind,
+            worker_id,
+            job_id=self.job_id,
+            lease_seconds=self.lease_seconds,
+        )
         if lease is None:
             return False
         try:
             artifacts = self.store.artifacts(lease)
             for stage in self.stages:
                 if stage.name not in artifacts:
-                    payload = stage.execute(StageContext(self.store, lease, dict(artifacts)))
+                    with LeaseKeeper(
+                        self.store,
+                        lease,
+                        lease_seconds=self.lease_seconds,
+                        max_stage_seconds=self.max_stage_seconds,
+                    ):
+                        payload = stage.execute(StageContext(self.store, lease, dict(artifacts)))
                     self.store.save_stage(lease, stage.name, payload)
                     artifacts[stage.name] = payload
                 self.store.heartbeat(lease)
@@ -306,10 +392,15 @@ class ProposalJobRunner(JobRunner):
         discover: Callable[[StageContext], dict],
         propose: Callable[[StageContext], dict],
         sink: TransactionalSink | None = None,
+        *,
+        job_id: str,
     ) -> None:
+        if not job_id:
+            raise ValueError("request-bound proposal callbacks require a specific job ID")
         super().__init__(
             store,
             "proposals",
             (Stage("discovery", discover), Stage("proposal", propose)),
             sink if sink is not None else ProposalRunSink(),
+            job_id=job_id,
         )

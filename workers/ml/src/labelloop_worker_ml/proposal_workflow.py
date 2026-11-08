@@ -7,7 +7,12 @@ from typing import Protocol
 
 from labelloop_core.domain import ReferenceExample, SourceAsset
 from labelloop_core.registry import RegistryState
-from labelloop_worker_ml.proposals import DiscoveryProvider, ProposalProvider, ProposalRequest
+from labelloop_worker_ml.proposals import (
+    DiscoveryProvider,
+    InitialDetectorRelease,
+    ProposalProvider,
+    ProposalRequest,
+)
 
 
 class LeaseInput(Protocol):
@@ -34,6 +39,7 @@ class ProposalWorkflow:
     provider: ProposalProvider
     discovery_provider: DiscoveryProvider
     read_source: Callable[[SourceAsset], bytes]
+    initial_detector: InitialDetectorRelease | None = None
 
     def job_input(self) -> dict:
         # Queue input pins the entire teacher release, including policy and rollback-independent
@@ -44,6 +50,9 @@ class ProposalWorkflow:
                     "run_id": self.request.run_id,
                     "request": self.request.binding(),
                     "registry": asdict(self.registry),
+                    "initial_detector": asdict(self.initial_detector)
+                    if self.initial_detector
+                    else None,
                     "references": [asdict(ref) for ref in self.references],
                     "discovery_version": self.discovery_version,
                 },
@@ -76,6 +85,7 @@ class ProposalWorkflow:
             discovery,
             self.registry,
             self.references,
+            self.initial_detector,
         )
         context.heartbeat()
         return result

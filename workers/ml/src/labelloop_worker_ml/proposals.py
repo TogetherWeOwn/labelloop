@@ -14,7 +14,7 @@ from labelloop_core.domain import Recipe, ReferenceExample, SourceAsset
 from labelloop_core.evaluation import DerivedPredictions, Detection, merge_detections
 from labelloop_core.geometry import Box, full_frame_transform
 from labelloop_core.registry import ModelRelease, RegistryState
-from labelloop_core.training import require_digest
+from labelloop_core.training import ULTRALYTICS_VERSION, InferencePolicy, require_digest
 
 
 def record_digest(value: dict) -> str:
@@ -34,6 +34,7 @@ class ProposalRequest:
     recipe: Recipe
     class_ids: tuple[str, ...]
     candidate_conf: float = 0.001
+    project_release_id: str = ""
 
     def __post_init__(self) -> None:
         for sha256 in (self.ontology_sha256, self.reference_pack_sha256):
@@ -79,9 +80,74 @@ class PredictionBatch:
     runtime: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class InitialDetectorRelease:
+    """Trusted frozen-project configuration, never populated from detector/model output.
+
+    The API producer supplies authenticated admin identity/role and persists the release;
+    this offline port validates that provenance but does not authenticate the caller.
+    """
+
+    release_id: str
+    project_id: str
+    project_release_id: str
+    recipe_id: str
+    weights_sha256: str
+    preprocessing_sha256: str
+    class_ids: tuple[str, ...]
+    policy: InferencePolicy
+    ultralytics_version: str
+    torch_version: str
+    checkpoint_source: str
+    checkpoint_version: str
+    licence: str
+    approved_principal_id: str
+    approved_role: str
+    frozen: bool
+    mapping_release_id: str
+    class_mapping: tuple[tuple[str, str], ...] = ()
+    tiling_mode: str = "off"
+
+    def __post_init__(self) -> None:
+        if self.frozen is not True or self.approved_role != "admin":
+            raise ValueError("initial detector and mapping require a frozen admin-approved release")
+        if not all(
+            (
+                self.release_id,
+                self.project_id,
+                self.project_release_id,
+                self.recipe_id,
+                self.checkpoint_source,
+                self.checkpoint_version,
+                self.licence,
+                self.approved_principal_id,
+                self.torch_version,
+            )
+        ):
+            raise ValueError(
+                "initial detector requires complete checkpoint and approval provenance"
+            )
+        if self.mapping_release_id != self.project_release_id:
+            raise ValueError("detector mapping must belong to the frozen project release")
+        for sha256 in (self.weights_sha256, self.preprocessing_sha256):
+            require_digest(sha256)
+        if self.ultralytics_version != ULTRALYTICS_VERSION or self.tiling_mode != "off":
+            raise ValueError("initial detector must use the pinned full-frame controlled runtime")
+        if not self.class_ids or len(set(self.class_ids)) != len(self.class_ids):
+            raise ValueError("initial detector vocabulary must be nonempty and unique")
+        keys = [key for key, value in self.class_mapping]
+        if len(set(keys)) != len(keys) or not set(keys) <= set(self.class_ids):
+            raise ValueError("initial detector mapping must use unique vocabulary classes")
+        if any(not value for key, value in self.class_mapping):
+            raise ValueError("initial detector mapping needs explicit project class IDs")
+
+
 class Predictor(Protocol):
     def predict(
-        self, request: ProposalRequest, original: bytes, champion: ModelRelease
+        self,
+        request: ProposalRequest,
+        original: bytes,
+        champion: ModelRelease | InitialDetectorRelease,
     ) -> PredictionBatch: ...
 
 
@@ -112,6 +178,7 @@ class ProposalProvider:
         discovery: dict,
         registry: RegistryState,
         references: tuple[ReferenceExample, ...],
+        initial_detector: InitialDetectorRelease | None = None,
     ) -> dict:
         self._source(request, original)
         # Saved discovery must pin this exact operation, not another source/revision/cache key.
@@ -143,14 +210,34 @@ class ProposalProvider:
             raise ValueError("evidence must be approved for the exact scope and ontology")
         evidence_ids = tuple(sorted(ref.reference_id for ref in references))
         supported_classes = {ref.class_id for ref in references}
-        champion = registry.champion
+        champion = registry.champion or initial_detector
+        source_kind = "champion" if registry.champion else "initial" if initial_detector else "none"
+        class_mapping = {class_id: class_id for class_id in request.class_ids}
+        if source_kind == "initial":
+            assert initial_detector is not None
+            if (
+                initial_detector.project_id,
+                initial_detector.recipe_id,
+                initial_detector.project_release_id,
+            ) != (
+                request.source.project_id,
+                request.recipe.recipe_id,
+                request.project_release_id,
+            ):
+                raise ValueError(
+                    "initial detector belongs to a different project release or recipe"
+                )
+            class_mapping = dict(initial_detector.class_mapping)
+            if not set(class_mapping.values()) <= set(request.class_ids):
+                raise ValueError("initial detector mapping invents a project class")
+            supported_classes &= set(class_mapping.values())
         candidates: list[dict] = []
         shapes: tuple[tuple[int, ...], ...] = ()
         runtime: tuple[tuple[str, str], ...] = ()
         parameters = None
         teacher_truncated = False
         if champion:
-            if champion.class_ids != request.class_ids:
+            if source_kind == "champion" and champion.class_ids != request.class_ids:
                 raise ValueError("teacher class mapping differs from pinned ontology")
             if champion.preprocessing_sha256 != record_digest(asdict(request.recipe)):
                 raise ValueError("teacher preprocessing differs from pinned recipe")
@@ -187,19 +274,30 @@ class ProposalProvider:
                     box = item.transform.restore(detection.box)
                     if box is not None and detection.score >= request.candidate_conf:
                         mapped.append(Detection(detection.class_id, box, detection.score))
-            for index, detection in enumerate(merge_detections(tuple(mapped), champion.policy)):
-                identified = detection.class_id in supported_classes
+            retained = (
+                tuple(sorted(mapped, key=lambda item: -item.score)[: champion.policy.max_det])
+                if champion.policy.nms == "end2end"
+                else merge_detections(tuple(mapped), champion.policy)
+            )
+            for index, detection in enumerate(retained):
+                project_class = class_mapping.get(detection.class_id)
+                identified = project_class in supported_classes
                 candidates.append(
                     {
                         "object_id": f"{request.run_id}:teacher:{index}",
-                        "class_id": detection.class_id if identified else None,
-                        "label_state": "identified" if identified else "insufficient_evidence",
+                        "class_id": project_class if identified else None,
+                        "detector_class": detection.class_id,
+                        "label_state": (
+                            "identified"
+                            if identified
+                            else "unknown"
+                            if project_class is None
+                            else "insufficient_evidence"
+                        ),
                         "box": asdict(detection.box),
                         "score": detection.score,
                         "evidence_ids": [
-                            ref.reference_id
-                            for ref in references
-                            if ref.class_id == detection.class_id
+                            ref.reference_id for ref in references if ref.class_id == project_class
                         ],
                     }
                 )
@@ -215,8 +313,10 @@ class ProposalProvider:
                 "evidence_ids": [],
             }
             for index, box in enumerate(discovery_result.boxes)
+            if source_kind != "none"
         ]
         return {
+            "source": source_kind,
             "run_id": request.run_id,
             "project_id": request.source.project_id,
             "binding": request.binding(),
@@ -251,7 +351,10 @@ class ControlledPredictor:
         self.checkpoint_path = checkpoint_path
 
     def predict(
-        self, request: ProposalRequest, original: bytes, champion: ModelRelease
+        self,
+        request: ProposalRequest,
+        original: bytes,
+        champion: ModelRelease | InitialDetectorRelease,
     ) -> PredictionBatch:
         import cv2
         import numpy as np

@@ -12,6 +12,7 @@ from labelloop_worker_core.jobs import (
     JobRunner,
     JobStore,
     LeaseLost,
+    ProposalJobRunner,
     ProposalRunSink,
     ReplayConflict,
     Stage,
@@ -354,7 +355,7 @@ def test_offline_workflow_pins_configuration_and_persists_zero_detection_review(
         replace(workflow, discovery_version="different").discover(StageContext(store, lease, {}))
     assert events == []
     expire(store, lease)
-    runner = ProposalJobRunner(store, workflow.discover, workflow.propose)
+    runner = ProposalJobRunner(store, workflow.discover, workflow.propose, job_id=job_id)
     assert runner.run_once("worker-ml")
     assert status(store, job_id)[0] == "succeeded"
     assert not runner.run_once("worker-ml") and events == ["discovery"]
@@ -365,3 +366,132 @@ def test_offline_workflow_pins_configuration_and_persists_zero_detection_review(
         assert not record["supported"] and record["teacher_candidates"] == []
         assert record["scope_completeness"] == "unreviewed"
         assert record["binding"]["source"]["sha256"] == sha256
+        assert record["source"] == "none" and record["discovery_candidates"] == []
+
+
+def test_request_bound_runner_does_not_consume_other_jobs_attempts(store):
+    first_project, first_id = enqueue(store)
+    _, second_id = enqueue(store)
+    runner = ProposalJobRunner(
+        store,
+        lambda context: {"blind": True},
+        lambda context: proposal(context.lease),
+        job_id=second_id,
+    )
+    assert runner.run_once("worker-for-second")
+    assert status(store, first_id) == ("queued", 0, 0)
+    assert status(store, second_id)[0] == "succeeded"
+    assert not runner.run_once("worker-for-second")
+    assert status(store, first_id) == ("queued", 0, 0)
+    store.cancel(first_project, first_id)
+
+
+def test_autocommit_factory_still_rolls_back_complete_atomically(store):
+    url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+    autocommit_store = JobStore(lambda: psycopg.connect(url, autocommit=True))
+    project, job_id = enqueue(autocommit_store)
+    lease = autocommit_store.claim("proposals", "worker", job_id=job_id)
+    autocommit_store.save_stage(lease, "proposal", proposal(lease))
+
+    def failing(conn, lease, artifacts):
+        ProposalRunSink()(conn, lease, artifacts)
+        raise RuntimeError("sink failed after append")
+
+    with pytest.raises(RuntimeError, match="after append"):
+        autocommit_store.complete(lease, ("proposal",), failing)
+    with store.connect() as conn:
+        for table in ("worker_application", "worker_proposal_run"):
+            assert (
+                conn.execute(f"SELECT count(*) FROM {table} WHERE job_id=%s", (job_id,)).fetchone()[
+                    0
+                ]
+                == 0
+            )
+    assert status(store, job_id)[0] == "running"
+    autocommit_store.complete(lease, ("proposal",), ProposalRunSink())
+    assert status(store, job_id)[0] == "succeeded"
+    assert not store.cancel(project, job_id)
+
+
+def test_heartbeat_waiting_for_unchanged_row_cannot_revive_expired_lease(store):
+    import time
+
+    project, job_id = enqueue(store)
+    lease = store.claim("proposals", "worker", lease_seconds=2, job_id=job_id)
+    url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+    application_name = "lease-test-" + str(uuid4())
+    waiting_store = JobStore(lambda: psycopg.connect(url, application_name=application_name))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.connect() as locked:
+            locked.execute("SELECT job_id FROM worker_job WHERE job_id=%s FOR UPDATE", (job_id,))
+            future = pool.submit(waiting_store.heartbeat, lease)
+            deadline = time.monotonic() + 1.5
+            while True:
+                with store.connect() as observer:
+                    blocked = observer.execute(
+                        "SELECT count(*) FROM pg_stat_activity WHERE application_name=%s "
+                        "AND wait_event_type='Lock'",
+                        (application_name,),
+                    ).fetchone()[0]
+                if blocked:
+                    break
+                assert time.monotonic() < deadline, "heartbeat did not reach the row lock"
+                time.sleep(0.01)
+            locked.execute("SELECT pg_sleep(2.1)")
+        with pytest.raises(LeaseLost):
+            future.result(timeout=5)
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT lease_until < clock_timestamp() FROM worker_job WHERE job_id=%s", (job_id,)
+        ).fetchone()[0]
+    store.cancel(project, job_id)
+
+
+def test_blocking_stage_renews_lease_during_provider_call(store):
+    project, job_id = enqueue(store)
+
+    def blocking_provider(context):
+        with store.connect() as conn:
+            conn.execute("SELECT pg_sleep(1.4)")
+        return {"result": "finished beyond initial one-second lease"}
+
+    runner = JobRunner(
+        store,
+        "proposals",
+        (Stage("blocking", blocking_provider),),
+        lambda *args: None,
+        job_id=job_id,
+        lease_seconds=1,
+        max_stage_seconds=5,
+    )
+    assert runner.run_once("worker")
+    assert status(store, job_id)[0] == "succeeded"
+    assert not store.cancel(project, job_id)
+
+
+def test_stage_runtime_ceiling_discards_late_results(store):
+    project, job_id = enqueue(store)
+
+    def hung_provider(context):
+        with store.connect() as conn:
+            conn.execute("SELECT pg_sleep(1.2)")
+        return {"late": True}
+
+    runner = JobRunner(
+        store,
+        "proposals",
+        (Stage("blocking", hung_provider),),
+        lambda *args: pytest.fail("must not apply"),
+        job_id=job_id,
+        lease_seconds=1,
+        max_stage_seconds=1,
+    )
+    assert runner.run_once("worker")
+    with store.connect() as conn:
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM worker_stage_artifact WHERE job_id=%s", (job_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    store.cancel(project, job_id)

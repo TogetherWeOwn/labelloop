@@ -17,9 +17,13 @@ heartbeat, artifact write and completion requires a matching worker and generati
 a running job and an unexpired lease under a row lock. Cancellation increments the
 generation and is terminal. Failures retry with capped exponential backoff, at most
 ten attempts; lease expiration also spends an attempt. Stored errors are fixed codes,
-never exception messages. Handlers heartbeat at safe boundaries; long operations
-must explicitly call the injected heartbeat. Crossing the deadline discards results,
-not authority to commit late.
+never exception messages. Deadline checks execute after acquiring the row lock;
+a heartbeat that waited past expiration cannot revive the lease. Every store operation
+uses an explicit transaction even with an autocommit connection factory. The runner
+renews leases on a separate connection during blocking stage calls, stops renewal on
+error/cancellation and enforces a one-hour maximum stage runtime. Handlers may also
+call the injected heartbeat at safe boundaries. Late computations may finish but
+cannot save/apply results; no attempt is made to kill vendor code inside a thread.
 
 Completed stage artifacts are immutable bounded JSON records with SHA-256 hashes.
 A reclaimed job skips completed stages. Final application locks the job, inserts a
@@ -32,7 +36,10 @@ remote adapters need an outbox and their own reconcile-before-retry protocol.
 
 ## Proposals and independent discovery
 
-`ProposalJobRunner` fixes the order to discovery then proposal. `ProposalWorkflow`
+`ProposalJobRunner` fixes the order to discovery then proposal and requires a job ID:
+request-bound callbacks cannot claim another workflow's job and spend its retry budget.
+General kind-wide runners are only for handlers able to execute any input of that kind.
+`ProposalWorkflow`
 pins the source, expected annotation revision, ontology/scope/reference pack, actual
 reference records, recipe, full registry release and revision, candidate threshold
 and discovery version. Both callbacks verify worker configuration against immutable
@@ -51,10 +58,22 @@ argument; the existing AP default remains unchanged. Candidate confidence is sto
 separately from deployment confidence. The checkpoint digest, recipe digest, classes
 and runtime are checked against the pinned champion. Decoder/encoder/interpolation
 and raster gains follow the compiler recipe; library versions and transforms remain
-in the run record. No generic pretrained identity fallback is invented when there
-is no champion. Absent approved class-specific references preserve uncertain class
-identity, never manufactured SKU/species identity. Reference retrieval permissions
-and holdout exclusion remain the evidence service's responsibility.
+in the run record. Full-frame `end2end` outputs are not subjected to extra IoU
+suppression; the recorded NMS-free release policy is preserved.
+
+Source order is qualifying recipe champion, then admin-pinned initial detector from
+a frozen project release, then `source: none` human-first seeding. Initial detector
+records pin checkpoint hash/source/version/licence/vocabulary and controlled runtime.
+Their class mapping defaults empty; only explicit admin-approved mappings bound to
+the same frozen release may identify project classes. Worker/reviewer approval roles,
+unfrozen configuration and mappings from another release are refused by the port.
+The trusted API producer still owns actual authentication and release persistence;
+these role/provenance fields are not authentication by themselves. No pretrained
+weights are downloaded. An empty mapping means unknown identity even when detector
+and project names happen to match. Absent class-specific evidence remains uncertain.
+With no detector, blind discovery is still recorded as inspection evidence, but no
+annotation candidates are emitted and completeness remains unreviewed. Reference
+retrieval permissions and holdout exclusion remain the evidence service's responsibility.
 
 The append-only `ProposalRunSink` stores evidence, not canonical annotation edits.
 All outputs are proposed/unreviewed, incomplete for release purposes and ineligible
