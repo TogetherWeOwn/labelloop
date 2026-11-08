@@ -304,42 +304,50 @@ try {
   assert.deepEqual(commands.map((command) => command.kind), ['save_setup', 'approve_step']);
   assert.equal(commands[1].expected_revision, commands[0].expected_revision + 1);
   results.push({ key: 'refresh-and-port-lifecycles', pass: true, realCommands: false });
-  for (const width of [1280, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
-    const steps = page.getByRole('navigation', { name: 'Setup steps' });
-    await steps.getByRole('button', { name: /Scope/ }).click();
-    assert.equal(await steps.getByText('Done', { exact: true }).count(), 1);
-    await page.getByLabel('Project name', { exact: true }).fill('Scope with revoked approvals');
-    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-    const scopeSave = await last();
-    assert.equal(scopeSave.kind, 'save_setup');
-    assert.equal(scopeSave.step, 'Scope');
-    assert.equal(scopeSave.expected_revision, 7);
-    await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
-    await page.waitForFunction(() => ![...document.querySelectorAll('button')].find((button) => button.textContent === 'Approve scope and continue')?.disabled);
-    assert.equal(await page.getByLabel('Project name', { exact: true }).inputValue(), 'Scope with revoked approvals');
-    assert.equal(await steps.getByText('Done', { exact: true }).count(), 0, 'the returned empty approval set revokes the old scope approval');
-    assert.equal(await steps.getByText('Unknown', { exact: true }).count(), 0, 'explicitly empty approvals are known, not unknown');
-    await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
-    for (const step of ['Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish']) {
-      await steps.getByRole('button', { name: step, exact: false }).focus();
+  for (const [editedStep, field, savedValue] of [['Scope', 'Project name', 'Scope with revoked approvals'], ['Labelling guide', 'Out-of-scope background', 'Explicit guide background']]) {
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${entry}?screen=new-project&state=refresh-lifecycle`);
+      const steps = page.getByRole('navigation', { name: 'Setup steps' });
+      await steps.getByRole('button', { name: new RegExp(editedStep) }).click();
+      assert.equal(await steps.getByText('Done', { exact: true }).count(), 1);
+      await page.getByLabel(field, { exact: true }).fill(savedValue);
+      if (editedStep === 'Labelling guide') await page.getByLabel('Exhaustive for scope', { exact: true }).uncheck();
+      await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+      const setupSave = await last();
+      assert.equal(setupSave.kind, 'save_setup');
+      assert.equal(setupSave.step, editedStep);
+      assert.equal(setupSave.expected_revision, 7);
+      if (editedStep === 'Labelling guide') assert.deepEqual(setupSave.values, { extent: 'visible', truncation: 'Retain visible extent', occlusion: 'Do not estimate hidden extent', reflections: 'Out of scope', min_target_px: 4, exhaustive: false, background: savedValue }, 'guide capture is explicit policy intent, without annotation text or approval authority');
+      await page.getByRole('button', { name: 'Finish pending save', exact: true }).click();
+      await page.getByRole('button', { name: 'Save changes', exact: true }).waitFor({ state: 'detached' });
+      assert.equal(await page.getByLabel(field, { exact: true }).inputValue(), savedValue);
+      if (editedStep === 'Labelling guide') {
+        assert.equal(await page.getByLabel('Exhaustive for scope', { exact: true }).isChecked(), false, 'saved intent is not a completeness assessment');
+        await page.getByText('Use visible extents for plant milk cartons and shelf price tags.', { exact: true }).waitFor();
+      }
+      assert.equal(await steps.getByText('Done', { exact: true }).count(), 0, 'the returned empty approval set revokes the old scope approval');
+      assert.equal(await steps.getByText('Unknown', { exact: true }).count(), 0, 'explicitly empty approvals are known, not unknown');
+      await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+      for (const step of ['Classes', 'Evidence', 'Labelling guide', 'Sources and groups', 'Check and publish']) {
+        await steps.getByRole('button', { name: step, exact: false }).focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('heading', { level: 2, name: new RegExp(step) }).waitFor();
+        const approval = page.getByRole('button', { name: step === 'Check and publish' ? 'Publish project release 1' : `Approve ${step.toLowerCase()} and continue`, exact: true });
+        assert.equal(await approval.isDisabled(), true, `${step}: saving ${editedStep} cannot approve dependent steps`);
+        if (step === 'Classes') assert.equal(await page.getByRole('button', { name: 'Draft with the assistant', exact: true }).isDisabled(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${step}: revoked-approval page overflow`);
+        const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })));
+        assert.deepEqual(violations, [], `${step}: ${JSON.stringify(violations)}`);
+      }
+      assert.deepEqual((await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'))).map((command) => command.kind), ['save_setup'], 'refreshing revoked approvals never emits approval or publication commands');
+      await steps.getByRole('button', { name: /Scope/ }).click();
+      await page.getByRole('button', { name: 'Approve scope and continue', exact: true }).focus();
       await page.keyboard.press('Enter');
-      await page.getByRole('heading', { level: 2, name: new RegExp(step) }).waitFor();
-      const approval = page.getByRole('button', { name: step === 'Check and publish' ? 'Publish project release 1' : `Approve ${step.toLowerCase()} and continue`, exact: true });
-      assert.equal(await approval.isDisabled(), true, `${step}: saving scope cannot approve dependent steps`);
-      if (step === 'Classes') assert.equal(await page.getByRole('button', { name: 'Draft with the assistant', exact: true }).isDisabled(), true);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `${step}: revoked-approval page overflow`);
-      const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })));
-      assert.deepEqual(violations, [], `${step}: ${JSON.stringify(violations)}`);
+      await page.getByRole('heading', { level: 2, name: /Classes/ }).waitFor();
+      assert.deepEqual(await last(), { kind: 'approve_step', draft_id: 'draft-shelf', expected_revision: 8, step: 'Scope' });
+      results.push({ key: `${editedStep === 'Scope' ? 'scope' : 'guide'}-save-revokes-approvals-${width}`, pass: true, realCommands: false });
     }
-    assert.deepEqual((await page.evaluate(() => JSON.parse(document.documentElement.dataset.commands || '[]'))).map((command) => command.kind), ['save_setup'], 'refreshing revoked approvals never emits approval or publication commands');
-    await steps.getByRole('button', { name: /Scope/ }).click();
-    await page.getByRole('button', { name: 'Approve scope and continue', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    await page.getByRole('heading', { level: 2, name: /Classes/ }).waitFor();
-    assert.deepEqual(await last(), { kind: 'approve_step', draft_id: 'draft-shelf', expected_revision: 8, step: 'Scope' });
-    results.push({ key: `scope-save-revokes-approvals-${width}`, pass: true, realCommands: false });
   }
   const assistantPanel = page.getByRole('region', { name: 'Assistant class draft request', exact: true });
   const openAssistant = page.getByRole('button', { name: 'Draft with the assistant', exact: true });

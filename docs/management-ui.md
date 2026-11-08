@@ -308,6 +308,38 @@ scope approval pinned to the refreshed revision. These new cases are pending
 Actions verification. They exercise simulated responses only; no server state,
 authentication, receipt persistence, approval write or publication is implemented.
 
+## Guide-draft producer alignment
+
+Producer source at `087d3ff8a6e42bda1978001f838a84223ae92c96` adds generated
+`GuideDraft`/`saveGuideDraft` at `POST /projects/{project_id}/setup/guide`.
+The facade remains unmounted and its exact-head Actions are pending; publication
+is not live command integration or acceptance. Reuse the generated operation at
+final wiring, not a second client or a generic fixture capture passthrough.
+
+| Producer field | Integration obligation |
+| --- | --- |
+| `expected_revision` | Pin the inspected project revision shared by scope and guide, not a separate guide counter. |
+| `annotation_guide` | Send the inspected stored free text separately; the structured-policy form does not capture or replace it. |
+| `extent` | Only literal `visible` is supported for saves. The fixture's free-text extent is not a wire enum; estimated hidden extent must be refused, never silently coerced. |
+| `truncation`, `occlusion`, `reflections`, `background` | Map each explicit policy text field. |
+| `min_target_px` | Validate a positive number with the generated schema; no guessed target threshold. |
+| `exhaustive_for_scope` | Map the fixture's `exhaustive` intent explicitly; neither true nor false is an image completeness assessment. |
+
+Supply authoritative project identity and a fresh idempotency key for each new
+edit. Scope/guide saves share a canonical revision sequence; refresh `readProject`
+and its attributed receipt after success before another save or approval. Saves
+clear dependent setup approvals and automatic acceptance, without changing a
+recipe, granting completeness, approving policy or publishing a release. Those
+real state transitions and authenticated persistence remain producer obligations.
+
+The simulated guide-save receipt now returns known empty approvals and the edited
+background/exhaustive intent. The existing 1280/390 scope invalidation regression
+also covers guide saves: exact fixture-only capture, retained stored annotation
+text, revoked markers, disabled dependent actions, no implicit dispatch, separate
+scope approval at the refreshed revision, keyboard/axe and overflow. These new
+cases are pending Actions verification. No new UI fields, tokens, components,
+upload authority, provider call or live adapter are introduced.
+
 ## Remaining acceptance and final wiring obligations
 
 These remain open; merging fixture components does not discharge them:

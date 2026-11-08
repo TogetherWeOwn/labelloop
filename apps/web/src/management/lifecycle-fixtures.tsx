@@ -58,8 +58,12 @@ export function RefreshLifecycleFixture({ screen, importRejected = false }: { sc
             snapshot.draft.revision += 1;
             if (command.kind === 'save_setup' && command.step === 'Scope') {
               if (typeof command.values.name === 'string') snapshot.draft.scope.name = command.values.name;
-              snapshot.draft.approved_steps = [];
             }
+            if (command.kind === 'save_setup' && command.step === 'Labelling guide' && snapshot.draft.guide) {
+              if (typeof command.values.background === 'string') snapshot.draft.guide.background = command.values.background;
+              if (typeof command.values.exhaustive === 'boolean') snapshot.draft.guide.exhaustive = command.values.exhaustive;
+            }
+            if (command.kind === 'save_setup' && (command.step === 'Scope' || command.step === 'Labelling guide')) snapshot.draft.approved_steps = [];
             if (command.kind === 'save_setup' && command.step === 'Sources and groups' && typeof command.values.metadata_keys === 'string') snapshot.draft.sources.metadata_keys = command.values.metadata_keys;
             if (command.kind === 'edit_class') snapshot.draft.classes = snapshot.draft.classes.map((row) => row.id === command.id ? { ...row, ...command.values } : row);
             if (command.kind === 'add_reference' || command.kind === 'request_reference_upload') snapshot.draft.references = [...(snapshot.draft.references ?? []), { id: command.kind === 'add_reference' ? 'ref-linked' : 'ref-uploaded', ...command.values, provenance: 'Proposed' }];
