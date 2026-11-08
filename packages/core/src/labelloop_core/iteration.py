@@ -269,6 +269,8 @@ class IterationState:
     batch_policies: tuple[BatchPolicy, ...] = ()
     # The original round inputs survive manifest invalidation and subsequent stops.
     started_round_evidence: str = ""
+    admitted_iteration_ids: tuple[str, ...] = ()
+    restart_required: bool = False
 
     def __post_init__(self) -> None:
         identity(self.iteration_id)
@@ -301,9 +303,24 @@ class IterationState:
                 self.correction_loops,
                 self.retired,
                 self.batch_policies,
+                self.admitted_iteration_ids,
             )
         ):
             raise ValueError("iteration history requires immutable tuples")
+        if not self.admitted_iteration_ids:
+            if self.rounds or self.retired:
+                raise ValueError("retained history requires complete iteration identity history")
+            object.__setattr__(self, "admitted_iteration_ids", (self.iteration_id,))
+        if (
+            len(set(self.admitted_iteration_ids)) != len(self.admitted_iteration_ids)
+            or self.iteration_id not in self.admitted_iteration_ids
+            or any(r.iteration_id not in self.admitted_iteration_ids for r in self.rounds)
+        ):
+            raise ValueError("iteration identity history must be complete and unique")
+        for admitted_id in self.admitted_iteration_ids:
+            identity(admitted_id)
+        if type(self.restart_required) is not bool:
+            raise ValueError("invalidation state must be application policy")
         if len(dict(self.correction_loops)) != len(self.correction_loops):
             raise ValueError("duplicate correction history")
         all_records = (*self.records, *self.retired)
@@ -452,7 +469,7 @@ def prepare_stage(state: IterationState, key: StageKey) -> IterationState:
     if key.stage == "train" and not any(r.iteration_id == state.iteration_id for r in rounds):
         count = sum(r.source_batch_id == state.manifest.source_batch_id for r in rounds)
         if count >= state.manifest.maximum_training_rounds:
-            return replace(state, status="paused", reason="round_limit")
+            return replace(state, status="paused", reason="round_limit", restart_required=True)
         if any(
             r.source_batch_id == state.manifest.source_batch_id
             and r.evidence_sha256 == state.manifest.round_evidence
@@ -565,6 +582,57 @@ def resume(state: IterationState, validated: tuple[StageReceipt, ...]) -> Iterat
     return state
 
 
+@dataclass(frozen=True, slots=True)
+class PauseClearance:
+    """Trusted credit-clearance evidence, never public/model-supplied permission.
+
+    The authenticated store verifies current credit/ledger policy before issuing
+    this binding. It is not budget dispatch authorization or a retry instruction.
+    """
+
+    iteration_id: str
+    generation: int
+    manifest_sha256: str
+    pause_reason: str
+    evidence: EvidenceRef
+
+    def __post_init__(self) -> None:
+        identity(self.iteration_id)
+        require_digest(self.manifest_sha256)
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError("invalid clearance generation")
+
+
+def continue_iteration(
+    state: IterationState,
+    validated: tuple[StageReceipt, ...],
+    *,
+    clearance: PauseClearance,
+) -> IterationState:
+    """Continue only a cleared credit pause with unchanged, settled inputs.
+
+    Other stop gates require a fresh iteration with new evidence/renewal. Failed
+    and uncertain attempts never become retryable through this transition.
+    """
+    if state.status != "paused" or not state.reason.startswith("insufficient_credits:"):
+        raise ValueError("continuation requires an explicit credit pause")
+    if (
+        clearance.iteration_id != state.iteration_id
+        or clearance.generation != state.generation
+        or clearance.manifest_sha256 != state.manifest.digest
+        or clearance.pause_reason != state.reason
+    ):
+        raise ValueError("credit clearance does not match paused iteration")
+    if state.restart_required:
+        raise ValueError("invalidated inputs or prior stop gates require a fresh iteration")
+    if any(r.receipt is None for r in state.retired) or any(
+        r.receipt is None or r.receipt.outcome == "failed" for r in state.records
+    ):
+        raise ValueError("pending or failed intents cannot be continued")
+    resume(state, validated)
+    return replace(state, status="running", reason="")
+
+
 def _policy_transition(
     state: IterationState,
     manifest: IterationManifest,
@@ -617,6 +685,7 @@ def invalidate(state: IterationState, manifest: IterationManifest) -> IterationS
         retired=(*state.retired, *state.records),
         status="paused",
         reason="inputs_changed",
+        restart_required=True,
         batch_policies=policies,
     )
 
@@ -670,21 +739,26 @@ def stop(state: IterationState, reason: StopReason, evidence: EvidenceRef) -> It
         else "paused"
     )
     return replace(
-        state, status=status, reason=f"{reason}:{evidence.artifact_id}:{evidence.sha256}"
+        state,
+        status=status,
+        reason=f"{reason}:{evidence.artifact_id}:{evidence.sha256}",
+        restart_required=state.restart_required or reason != "insufficient_credits",
     )
 
 
 def next_iteration(
     state: IterationState, iteration_id: str, manifest: IterationManifest
 ) -> IterationState:
-    if state.status == "running":
+    selection = state.record(StageKey("select_next"))
+    if state.status == "running" and (
+        selection is None or selection.receipt is None or selection.receipt.outcome != "complete"
+    ):
         raise ValueError("finish or pause the current iteration first")
     if any(r.receipt is None for r in (*state.records, *state.retired)):
         raise ValueError("uncertain intents require reconciliation before a new iteration")
     if (
         manifest.project_id != state.manifest.project_id
-        or iteration_id == state.iteration_id
-        or any(r.iteration_id == iteration_id for r in state.rounds)
+        or iteration_id in state.admitted_iteration_ids
     ):
         raise ValueError("new iteration requires the same project and a fresh ID")
     if (
@@ -705,4 +779,5 @@ def next_iteration(
         correction_loops=state.correction_loops,
         retired=(*state.retired, *state.records),
         batch_policies=policies,
+        admitted_iteration_ids=(*state.admitted_iteration_ids, iteration_id),
     )

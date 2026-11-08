@@ -102,6 +102,17 @@ module does not itself implement database persistence, leases or authentication.
 
 ## Bounds, failures and stop gates
 
+A successful validated `select_next` receipt closes the graph for advancement:
+`next_iteration` accepts genuinely new evidence directly, without inventing a
+stop reason. A missing, pending or failed selection does not close a running
+graph. All existing reconciliation, project, fresh-ID, evidence and policy-bound
+checks still apply. Completed receipts remain reusable/idempotent in the old
+projection; advancing retires them without resetting correction or round history.
+Every admitted iteration ID is retained in `admitted_iteration_ids`, independently
+of training stamps, including zero-training, failed and cancelled iterations.
+The store must serialize that complete history; a fresh ID cannot alias any prior
+iteration's operation namespace or per-iteration budget identity.
+
 Both recipes together consume one training round when the first training intent
 is committed, including failed or cancelled attempts. Per-source-batch lifetime
 round counts survive new iterations and invalidation. A new round needs new
@@ -138,6 +149,27 @@ immutable evidence reference in its reason. There are no hard-coded universal
 quality thresholds. Qualification/selection services evaluate the pinned project
 policy and supply this evidence; machine agreement cannot mint verification.
 In-flight intent still requires reconciliation after a stop/pause.
+
+`resume` only validates cache reuse; it never clears a stop gate. To continue a
+credit pause on unchanged inputs, the authenticated store must verify credit and
+ledger clearance and issue `PauseClearance`, binding the exact iteration ID,
+generation, manifest digest and evidence-bearing pause reason to a durable
+clearance evidence reference. The store records that clearance in its audit trail
+and CAS-commits `continue_iteration` with its current policy checks. This trusted
+receipt is never a public request/model payload or spend authorization. The
+transition requires exact revalidated completed receipts and no pending intent
+(current or retired) or failed current intent. A successful readback may settle
+an uncertain intent before continuation, but its original ID remains reuse-only.
+A 402/failed attempt cannot be retried by clearing credits; it requires a fresh
+iteration and new evidence/renewal after reconciliation. Prior retired failures
+do not block safe work in an explicitly admitted new iteration. All paid dispatch
+still needs a separately matching durable budget authorization.
+
+Other stop gates and input invalidation require a fresh iteration, not same-ID
+continuation. `restart_required` preserves that restriction even if a later credit
+pause replaces the displayed reason. Neither completed receipts, consumed rounds
+nor correction history is reset by credit continuation. Real authentication,
+credit/ledger verification and CAS/audit adapters remain disabled and unqualified.
 
 Paid review and Platform sync/train require `DurableBudgetAuthorization`: a
 trusted ledger commit reference and an already-dispatched `BudgetGate` entry

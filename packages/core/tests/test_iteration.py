@@ -17,6 +17,7 @@ from labelloop_core.iteration import (
     EvidenceRef,
     IterationManifest,
     IterationState,
+    PauseClearance,
     RecipePin,
     SourcePin,
     StageKey,
@@ -24,6 +25,7 @@ from labelloop_core.iteration import (
     StopReason,
     begin_stage,
     cancel,
+    continue_iteration,
     finish_stage,
     invalidate,
     next_iteration,
@@ -125,10 +127,202 @@ def trained(state: IterationState | None = None) -> IterationState:
 
 
 def round_two() -> IterationState:
-    state = stop(trained(), "no_informative_data", ref("selection"))
+    state = trained()
     return next_iteration(
         state, "iteration-2", replace(state.manifest, evidence=ref("new-evidence"))
     )
+
+
+def test_successful_selection_advances_without_inventing_a_stop_reason() -> None:
+    state = trained()
+    assert state.reason == "" and state.ready() == ()
+    restored = pickle.loads(pickle.dumps(state))
+    next_state = next_iteration(
+        restored, "iteration-2", replace(state.manifest, evidence=ref("new-evidence"))
+    )
+    assert next_state.ready() == (StageKey("freeze"),)
+    assert next_state.rounds == state.rounds
+    assert next_state.correction_loops == state.correction_loops
+    assert next_state.retired == state.records
+    assert len(trained(next_state).rounds) == 2
+    with pytest.raises(ValueError, match="new evidence"):
+        next_iteration(restored, "iteration-2", state.manifest)
+
+
+@pytest.mark.parametrize("selection", ["missing", "pending", "failed"])
+def test_running_iteration_cannot_advance_without_successful_selection(selection: str) -> None:
+    state = shared()
+    if selection != "missing":
+        for recipe in state.manifest.recipes:
+            for stage in PER_RECIPE:
+                state = complete(state, StageKey(stage, recipe.recipe_id))
+        key = StageKey("select_next")
+        state = begin_stage(state, key)
+        if selection == "failed":
+            state = finish_stage(state, key, receipt_for(state, key, outcome="failed"))
+    with pytest.raises(ValueError, match="finish or pause"):
+        next_iteration(state, "iteration-2", replace(state.manifest, evidence=ref("new")))
+
+
+def clearance_for(state: IterationState) -> PauseClearance:
+    return PauseClearance(
+        state.iteration_id,
+        state.generation,
+        state.manifest.digest,
+        state.reason,
+        ref("trusted-credit-clearance"),
+    )
+
+
+def test_cleared_predispatch_credit_pause_continues_same_iteration() -> None:
+    state = stop(IterationState("iteration-1", manifest()), "insufficient_credits", ref("pause"))
+    assert resume(state, ()) == state  # Cache validation alone is never an unpause.
+    continued = continue_iteration(state, (), clearance=clearance_for(state))
+    assert continued == replace(state, status="running", reason="")
+    assert begin_stage(continued, StageKey("freeze")).record(StageKey("freeze")) is not None
+
+
+def test_credit_continuation_reuses_validated_receipts_and_preserves_bounds() -> None:
+    state = shared()
+    for stage in PER_RECIPE:
+        state = complete(state, StageKey(stage, "full320"))
+    for stage in PER_RECIPE[:3]:
+        state = complete(state, StageKey(stage, "full640"))
+    # A credit pause during a later recipe keeps an already consumed training round.
+    state = stop(state, "insufficient_credits", ref("pause"))
+    state = pickle.loads(pickle.dumps(state))
+    receipts = tuple(r.receipt for r in state.records if r.receipt is not None)
+    clearance = clearance_for(state)
+    with pytest.raises(ValueError, match="exact artifact"):
+        continue_iteration(state, receipts[:-1], clearance=clearance)
+    for stale in (
+        replace(clearance, iteration_id="other"),
+        replace(clearance, generation=state.generation + 1),
+        replace(clearance, manifest_sha256=ref("other").sha256),
+        replace(clearance, pause_reason="insufficient_credits:old"),
+    ):
+        with pytest.raises(ValueError, match="clearance does not match"):
+            continue_iteration(state, receipts, clearance=stale)
+    continued = continue_iteration(state, receipts, clearance=clearance)
+    assert continued.records == state.records
+    assert continued.rounds == state.rounds
+    assert continued.correction_loops == state.correction_loops
+    assert continued.ready() == (StageKey("evaluate", "full640"),)
+
+
+@pytest.mark.parametrize("outcome", ["pending", "failed"])
+def test_credit_clearance_never_retries_uncertain_or_failed_intent(outcome: str) -> None:
+    key = StageKey("freeze")
+    state = begin_stage(IterationState("iteration-1", manifest()), key)
+    if outcome == "failed":
+        state = finish_stage(state, key, receipt_for(state, key, outcome="failed"))
+    state = stop(state, "insufficient_credits", ref("pause"))
+    receipts = tuple(r.receipt for r in state.records if r.receipt is not None)
+    with pytest.raises(ValueError, match="pending or failed"):
+        continue_iteration(state, receipts, clearance=clearance_for(state))
+    assert recover_stage(state, key) == ("reconcile" if outcome == "pending" else "reuse")
+    assert state.ready() == ()
+
+
+def test_reconciled_pending_intent_can_continue_but_never_redispatch() -> None:
+    key = StageKey("freeze")
+    state = begin_stage(IterationState("iteration-1", manifest()), key)
+    state = stop(state, "insufficient_credits", ref("pause"))
+    receipt = receipt_for(state, key)
+    settled = finish_stage(state, key, receipt)
+    continued = continue_iteration(settled, (receipt,), clearance=clearance_for(settled))
+    assert begin_stage(continued, key) == continued
+    assert recover_stage(continued, key) == "reuse"
+    assert continued.ready() == (StageKey("propose_discover"),)
+
+
+def test_fresh_iteration_can_continue_after_reconciled_historical_failure() -> None:
+    key = StageKey("freeze")
+    state = begin_stage(IterationState("iteration-1", manifest()), key)
+    state = finish_stage(state, key, receipt_for(state, key, outcome="failed"))
+    state = stop(state, "insufficient_evidence", ref("failure"))
+    state = next_iteration(state, "iteration-2", replace(state.manifest, evidence=ref("new")))
+    state = stop(state, "insufficient_credits", ref("pause"))
+    continued = continue_iteration(state, (), clearance=clearance_for(state))
+    assert continued.retired == state.retired and continued.rounds == state.rounds
+    assert continued.ready() == (key,)
+    assert begin_stage(continued, key).record(key) != state.retired[0]
+
+
+def test_credit_clearance_is_not_paid_stage_authorization() -> None:
+    state = IterationState("iteration-1", replace(manifest(), paid_review=True))
+    for stage in SHARED[:2]:
+        state = complete(state, StageKey(stage))
+    state = stop(state, "insufficient_credits", ref("pause"))
+    receipts = tuple(r.receipt for r in state.records if r.receipt is not None)
+    continued = continue_iteration(state, receipts, clearance=clearance_for(state))
+    key = StageKey("review")
+    with pytest.raises(ValueError, match="durable budget"):
+        begin_stage(continued, key)
+    assert begin_stage(continued, key, budget=budget_for(continued, key)).record(key) is not None
+
+
+@pytest.mark.parametrize("reason", sorted(STOP_REASONS - {"insufficient_credits"}))
+def test_later_credit_pause_cannot_erase_prior_stop_gate(reason: StopReason) -> None:
+    state = stop(IterationState("iteration-1", manifest()), reason, ref("original-gate"))
+    state = stop(state, "insufficient_credits", ref("later-credit-pause"))
+    state = pickle.loads(pickle.dumps(state))
+    with pytest.raises(ValueError, match="prior stop gates"):
+        continue_iteration(state, (), clearance=clearance_for(state))
+
+
+def test_credit_clearance_cannot_erase_invalidation_or_other_stop_gates() -> None:
+    original = IterationState("iteration-1", manifest())
+    changed = invalidate(original, replace(original.manifest, teacher=ref("changed-teacher")))
+    changed = stop(changed, "insufficient_credits", ref("pause"))
+    with pytest.raises(ValueError, match="invalidated"):
+        continue_iteration(changed, (), clearance=clearance_for(changed))
+    for state in (
+        original,
+        cancel(original),
+        *(
+            stop(original, reason, ref("gate"))
+            for reason in STOP_REASONS
+            if reason != "insufficient_credits"
+        ),
+    ):
+        with pytest.raises(ValueError, match="credit pause"):
+            continue_iteration(state, (), clearance=clearance_for(state))
+
+
+@pytest.mark.parametrize("disposition", ["stopped", "cancelled", "failed"])
+def test_iteration_ids_survive_zero_training_history_and_serialization(disposition: str) -> None:
+    state = IterationState("iteration-a", manifest())
+    for stage in SHARED[:3]:
+        state = complete(state, StageKey(stage))
+    if disposition == "failed":
+        key = StageKey("validate")
+        state = begin_stage(state, key)
+        state = finish_stage(
+            state, key, replace(receipt_for(state, key, outcome="failed"), correction_loops=())
+        )
+    state = cancel(state) if disposition == "cancelled" else stop(state, "plateau", ref("stop"))
+    second_manifest = replace(state.manifest, evidence=ref("second-evidence"))
+    state = next_iteration(state, "iteration-b", second_manifest)
+    state = stop(state, "plateau", ref("stop"))
+    state = pickle.loads(pickle.dumps(state))
+    assert state.rounds == ()
+    third_manifest = replace(state.manifest, evidence=ref("third-evidence"))
+    with pytest.raises(ValueError, match="fresh ID"):
+        next_iteration(state, "iteration-a", third_manifest)
+    fresh = next_iteration(state, "iteration-c", third_manifest)
+    assert fresh.admitted_iteration_ids == ("iteration-a", "iteration-b", "iteration-c")
+    assert fresh.ready() == (StageKey("freeze"),)
+
+
+def test_iteration_identity_history_must_be_complete_unique_and_immutable() -> None:
+    state = IterationState("iteration-1", manifest())
+    assert state.admitted_iteration_ids == ("iteration-1",)
+    for invalid in (("other",), ("iteration-1", "iteration-1")):
+        with pytest.raises(ValueError, match="identity history"):
+            replace(state, admitted_iteration_ids=invalid)
+    with pytest.raises(ValueError, match="immutable tuples"):
+        replace(state, admitted_iteration_ids=["iteration-1"])  # type: ignore[arg-type]
 
 
 def test_batch_switch_cannot_reuse_old_renewal_to_raise_exhausted_ceiling() -> None:
