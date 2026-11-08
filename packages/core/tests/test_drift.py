@@ -5,7 +5,9 @@ from qualification_fixture import qualification_context
 from test_registry import model, report
 
 from labelloop_core.drift import AcceptanceState
+from labelloop_core.qualification import QualificationContext
 from labelloop_core.qualification_data import ScopeCell
+from labelloop_core.qualification_wire import dumps, loads
 from labelloop_core.registry import PromotionPolicy
 
 
@@ -35,8 +37,14 @@ def test_drift_pauses_only_affected_scope_and_resume_requires_new_qualified_rele
     next_release = model(320, "new-qualified-release")
     next_report = report(next_release)
     qualified = qualification_context(
-        next_release, next_report, PromotionPolicy(1, 0.9), scope=scopes
+        next_release,
+        next_report,
+        PromotionPolicy(1, 0.9),
+        scope=scopes,
+        remediation_for=(paused.incident_reference("camera-change"),),
     )
+    assert loads(dumps(paused), AcceptanceState) == paused
+    assert loads(dumps(qualified), QualificationContext) == qualified
     resumed = paused.resume(
         next_release,
         next_report,
@@ -136,3 +144,105 @@ def test_class_specific_drift_does_not_disable_other_classes_in_the_same_source(
     )
     assert state.is_paused(first) and not state.is_paused(second)
     state.require_acceptance(release, final, context, second)
+
+
+def test_predrift_qualification_or_relabelled_old_canary_cannot_clear_an_incident() -> None:
+    first, second = model(320), model(320, "already-qualified-before-drift")
+    gate = PromotionPolicy(1, 0.9)
+    old = qualification_context(second, report(second), gate)
+    first_context = qualification_context(first, report(first), gate)
+    paused = AcceptanceState(first.project_id, first.recipe_id).pause(
+        first,
+        pause_id="camera-drift",
+        qualification_id=first_context.evidence.qualification_id,
+        scope=first_context.evidence.scope,
+        reason="layout changed",
+        expected_revision=0,
+    )
+    with pytest.raises(ValueError, match="post-incident"):
+        paused.resume(second, report(second), old, pause_ids=("camera-drift",), expected_revision=1)
+    incident = paused.incident_reference("camera-drift")
+    # Merely relabelling the qualification cannot reuse a canary that predates the incident.
+    with pytest.raises(ValueError, match="same drift incidents"):
+        paused.resume(
+            second,
+            report(second),
+            replace(
+                old,
+                evidence=replace(
+                    old.evidence,
+                    remediation_for=(incident,),
+                ),
+            ),
+            pause_ids=("camera-drift",),
+            expected_revision=1,
+        )
+    fresh = qualification_context(second, report(second), gate, remediation_for=(incident,))
+    for wrong in (
+        replace(incident, opened_revision=incident.opened_revision + 1),
+        replace(incident, release_sha256="9" * 64),
+        replace(incident, pause_id="another-incident"),
+    ):
+        mismatched = replace(
+            fresh,
+            evidence=replace(
+                fresh.evidence,
+                remediation_for=(wrong,),
+                canary_audit=replace(fresh.evidence.canary_audit, remediation_for=(wrong,)),
+            ),
+        )
+        with pytest.raises(ValueError, match="post-incident"):
+            paused.resume(
+                second, report(second), mismatched, pause_ids=("camera-drift",), expected_revision=1
+            )
+    assert paused.is_paused(first_context.evidence.scope[0])
+    resumed = paused.resume(
+        second, report(second), fresh, pause_ids=("camera-drift",), expected_revision=1
+    )
+    resumed.require_acceptance(second, report(second), fresh, first_context.evidence.scope[0])
+    with pytest.raises(ValueError, match="post-incident"):
+        resumed.require_acceptance(second, report(second), old, first_context.evidence.scope[0])
+
+
+def test_resume_rejects_a_historically_drift_invalidated_release_before_mutating_state() -> None:
+    first, second = model(320), model(320, "second")
+    gate = PromotionPolicy(1, 0.9)
+    first_context = qualification_context(first, report(first), gate)
+    scope = first_context.evidence.scope
+    paused_first = AcceptanceState(first.project_id, first.recipe_id).pause(
+        first,
+        pause_id="first-drift",
+        qualification_id=first_context.evidence.qualification_id,
+        scope=scope,
+        reason="first camera shift",
+        expected_revision=0,
+    )
+    second_context = qualification_context(
+        second,
+        report(second),
+        gate,
+        remediation_for=(paused_first.incident_reference("first-drift"),),
+    )
+    resumed = paused_first.resume(
+        second, report(second), second_context, pause_ids=("first-drift",), expected_revision=1
+    )
+    paused_second = resumed.pause(
+        second,
+        pause_id="second-drift",
+        qualification_id=second_context.evidence.qualification_id,
+        scope=scope,
+        reason="second camera shift",
+        expected_revision=2,
+    )
+    # Even a newly incident-linked assessment cannot restore the old invalidated release identity.
+    invalid = qualification_context(
+        first,
+        report(first),
+        gate,
+        remediation_for=(paused_second.incident_reference("second-drift"),),
+    )
+    with pytest.raises(ValueError, match="drift-invalidated"):
+        paused_second.resume(
+            first, report(first), invalid, pause_ids=("second-drift",), expected_revision=3
+        )
+    assert paused_second.revision == 3 and paused_second.is_paused(scope[0])

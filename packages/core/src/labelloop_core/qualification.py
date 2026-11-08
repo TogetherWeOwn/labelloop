@@ -12,11 +12,13 @@ from .audit import AuditObservation, AuditSample, assess_audit
 from .evaluation import ClassMetrics, EvaluationReport
 from .evaluation_lifecycle import EvaluationSet, FinalTestState
 from .qualification_data import (
+    DriftIncident,
     PipelineIdentity,
     ScopeCell,
     SourceGroup,
     record_sha256,
     require_count,
+    require_incidents,
     require_name,
     require_names,
     require_probability,
@@ -136,8 +138,10 @@ class AnnotationEvidence:
     sources: tuple[SourceGroup, ...]
     truth_basis: Literal["adjudicated", "trusted_system_truth", "model_agreement"]
     measurements: tuple[AnnotationMeasurement, ...]
+    remediation_for: tuple[DriftIncident, ...] = ()
 
     def __post_init__(self) -> None:
+        require_incidents(self.remediation_for)
         if self.truth_basis not in {"adjudicated", "trusted_system_truth", "model_agreement"}:
             raise ValueError("unknown audit truth basis")
         if len({item.asset_id for item in self.sources}) != len(self.sources):
@@ -285,8 +289,10 @@ class QualificationEvidence:
     lineage: QualificationLineage
     final_test: FinalTestState
     selection_id: str
+    remediation_for: tuple[DriftIncident, ...] = ()
 
     def __post_init__(self) -> None:
+        require_incidents(self.remediation_for)
         require_name(self.qualification_id)
         require_name(self.selection_id)
         require_digest(self.release_sha256)
@@ -325,6 +331,11 @@ class QualificationContext:
             or evidence.final_test.dataset.project_id != release.project_id
         ):
             raise ValueError("stale or mismatched qualification pipeline, release, scope or policy")
+        if set(evidence.remediation_for) != set(evidence.canary_audit.remediation_for) or any(
+            (incident.project_id, incident.recipe_id) != (release.project_id, release.recipe_id)
+            for incident in evidence.remediation_for
+        ):
+            raise ValueError("qualification and fresh canary must address the same drift incidents")
         assert targets.min_class_support is not None
         assert targets.min_map50_95 is not None
         assert targets.max_regression is not None

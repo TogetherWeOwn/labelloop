@@ -99,6 +99,19 @@ qualification/canary covering every paused cell. Missing targets, insufficient
 support, stale final state and incomplete canary prevent resumption. Pause history
 is retained after resumption. Rolling back to a drift-invalidated release cannot
 restore acceptance in that scope, even after a newer release resolved the pause.
+The resumption transition checks historical invalidation before claiming success,
+not only when later acceptance is attempted.
+
+Different release/qualification IDs alone do not prove post-drift freshness.
+Both qualification and canary carry `remediation_for` incident references, binding
+the project, recipe, unique pause ID, opening acceptance revision and affected
+release digest. Resumption requires an exact reference to each incident being
+resolved. A pre-incident context has no such link; copying a new link only onto
+qualification cannot reuse the old canary. The trusted producer must construct
+these records from a persisted incident **before** collecting remediation evidence,
+and persist that causal provenance immutably. Incident links are not request-body
+claims or a substitute for authoritative sequencing. A fresh final assessment and
+all other qualification gates remain mandatory; incident linkage waives none.
 
 ## Durable JSON v1
 

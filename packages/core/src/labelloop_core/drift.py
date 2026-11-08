@@ -5,7 +5,14 @@ from typing import TYPE_CHECKING
 
 from .evaluation import EvaluationReport
 from .qualification import QualificationContext
-from .qualification_data import ScopeCell, record_sha256, require_count, require_name, require_scope
+from .qualification_data import (
+    DriftIncident,
+    ScopeCell,
+    record_sha256,
+    require_count,
+    require_name,
+    require_scope,
+)
 from .training import require_digest
 
 if TYPE_CHECKING:
@@ -20,6 +27,7 @@ class DriftPause:
     release_sha256: str
     qualification_id: str
     reason: str
+    opened_revision: int
     resumed_by_qualification_id: str | None = None
     resumed_by_release_id: str | None = None
 
@@ -28,6 +36,7 @@ class DriftPause:
             require_name(value)
         require_scope(self.scope)
         require_digest(self.release_sha256)
+        require_count(self.opened_revision, minimum=1)
         if (self.resumed_by_qualification_id is None) != (self.resumed_by_release_id is None):
             raise ValueError("drift resumption requires qualification and release lineage")
         if self.resumed_by_qualification_id is not None:
@@ -53,6 +62,20 @@ class AcceptanceState:
         require_count(self.revision)
         if len({item.pause_id for item in self.pauses}) != len(self.pauses):
             raise ValueError("drift pause identities must be unique")
+        if any(item.opened_revision > self.revision for item in self.pauses):
+            raise ValueError("drift incident cannot be newer than its acceptance state")
+
+    def incident_reference(self, pause_id: str) -> DriftIncident:
+        pause = next((item for item in self.pauses if item.pause_id == pause_id), None)
+        if pause is None:
+            raise ValueError("unknown drift incident")
+        return DriftIncident(
+            self.project_id,
+            self.recipe_id,
+            pause.pause_id,
+            pause.opened_revision,
+            pause.release_sha256,
+        )
 
     def _expect(self, release: "ModelRelease", revision: int) -> None:
         if revision != self.revision:
@@ -85,6 +108,7 @@ class AcceptanceState:
                     record_sha256(release),
                     qualification_id,
                     reason,
+                    self.revision + 1,
                 ),
             ),
         )
@@ -107,8 +131,22 @@ class AcceptanceState:
             raise ValueError("automatic acceptance is outside qualified scope")
         if self.is_paused(scope):
             raise ValueError("automatic acceptance paused for affected class/source/condition")
+        self._require_not_invalidated(release, context, (scope,))
         if any(
             scope in item.scope
+            and self.incident_reference(item.pause_id) not in context.evidence.remediation_for
+            for item in self.pauses
+        ):
+            raise ValueError("acceptance requires post-incident qualification and canary evidence")
+
+    def _require_not_invalidated(
+        self,
+        release: "ModelRelease",
+        context: QualificationContext,
+        scope: tuple[ScopeCell, ...],
+    ) -> None:
+        if any(
+            set(scope) & set(item.scope)
             and (
                 release.release_id == item.release_id
                 or record_sha256(release) == item.release_sha256
@@ -145,6 +183,9 @@ class AcceptanceState:
                 or not set(previous.scope) <= set(context.evidence.scope)
             ):
                 raise ValueError("resume requires a new qualified release covering affected scope")
+            if self.incident_reference(pause_id) not in context.evidence.remediation_for:
+                raise ValueError("resume requires post-incident qualification and canary evidence")
+            self._require_not_invalidated(release, context, previous.scope)
         return replace(
             self,
             revision=self.revision + 1,

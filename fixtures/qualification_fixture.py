@@ -22,6 +22,7 @@ from labelloop_core.qualification import (
     SliceTarget,
 )
 from labelloop_core.qualification_data import (
+    DriftIncident,
     PipelineIdentity,
     ScopeCell,
     SourceGroup,
@@ -122,6 +123,7 @@ def qualification_context(
     policy: PromotionPolicy,
     *,
     scope: tuple[ScopeCell, ...] | None = None,
+    remediation_for: tuple[DriftIncident, ...] = (),
 ) -> QualificationContext:
     scope = scope or tuple(
         ScopeCell(value, "fixture-source", "ordinary") for value in release.class_ids
@@ -194,10 +196,11 @@ def qualification_context(
         scope,
         targets,
         annotation_evidence(pipeline, scope, "audit"),
-        annotation_evidence(pipeline, scope, "canary"),
+        replace(annotation_evidence(pipeline, scope, "canary"), remediation_for=remediation_for),
         record_sha256(release),
         QualificationLineage(("train-group",), (), dev_set, None),
         final_state,
         selection.selection_id,
+        remediation_for,
     )
     return QualificationContext(evidence, pipeline, final_state)

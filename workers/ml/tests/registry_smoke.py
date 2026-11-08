@@ -282,6 +282,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
                 policy=gate,
             )
             assert replace(promoted.champion, evaluation_run_ids=model.evaluation_run_ids) == model
+            initial_model = model  # Immutable initial payload, before append-only evaluation links.
             model = promoted.champion
         # A new connection must recover the whole immutable release, not in-memory state.
         with engine.connect() as connection:
@@ -351,7 +352,7 @@ def exercise_registry(result, exported, manifest: dict, output: Path) -> None:
             assert load_registry(connection, request.project_id, request.recipe_id) == restored
         with engine.begin() as connection:
             common_evaluation = exercise_common_evaluation(
-                connection, result, exported, manifest, model, reports[0], common
+                connection, result, exported, manifest, initial_model, reports[0], common
             )
             assert load_registry(connection, request.project_id, other_recipe) == untouched
         (output / "registry-smoke.json").write_text(

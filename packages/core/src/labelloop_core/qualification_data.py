@@ -104,6 +104,30 @@ def require_scope(cells: tuple[ScopeCell, ...]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class DriftIncident:
+    """Authoritative post-pause evidence linkage, not a model-supplied freshness claim."""
+
+    project_id: str
+    recipe_id: str
+    pause_id: str
+    opened_revision: int
+    release_sha256: str
+
+    def __post_init__(self) -> None:
+        for value in (self.project_id, self.recipe_id, self.pause_id):
+            require_name(value)
+        require_count(self.opened_revision, minimum=1)
+        require_digest(self.release_sha256)
+
+
+def require_incidents(incidents: tuple[DriftIncident, ...]) -> None:
+    if len({(item.project_id, item.recipe_id, item.pause_id) for item in incidents}) != len(
+        incidents
+    ):
+        raise ValueError("drift remediation incident links must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceGroup:
     asset_id: str
     group_id: str
