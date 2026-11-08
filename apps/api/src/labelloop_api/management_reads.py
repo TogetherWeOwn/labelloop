@@ -9,7 +9,13 @@ from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 
 from .management_canonical import refuse
 from .management_contracts import Resource, ResourceKind, ResourcePage
-from .management_details import FreezePlanRead, ProjectDetail, ReferenceLifecycleList, ReleaseDetail
+from .management_details import (
+    EvaluationDetail,
+    FreezePlanRead,
+    ProjectDetail,
+    ReferenceLifecycleList,
+    ReleaseDetail,
+)
 from .management_freeze_plan import freeze_plan
 from .management_ports import ManagementPrincipal
 from .management_project_reads import project_detail
@@ -252,6 +258,39 @@ class CanonicalManagementReads:
                     refuse("not_found")
                 try:
                     return release_detail(connection, row, self.workspace_id)
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
+
+    def read_evaluation(self, actor: ManagementPrincipal, evaluation_id: str) -> "EvaluationDetail":
+        from .management_evaluation_reads import evaluation_detail
+        from .model_schema import evaluation_run
+        from .schema import yolo_dataset_variant
+
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(evaluation_run, owned.c.id.label("project_id"))
+                    .select_from(evaluation_run)
+                    .join(
+                        yolo_dataset_variant,
+                        evaluation_run.c.variant_id == yolo_dataset_variant.c.id,
+                    )
+                    .join(
+                        canonical_dataset_release,
+                        yolo_dataset_variant.c.release_id == canonical_dataset_release.c.id,
+                    )
+                    .join(owned, canonical_dataset_release.c.project_id == owned.c.id)
+                    .where(evaluation_run.c.run_key == evaluation_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                try:
+                    return evaluation_detail(connection, row, self.workspace_id)
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 

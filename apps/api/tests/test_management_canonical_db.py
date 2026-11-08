@@ -255,6 +255,188 @@ def test_registered_evaluation_executes_or_resumes_and_links_once(
     assert all(not path.exists() for path in paths)
 
 
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_evaluation_detail_is_read_only_and_never_qualifies(
+    database, compilation, compiler_worker, recipe
+):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    service, owner, role = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read_evaluation(Reader(), accepted.resource.id)
+
+    compiler_worker.store.complete(lease, ("evaluation",), sink)
+    before = evaluation_publication_state(owner, lease)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_evaluation(
+            Reader(), accepted.resource.id
+        )
+        assert detail == reads.read_evaluation(Actor(), accepted.resource.id)
+    finally:
+        readonly.dispose()
+    assert detail.resource == accepted.resource.model_copy(update={"state": "completed"})
+    assert detail.candidate_id == lease.input["model_id"]
+    assert detail.report.run_id == accepted.resource.id
+    assert detail.report.recipe_id == recipe
+    from labelloop_api.model_store import decode_report
+
+    assert detail.report == decode_report(record["report"])
+    assert detail.qualification == "unqualified" and detail.qualification_id is None
+    assert detail.incumbent_id is detail.incumbent_report is detail.minimum_class_support is None
+    assert detail.opened_final_test_count == 0
+    assert [item.code for item in detail.checks] == ["publication_integrity"]
+    assert "weights_key" not in detail.model_dump_json()
+    assert "export_key" not in detail.model_dump_json()
+    assert evaluation_publication_state(owner, lease) == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"kind": "service"},
+        {"granted": False},
+        {"role": "worker_ml"},
+        {"id": ""},
+    ],
+)
+def test_evaluation_detail_denies_untrusted_identity_before_database(database, overrides):
+    actor = Reader(**overrides)
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_evaluation(
+            actor, "unknown"
+        )
+
+
+def test_evaluation_detail_hides_foreign_workspace_and_unknown_runs(
+    database, compilation, compiler_worker
+):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="not_found"):
+        CanonicalManagementReads(service.engine, uuid4()).read_evaluation(
+            Reader(), accepted.resource.id
+        )
+    with pytest.raises(ManagementFailure, match="not_found"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_evaluation(
+            Reader(), "unknown"
+        )
+
+
+@pytest.mark.parametrize("change", ["generation", "failed", "duplicate_receipt"])
+def test_evaluation_detail_requires_current_unique_fenced_publication(
+    database, compilation, compiler_worker, change
+):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    service, owner, _ = database
+    with owner.begin() as connection:
+        if change == "duplicate_receipt":
+            receipt = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.evaluation_completed",
+                        canonical_event.c.aggregate_id == accepted.resource.id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in receipt.items()
+                        if key not in {"id", "occurred_at"}
+                    }
+                )
+            )
+        else:
+            assignment = "generation=generation+1" if change == "generation" else "status='failed'"
+            connection.execute(
+                text(f"UPDATE worker_job SET {assignment} WHERE job_id=:id"),
+                {"id": accepted.job_id},
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_evaluation(
+            Reader(), accepted.resource.id
+        )
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_evaluation_detail_does_not_trust_hand_inserted_report_or_borrowed_receipt(
+    database, compilation, compiler_worker, receipt
+):
+    from copy import deepcopy
+
+    from labelloop_api.model_schema import evaluation_run, model_evaluation, model_release
+
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    service, owner, _ = database
+    forged_id = str(uuid4())
+    with owner.begin() as connection:
+        model = connection.execute(
+            select(model_release).where(model_release.c.release_key == lease.input["model_id"])
+        ).one()
+        report = deepcopy(record["report"])
+        report["run_id"] = forged_id
+        row_id = connection.execute(
+            insert(evaluation_run).values(
+                run_key=forged_id,
+                training_run_id=model.training_run_id,
+                variant_id=UUID(lease.input["variant_id"]),
+                record=report,
+            )
+        ).inserted_primary_key[0]
+        connection.execute(insert(model_evaluation).values(model_id=model.id, evaluation_id=row_id))
+        if receipt:
+            original = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.evaluation_completed",
+                        canonical_event.c.aggregate_id == accepted.resource.id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    event_type=original["event_type"],
+                    aggregate_id=forged_id,
+                    expected_revision=1,
+                    actor_kind="system",
+                    actor_id=original["actor_id"],
+                    payload=original["payload"],
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_evaluation(
+            Reader(), forged_id
+        )
+
+
 def prepared_evaluation_publication(
     database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
 ):

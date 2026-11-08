@@ -901,7 +901,7 @@ Disposable Actions cases cover digest/revision/retry pins, races, attribution,
 grant rollback, malformed/privileged inputs and invalidation. Commissioned cases
 are not a pass claim until exact-head Actions completes.
 
-## DB-backed real CPU pipeline (commissioned, not yet verified)
+## DB-backed real CPU pipeline
 
 The Actions ML job additionally runs
 `workers/ml/tests/test_management_pipeline.py` at 320 and 640. It reuses the
@@ -937,10 +937,39 @@ persisted model/evaluation links, full validation-source support and coverage,
 unchanged source-frame metrics, one application per job, attributed completion,
 exact retry replay and worker-path cleanup. The existing ML evidence artifact retains
 `management-pipeline.json`, export equivalence, runtime shapes, target retention and
-development reports. The new cases are **commissioned, not passing evidence until
-exact-head GitHub Actions succeeds**. Default management/admission stay disabled;
+development reports. Exact source `fe28a1c58cb5ba30b212c4562e9db5301c957e40`
+passed [Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42506014766):
+566 management DB, 24 ledger and 21 real CPU cases (including both new pipeline
+sizes), plus 1,621 unit tests. Retained pipeline artifacts show four validation
+sources per size, matching checkpoint/export hashes and static signatures, and
+four nonempty ONNX comparison samples. Both coarse fixture cohorts have zero
+recall: successful execution is **not model quality or domain qualification**.
+Default management/admission stay disabled;
 final mounting, full setup/runtime composition, Security/QA and qualification gates
 remain open. The single promotions implementation remains with its existing owner.
+
+## Completed development-evaluation detail
+
+`CanonicalManagementReads.read_evaluation` now projects a persisted standalone
+local development report for an authorized human admin/reviewer in one read-only
+repeatable snapshot. Ownership resolves before receipt or job lookup. It reuses
+the existing compiler/model publication validators and model-store evaluation
+lineage gate, then requires the unique attributed intent/completion, current
+successful application generation, exact saved stage/hash, report and model link.
+A hand-inserted report or borrowed completion cannot establish this authority.
+
+The result exposes the actual source-frame report, not object keys, local paths
+or raw provider output. It remains explicitly unqualified with no incumbent,
+quality target or qualification ID. `opened_final_test_count: 0` describes this
+validation-only development operation, not a project-wide final-test ledger.
+Epoch checkpoint reports, queued jobs and final-test/qualification details are
+not supported by this adapter. The existing detail DTO and generated contract
+are unchanged; default mounting and real admission remain disabled.
+
+Twelve disposable Actions cases are commissioned for both recipes, precommit
+invisibility, enforced read-only operation, identity/workspace refusal, application
+generation/status, duplicate completion and hand-inserted/borrowed evidence.
+These new detail cases are not verified until their exact-head Actions completes.
 
 ## Acceptance evidence still required
 
