@@ -236,6 +236,12 @@ class PlatformAdapter:
         retry_at = self._throttle.reserve(self._key_id, category)
         if retry_at is not None:
             return PlatformResult(Outcome.RATE_LIMITED, retry_at=retry_at)
+        if mutation and request.operation_id:
+            # Dispatch may succeed remotely before an unexpected exception or cancellation.
+            self._writes[request.operation_id] = (
+                digest,
+                PlatformResult(Outcome.RECONCILE_REQUIRED),
+            )
         self._guard.expected = (route["method"], path)
         try:
             # Pinned SDK request primitive intentionally bypasses generated resource
@@ -275,8 +281,11 @@ class PlatformAdapter:
             )
         finally:
             self._guard.expected = None
-        if mutation and request.operation_id and result.outcome != Outcome.RATE_LIMITED:
-            self._writes[request.operation_id] = (digest, copy.deepcopy(result))
+        if mutation and request.operation_id:
+            if result.outcome == Outcome.RATE_LIMITED:
+                del self._writes[request.operation_id]
+            else:
+                self._writes[request.operation_id] = (digest, copy.deepcopy(result))
         return result
 
     def _error_status(self, status: int, mutation: bool, category: str) -> PlatformResult:

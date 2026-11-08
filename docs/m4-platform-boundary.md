@@ -103,8 +103,12 @@ admission before dispatch; this in-process throttle is not a distributed rate li
 5xx (including 503), invalid successful response envelopes, and unexpected statuses such as
 redirects are uncertain. They cannot prove whether the remote mutation happened. 503 is never
 internally retried; a possibly accepted mutation first needs reconciliation. The same client's
-write latch returns the prior result without a second dispatch, and rejects reuse of the ID
-with a different request digest. It has no reset API. **The latch is not durable idempotency**:
+write latch records an uncertain result and request digest before dispatch, after validation
+and throttle admission. Unexpected exceptions and cancellation propagate without releasing that
+latch; same-ID replay requires reconciliation without another dispatch. Known results replace
+the uncertain result; only an explicit rate-limited rejection releases it for later submission.
+The latch returns the prior result and rejects reuse of the ID with a different request digest.
+It has no reset API. **The latch is not durable idempotency**:
 a restarted/new client must recover persisted intents before submitting mutations. A completed
 or failed transport response alone does not complete a dataset release or training run.
 

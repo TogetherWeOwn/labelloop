@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import logging
@@ -182,6 +183,52 @@ def test_mutations_never_blindly_repeat_and_never_log_raw_errors(exchange, outco
     # Contextual filtering must not suppress unrelated application's dependency logs.
     logging.getLogger("httpcore.http11").debug("unrelated-wire-diagnostic")
     assert "unrelated-wire-diagnostic" in caplog.text
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+def test_interrupted_mutation_keeps_predispatch_latch(error_type, caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    calls = []
+    latched_at_dispatch = []
+
+    def interrupted(request):
+        calls.append(request)
+        latched_at_dispatch.append("start-1" in client._writes)
+        raise error_type(SECRET)
+
+    client = PlatformAdapter(
+        SECRET, transport=httpx.MockTransport(interrupted), throttle=Throttle(Clock())
+    )
+    request = training()
+    try:
+        with pytest.raises(error_type):
+            client.execute(request)
+        assert client._guard.expected is None
+        assert latched_at_dispatch == [True]
+        assert client.execute(request).outcome == Outcome.RECONCILE_REQUIRED
+        different_body = replace(request, body={**request.body, "modelId": "different"})
+        assert client.execute(different_body).outcome == Outcome.REJECTED
+        assert len(calls) == 1
+        assert SECRET not in caplog.text
+        logging.getLogger("httpcore.http11").debug("unrelated-after-interruption")
+        assert "unrelated-after-interruption" in caplog.text
+    finally:
+        client.close()
+
+
+def test_predispatch_throttle_does_not_latch_mutation() -> None:
+    clock = Clock()
+    replay = Replay("paid_paused")
+    client = adapter(replay, clock)
+    client._throttle.defer(client._key_id, "training", 120)
+    assert client.execute(training()).outcome == Outcome.RATE_LIMITED
+    assert client._writes == {}
+    assert replay.requests == []
+    clock.now = 120
+    assert client.execute(training()).outcome == Outcome.PAID_PAUSED
+    assert client.execute(training()).outcome == Outcome.PAID_PAUSED
+    assert len(replay.requests) == 1
+    client.close()
 
 
 class BrokenBody(httpx.SyncByteStream):
