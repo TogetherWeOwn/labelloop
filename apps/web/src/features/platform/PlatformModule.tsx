@@ -19,7 +19,7 @@ export function PlatformModule({ role, page, port }: { role: ViewerRole; page: P
 
 function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; port: PlatformReadPort }) {
   const [state, setState] = useState<ReadState>({ snapshot: null, failed: false });
-  const [stale, setStale] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     let disposed = false;
     let pending = false;
@@ -32,18 +32,22 @@ function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; p
         const snapshot = await port.read(current.signal);
         if (!disposed) {
           setState({ snapshot, failed: false });
-          setStale(Date.now() - Date.parse(snapshot.observedAt) > 60_000);
+          setNow(Date.now());
         }
       } catch {
         if (!disposed) {
           setState((previous) => ({ ...previous, failed: true }));
-          setStale(true);
+          setNow(Date.now());
         }
       } finally { pending = false; }
     };
     void refresh();
-    const interval = window.setInterval(() => { void refresh(); }, 30_000);
-    const onVisibility = () => { void refresh(); };
+    const onVisibility = () => {
+      // Freshness ages even if the next read hangs or the tab was hidden.
+      setNow(Date.now());
+      void refresh();
+    };
+    const interval = window.setInterval(onVisibility, 30_000);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       disposed = true;
@@ -53,6 +57,8 @@ function PlatformContent({ role, page, port }: { role: ViewerRole; page: Page; p
     };
   }, [port]);
   const { snapshot, failed } = state;
+  const observedAt = snapshot ? Date.parse(snapshot.observedAt) : NaN;
+  const stale = failed || !Number.isFinite(observedAt) || now - observedAt > 60_000;
   return <div className="stack">
     {!snapshot && <div className="phead"><h1>{page === 'connections' ? 'Connections.' : 'Training runs.'}</h1></div>}
     <p className="notice warn">Fixture preview · Not connected to a live service. Keys, workspace changes and paid operations are disabled until authenticated adapter and ledger integration.</p>

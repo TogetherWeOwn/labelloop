@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ConnectionsView } from './ConnectionsView.tsx';
@@ -55,6 +56,24 @@ describe('Platform fixture modules', () => {
     expect(exceededLimits({ ...draft, estimateUsd: NaN })).toEqual(['Budget information unavailable']);
     expect(exceededLimits({ ...draft, estimateUsd: -1 })).toEqual(['Budget information unavailable']);
     expect(exceededLimits({ ...draft, estimateUsd: 5, operationLimitUsd: 5, monthlyUsedAndReservedUsd: 0, iterationUsedAndReservedUsd: 0, iterationLimitUsd: 5 })).toEqual([]);
+  });
+
+  it('accepts exact-cent limits without binary floating point overflow', () => {
+    const draft = platformFixture.dryRun!;
+    expect(exceededLimits({ ...draft, estimateUsd: 0.2, monthlyUsedAndReservedUsd: 0.1,
+      monthlyLimitUsd: 0.3, iterationUsedAndReservedUsd: 0.1, iterationLimitUsd: 0.3 })).toEqual([]);
+    expect(exceededLimits({ ...draft, estimateUsd: 0.21, monthlyUsedAndReservedUsd: 0.1,
+      monthlyLimitUsd: 0.3, iterationUsedAndReservedUsd: 0.1, iterationLimitUsd: 0.3 }))
+      .toEqual(['Monthly limit', 'Per-iteration limit']);
+    expect(exceededLimits({ ...draft, estimateUsd: Number.MAX_VALUE })).toEqual(['Budget information unavailable']);
+  });
+
+  it('qualifies both entry builds with sentinels and treats imported tokens as web input', () => {
+    const workflow = readFileSync(new URL('../../../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    expect(workflow).toMatch(/"web":\[[^\]]*"docs\/design\/mockups\/src\/tokens\.css"/);
+    for (const build of ['build', 'build:platform-fixture']) {
+      expect(workflow).toContain(`- run: pnpm --dir apps/web ${build}\n        env:\n          VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456\n          VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456`);
+    }
   });
 
   it('exposes only abortable reads and isolates snapshots', async () => {

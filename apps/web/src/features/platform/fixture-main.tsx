@@ -18,9 +18,20 @@ const snapshot: PlatformSnapshot = {
     : state === 'check_failed' ? { ...platformFixture.connection, state: 'check_failed' } : platformFixture.connection,
   dryRun: state === 'over_limit' && platformFixture.dryRun ? { ...platformFixture.dryRun, operationLimitUsd: 1 } : platformFixture.dryRun,
 };
-const port: PlatformReadPort = state === 'error' ? { read: () => Promise.reject(new Error('Fixture unavailable')) }
-  : state === 'loading' ? { read: () => new Promise<PlatformSnapshot>(() => { /* Intentional loading fixture. */ }) }
-    : fixturePort(snapshot);
+let reads = 0;
+const reader = fixturePort(snapshot);
+const port: PlatformReadPort = {
+  read(signal) {
+    if (state === 'error') return Promise.reject(new Error('Fixture unavailable'));
+    if (state === 'loading' || (state === 'pending_refresh' && reads++ > 0)) {
+      return new Promise<PlatformSnapshot>(() => { /* Intentional pending read fixture. */ });
+    }
+    if (state === 'delayed') {
+      return new Promise<PlatformSnapshot>((resolve) => window.setTimeout(() => resolve(snapshot), 500));
+    }
+    return reader.read(signal);
+  },
+};
 
 createRoot(document.getElementById('root')!).render(<>
   <main className="platform-fixture-page"><PlatformModule role={role} page={page} port={port} /></main>

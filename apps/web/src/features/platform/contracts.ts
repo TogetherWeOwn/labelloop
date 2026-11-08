@@ -89,10 +89,15 @@ export const usd = (value: number) => Number.isFinite(value) && value >= 0 ? `$$
 export function exceededLimits(draft: DryRun): string[] {
   const amounts = [draft.estimateUsd, draft.monthlyUsedAndReservedUsd, draft.iterationUsedAndReservedUsd,
     draft.monthlyLimitUsd, draft.iterationLimitUsd, draft.operationLimitUsd];
-  if (amounts.some((amount) => !Number.isFinite(amount) || amount < 0)) return ['Budget information unavailable'];
+  // Compare the same cents shown in this fixture UI, not binary floating sums.
+  // These are presentation checks, never a replacement for the server ledger.
+  const cents = amounts.map((amount) => Math.round(amount * 100));
+  if (amounts.some((amount) => !Number.isFinite(amount) || amount < 0) ||
+      cents.some((amount) => !Number.isSafeInteger(amount))) return ['Budget information unavailable'];
+  const [estimate, monthlyUsed, iterationUsed, monthlyLimit, iterationLimit, operationLimit] = cents;
   return [
-    draft.estimateUsd > draft.operationLimitUsd ? 'Per-operation limit' : '',
-    draft.monthlyUsedAndReservedUsd + draft.estimateUsd > draft.monthlyLimitUsd ? 'Monthly limit' : '',
-    draft.iterationUsedAndReservedUsd + draft.estimateUsd > draft.iterationLimitUsd ? 'Per-iteration limit' : '',
+    estimate > operationLimit ? 'Per-operation limit' : '',
+    monthlyUsed + estimate > monthlyLimit ? 'Monthly limit' : '',
+    iterationUsed + estimate > iterationLimit ? 'Per-iteration limit' : '',
   ].filter(Boolean);
 }

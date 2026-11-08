@@ -31,7 +31,8 @@ final live end-to-end smoke remain integration work, not simulated successes.
 
 Reads refresh every 30 seconds while visible, avoid overlapping requests, abort
 on unmount, preserve prior data with an error/stale notice after refresh failure,
-and never echo exception text. Fixture timestamps are fixed, so their stale label
+and never echo exception text. Freshness ages independently of read completion,
+including a hanging second request, and is rechecked when the tab becomes visible. Fixture timestamps are fixed, so their stale label
 is intentional. Paid-stage pause is supplied explicitly by the project snapshot;
 a 402 has no automatic mutation/retry path. The shell owns its global J1 paused
 header; the isolated module also shows an in-place pause notice.
@@ -44,8 +45,10 @@ of the normal build or an application auth route. The browser script covers:
 
 - 1280/390 Connections and Platform runs; loading, empty, error, stale, check
   failure, paused and over-limit snapshots;
-- reviewer disclosure/control gates, keyboard activation and run selection;
-- WCAG A/AA and best-practice axe results without suppressions;
+- reviewer disclosure/control gates after a deliberately delayed read, keyboard
+  activation and run selection, freshness during a hanging refresh;
+- WCAG A/AA and best-practice axe results without suppressions, including every
+  open dry-run panel (normal, over-limit and paused) before it is closed;
 - no mutation requests; synthetic credential sentinels and credential-shaped
   values absent from emitted bundle text;
 - uploaded screenshots in `platform-ui-evidence` for the exclusive UX reviewer.

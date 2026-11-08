@@ -23,7 +23,7 @@ jobs:
   changes:
     uses: TogetherWeOwn/.github/.github/workflows/changes.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
     with:
-      areas-json: '{"python":["packages/**","apps/api/**","workers/**","scripts/**","fixtures/**","pyproject.toml","uv.lock","importlinter.ini","Makefile","Dockerfile","compose.yaml"],"web":["apps/web/**","pnpm-lock.yaml","pnpm-workspace.yaml"],"docs":["docs/**","README.md","AGENTS.md"]}'
+      areas-json: '{"python":["packages/**","apps/api/**","workers/**","scripts/**","fixtures/**","pyproject.toml","uv.lock","importlinter.ini","Makefile","Dockerfile","compose.yaml"],"web":["apps/web/**","docs/design/mockups/src/tokens.css","pnpm-lock.yaml","pnpm-workspace.yaml"],"docs":["docs/**","README.md","AGENTS.md"]}'
       full-run-globs-json: '[".github/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","compose.yaml","Makefile*","**/Makefile*","package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","pnpm-workspace.yaml","**/pnpm-workspace.yaml","pyproject.toml","**/pyproject.toml","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","tsconfig*.json","**/tsconfig*.json"]'
       docs-areas-json: '["docs"]'
 
@@ -149,6 +149,9 @@ jobs:
       - run: pnpm --dir apps/web typecheck
       - run: pnpm --dir apps/web test
       - run: pnpm --dir apps/web build
+        env:
+          VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
+          VITE_AUTH_HEADER: Bearer bundleSentinelCredential123456
       - run: pnpm --dir apps/web build:platform-fixture
         env:
           VITE_PLATFORM_KEY: ul_secretSentinelNeverBundle123456
