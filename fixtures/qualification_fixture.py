@@ -112,7 +112,7 @@ def annotation_evidence(
             for item in sample.candidates
         ),
         tuple(sources),
-        "adjudicated",
+        "constructive_synthetic",
         tuple(measurements),
     )
 
@@ -147,6 +147,7 @@ def qualification_context(
             )
             for value in release.class_ids
         ),
+        fixture_only=True,
     )
     pipeline = PipelineIdentity(
         release.project_id,

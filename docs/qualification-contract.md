@@ -28,7 +28,17 @@ critical class/slice's support, score and regression limit, must be explicit.
 Critical slice names resolve to actual `EvaluationReport.slices` entries; aggregate
 scores never fill a missing class or slice. The incumbent need not meet today's
 absolute gates but must have measured comparison support on the same frozen test.
-No metric is treated as certified correctness.
+No metric is treated as certified correctness. Critical-slice AP50 also has its
+own `critical_slice_regression_tolerance`; null means zero, not permission to
+skip comparison. A passing mAP50-95 cannot hide an AP50 regression.
+
+Fixture targets explicitly serialize `fixture_only: true` (default false), with
+`seeded_perturbation` or `constructive_synthetic` truth provenance. They never
+create domain gold or human adjudication. Real targets cannot consume harness
+truth, and fixture targets cannot relabel their evidence as adjudicated.
+`trusted_system_truth` is retained as an input provenance value but cannot qualify
+real targets without human adjudication; no truth-adapter ADR is introduced.
+Production callers must refuse fixture-only contexts even if their mechanics pass.
 
 ## Annotation and canary evidence
 
@@ -47,6 +57,22 @@ number of objects or repeated votes, supplies independent audit support. Counts
 and geometry are trusted audit measurements, not assertions obtained from a model
 response. Their measurement protocol and representative sampling are obligations
 of the authoritative audit producer, not inferred from this finite test.
+The producer must freeze the whole ordinary accepted pool (human and automatic),
+stratify a seeded uniform draw by source group/class, and count near duplicates
+once. The low-level existing sampler does not establish population coverage.
+`audit_sample_size(e, audit_min_sample)` computes ceil(ln .05 / ln(1-e)); null e
+requires the configured reporting minimum and never enables qualification. Real
+qualification requires at least this many independent error-free groups for its
+accepted-label precision target. Complete-image blind inspections, not accepted
+boxes alone, supply missing-object recall.
+
+Every adverse observed label vetoes this core gate (including the confidently
+wrong subset). The trusted producer identifies that subset from the acceptance
+score and threshold actually in force, never LLM confidence prose. It must retain
+the veto against every descendant trained from the affected annotation release
+until correction and descendant re-tracing are complete; selecting another clean
+audit sample cannot clear it. Durable release-veto storage and authenticated
+adjudication are integration obligations, not proved by a fixture transition.
 
 A separate canary audit uses the same targets, an explicit minimum fresh group
 count and the exact candidate/pipeline. Canary source groups cannot overlap
@@ -79,6 +105,14 @@ synthetic and never production defaults.
   Current final-test state must equal the evidence snapshot. An old serialized
   success cannot bypass a later adaptation or quarantine when the current state
   is loaded correctly.
+
+An actual improvement claim additionally needs a preregistered per-recipe protocol
+hash, human-adjudicated split-disjoint locked domain gold, original-frame mAP50-95
+(or a metric declared in advance), and a grouped paired-bootstrap 95% lower bound
+above zero. Those M6 claim computations are not implemented or claimed by this
+fixture qualification core. Active-selection pool isolation is also the trusted
+producer's responsibility; training/evaluation/reference group checks here do
+not prove that population provenance.
 
 Exposure and adaptation are distinct audit facts. If a UI or worker exposes data
 before a transaction fails, its real exposure must still be recorded/reconciled;

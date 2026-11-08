@@ -5,7 +5,11 @@ import pytest
 from qualification_fixture import qualification_context
 from test_registry import model, report
 
-from labelloop_core.qualification import QualificationContext, QualificationTargets
+from labelloop_core.qualification import (
+    QualificationContext,
+    QualificationTargets,
+    audit_sample_size,
+)
 from labelloop_core.qualification_data import PipelineIdentity
 from labelloop_core.registry import PromotionPolicy, RegistryState
 
@@ -35,7 +39,14 @@ def test_missing_evidence_is_not_a_promotion_and_old_state_is_unchanged() -> Non
     assert promote(context()).champion == release
 
 
-@pytest.mark.parametrize("name", [item.name for item in fields(QualificationTargets)])
+@pytest.mark.parametrize(
+    "name",
+    [
+        item.name
+        for item in fields(QualificationTargets)
+        if item.name not in {"fixture_only", "critical_slice_regression_tolerance"}
+    ],
+)
 def test_every_null_or_missing_target_retains_the_incumbent(name: str) -> None:
     current = context()
     changes: dict[str, Any] = {name: () if name == "critical_slices" else None}
@@ -258,3 +269,59 @@ def test_critical_slice_regression_blocks_even_when_overall_improves() -> None:
 def test_malformed_quality_targets_fail_closed(value: Any) -> None:
     with pytest.raises(ValueError):
         replace(context().evidence.targets, min_map50_95=value)
+
+
+def test_fixture_truth_is_explicit_and_cannot_qualify_real_targets() -> None:
+    current = context()
+    assert current.evidence.targets.fixture_only is True
+    assert QualificationTargets().fixture_only is False
+    assert QualificationTargets().min_class_support is None
+    audit = current.evidence.annotation_audit
+    targets = replace(current.evidence.targets, fixture_only=False)
+    with pytest.raises(ValueError, match="harness truth"):
+        audit.require_quality(current.current_pipeline, current.evidence.scope, targets)
+    with pytest.raises(ValueError, match="harness truth"):
+        replace(audit, truth_basis="adjudicated").require_quality(
+            current.current_pipeline, current.evidence.scope, current.evidence.targets
+        )
+    with pytest.raises(ValueError, match="human adjudication"):
+        replace(audit, truth_basis="trusted_system_truth").require_quality(
+            current.current_pipeline, current.evidence.scope, targets
+        )
+    with pytest.raises(ValueError, match="explicit boolean"):
+        replace(current.evidence.targets, fixture_only=1)
+
+
+def test_declared_error_target_requires_independent_group_sample_bound() -> None:
+    assert audit_sample_size(0.01, None) == 299
+    assert audit_sample_size(0.005, 10) == 598
+    assert audit_sample_size(0.01, 400) == 400
+    assert audit_sample_size(None, 10) == 10
+    for error, minimum in ((None, None), (0.0, 1), (1.0, 1), (True, 1), (0.01, 0)):
+        with pytest.raises(ValueError):
+            audit_sample_size(error, minimum)
+    current = context()
+    audit = replace(current.evidence.annotation_audit, truth_basis="adjudicated")
+    targets = replace(current.evidence.targets, fixture_only=False, min_accepted_precision=0.99)
+    with pytest.raises(ValueError, match="independent source-group support"):
+        audit.require_quality(current.current_pipeline, current.evidence.scope, targets)
+
+
+def test_critical_ap50_regression_fails_even_when_map50_95_passes() -> None:
+    release = model(320)
+    good = report(release)
+    degraded = replace(
+        good,
+        slices={
+            "fixture_critical": replace(
+                good.overall,
+                per_class={"object": replace(good.overall.per_class["object"], map50=0.99)},
+            )
+        },
+    )
+    current = qualification_context(release, degraded, PromotionPolicy(1, 0.9))
+    assert current.evidence.targets.critical_slice_regression_tolerance is None
+    with pytest.raises(ValueError, match="AP50 regression"):
+        current.require_qualified(release, degraded, incumbent_report=good)
+    current = qualification_context(release, good, PromotionPolicy(1, 0.9))
+    current.require_qualified(release, good, incumbent_report=good)

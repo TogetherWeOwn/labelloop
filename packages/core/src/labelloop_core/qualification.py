@@ -5,6 +5,7 @@ independent truth and *current* final-test state under a lock; model/HTTP bodies
 must never be allowed to construct authoritative contexts or select their scope.
 """
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -61,8 +62,14 @@ class QualificationTargets:
     max_geometry_error: float | None = None
     min_canary_groups: int | None = None
     critical_slices: tuple[SliceTarget, ...] = ()
+    fixture_only: bool = False
+    critical_slice_regression_tolerance: float | None = None
 
     def __post_init__(self) -> None:
+        if type(self.fixture_only) is not bool:
+            raise ValueError("fixture_only must be an explicit boolean")
+        if self.critical_slice_regression_tolerance is not None:
+            require_probability(self.critical_slice_regression_tolerance)
         for count in (self.min_class_support, self.min_audit_groups, self.min_canary_groups):
             if count is not None:
                 require_count(count, minimum=1)
@@ -104,6 +111,20 @@ class QualificationTargets:
             raise ValueError("null critical slice targets retain the incumbent")
 
 
+def audit_sample_size(error_target: float | None, audit_min_sample: int | None) -> int:
+    """Independent error-free cases for the one-sided 95% bound; null is reporting only."""
+    if audit_min_sample is not None:
+        require_count(audit_min_sample, minimum=1)
+    if error_target is None:
+        if audit_min_sample is None:
+            raise ValueError("reporting audit requires a configured audit_min_sample")
+        return audit_min_sample
+    require_probability(error_target)
+    if not 0 < error_target < 1:
+        raise ValueError("finite audit requires an error target strictly between zero and one")
+    return max(audit_min_sample or 1, math.ceil(math.log(0.05) / math.log1p(-error_target)))
+
+
 @dataclass(frozen=True, slots=True)
 class AnnotationMeasurement:
     scope: ScopeCell
@@ -136,13 +157,25 @@ class AnnotationEvidence:
     sample: AuditSample
     observations: tuple[AuditObservation, ...]
     sources: tuple[SourceGroup, ...]
-    truth_basis: Literal["adjudicated", "trusted_system_truth", "model_agreement"]
+    truth_basis: Literal[
+        "adjudicated",
+        "trusted_system_truth",
+        "model_agreement",
+        "seeded_perturbation",
+        "constructive_synthetic",
+    ]
     measurements: tuple[AnnotationMeasurement, ...]
     remediation_for: tuple[DriftIncident, ...] = ()
 
     def __post_init__(self) -> None:
         require_incidents(self.remediation_for)
-        if self.truth_basis not in {"adjudicated", "trusted_system_truth", "model_agreement"}:
+        if self.truth_basis not in {
+            "adjudicated",
+            "trusted_system_truth",
+            "model_agreement",
+            "seeded_perturbation",
+            "constructive_synthetic",
+        }:
             raise ValueError("unknown audit truth basis")
         if len({item.asset_id for item in self.sources}) != len(self.sources):
             raise ValueError("audit source identities must be unique")
@@ -163,6 +196,11 @@ class AnnotationEvidence:
     ) -> None:
         if self.truth_basis == "model_agreement":
             raise ValueError("repeated model agreement is not independent truth")
+        harness_truth = self.truth_basis in {"seeded_perturbation", "constructive_synthetic"}
+        if targets.fixture_only != harness_truth:
+            raise ValueError("harness truth requires fixture-only targets, never domain gold")
+        if not targets.fixture_only and self.truth_basis != "adjudicated":
+            raise ValueError("domain gold requires independent human adjudication")
         verdict = assess_audit(self.sample, self.observations)
         if not verdict.passed:
             raise ValueError(
@@ -188,6 +226,8 @@ class AnnotationEvidence:
         assert targets.min_accepted_precision is not None
         assert targets.min_discovery_recall is not None
         assert targets.max_geometry_error is not None
+        if not targets.fixture_only:
+            minimum = audit_sample_size(1 - targets.min_accepted_precision, minimum)
         for item in self.measurements:
             covered = {
                 source.group_id
@@ -386,6 +426,12 @@ class QualificationContext:
                 previous = incumbent_report.slices.get(target.slice_name)
                 if previous is None or target.class_id not in previous.per_class:
                     raise ValueError("missing incumbent critical-slice evidence")
-                _require_regression(
-                    previous.per_class[target.class_id], metrics, target.max_regression
-                )
+                before = previous.per_class[target.class_id]
+                _require_regression(before, metrics, target.max_regression)
+                if before.map50 is None or metrics.map50 is None:
+                    raise ValueError("missing critical-slice AP50 non-regression evidence")
+                require_probability(before.map50)
+                require_probability(metrics.map50)
+                tolerance = targets.critical_slice_regression_tolerance or 0.0
+                if metrics.map50 + tolerance < before.map50:
+                    raise ValueError("unacceptable critical-slice AP50 regression")

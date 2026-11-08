@@ -18,6 +18,8 @@ def test_durable_roundtrip_is_deterministic_and_preserves_historical_assessments
     context = qualification_context(release, final, PromotionPolicy(1, 0.9))
     restored = loads(dumps(context), QualificationContext)
     assert restored == context and dumps(restored) == dumps(context)
+    assert restored.evidence.targets.fixture_only is True
+    assert restored.evidence.annotation_audit.truth_basis == "constructive_synthetic"
     restored.require_qualified(release, final)
     evidence = context.evidence
     assert loads(dumps(evidence), QualificationEvidence) == evidence
