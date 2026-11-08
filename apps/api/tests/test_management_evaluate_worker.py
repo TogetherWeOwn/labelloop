@@ -1,6 +1,7 @@
 """Synthetic predictions test orchestration/coverage, not actual inference or DB gates."""
 
 import hashlib
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -90,6 +91,8 @@ def test_original_frame_scoring_retains_excluded_positive_source_and_cleanup(inp
     assert coverage["excluded"]["uncovered_targets"] == 1
     assert record["sample_count"] == 1 and record["tensor_shapes"] == [[1, 3, 320, 320]]
     assert len(reads) == 3 and paths and all(not path.exists() for path in paths)
+    # A resumed stage must have the same shape as its freshly computed payload.
+    assert json.loads(json.dumps(record, allow_nan=False)) == record
 
 
 @pytest.mark.parametrize(

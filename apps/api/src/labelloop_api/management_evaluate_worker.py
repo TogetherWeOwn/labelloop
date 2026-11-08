@@ -5,6 +5,7 @@ recipe transforms and metrics stay code-owned; predictor output is only detectio
 """
 
 import hashlib
+import json
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -125,9 +126,11 @@ def evaluate_model(
             derived=derived,
         )
     record = {"report": asdict(report), "tensor_shapes": shapes, "sample_count": len(samples)}
-    if len(canonical_json(record)) > 2_000_000:
+    encoded = canonical_json(record)
+    if len(encoded) > 2_000_000:
         raise ValueError("evaluation exceeds the queue's bounded inline evidence")
-    return record
+    # Fresh and resumed stages share the queue's JSON array/object representation.
+    return json.loads(encoded)
 
 
 @dataclass(frozen=True)
