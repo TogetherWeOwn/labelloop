@@ -46,6 +46,12 @@ accounts both perform verification. Verification and any rehash run outside the
 write transaction without holding a pooled connection. The subsequent locked read
 rechecks identity, password hash, enabled state and lock deadline; a concurrent
 credential change fails closed rather than issuing a stale-credential session.
+Such a stale-snapshot refusal is audited as `login_failed` but does not increment
+or reset the current failure counter or change its lock deadline, even when the
+change was a concurrent successful login's parameter rehash. The client may make
+a new login attempt against the current credential; no expensive re-verification
+runs under the row lock. Only a failed verification of the still-current password
+hash increments the counter.
 Five failed attempts lock a known account for
 15 minutes, with transactional row locking. Requests during the lockout do not
 extend its deadline, even with a correct password. At expiry the next failed login

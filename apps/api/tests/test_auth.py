@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from argon2.exceptions import VerificationError
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -422,7 +423,8 @@ def test_production_application_uses_authentication_boundary(store):
         assert production.get("/auth/me").json()["role"] == "reviewer"
 
 
-def test_verification_releases_connection_and_rechecks_password(store, monkeypatch):
+@pytest.mark.parametrize("password", [PASSWORD, "wrong"])
+def test_verification_releases_connection_and_rechecks_password(store, monkeypatch, password):
     checked_out = set()
 
     def checkout(dbapi_connection, record, proxy):
@@ -435,10 +437,17 @@ def test_verification_releases_connection_and_rechecks_password(store, monkeypat
     event.listen(store.engine, "checkin", checkin)
     verify = PASSWORDS.verify
     replacement = PASSWORDS.hash("changed-fixture-password")
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(principal).where(principal.c.name == "reviewer").values(failed_attempts=4)
+        )
 
     def concurrent_change(self, encoded, password):
         assert not checked_out
-        valid = verify(encoded, password)
+        try:
+            valid = verify(encoded, password)
+        except VerificationError:
+            valid = False
         with store.engine.begin() as connection:
             connection.execute(
                 update(principal)
@@ -449,13 +458,67 @@ def test_verification_releases_connection_and_rechecks_password(store, monkeypat
 
     monkeypatch.setattr(type(PASSWORDS), "verify", concurrent_change)
     try:
-        assert store.login("reviewer", PASSWORD, NOW) is None
+        assert store.login("reviewer", password, NOW) is None
     finally:
         event.remove(store.engine, "checkout", checkout)
         event.remove(store.engine, "checkin", checkin)
     with store.engine.connect() as connection:
         assert connection.execute(select(session)).all() == []
         assert connection.execute(select(auth_event.c.action)).scalars().all() == ["login_failed"]
+        row = (
+            connection.execute(select(principal).where(principal.c.name == "reviewer"))
+            .mappings()
+            .one()
+        )
+        assert row["password_hash"] == replacement
+        assert row["failed_attempts"] == 4
+        assert row["locked_until"] is None
+
+
+def test_concurrent_rehash_refuses_stale_login_without_counting_a_bad_password(store, monkeypatch):
+    from argon2 import PasswordHasher
+
+    old_hash = PasswordHasher(time_cost=2).hash(PASSWORD)
+    assert PASSWORDS.check_needs_rehash(old_hash)
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(principal)
+            .where(principal.c.name == "reviewer")
+            .values(password_hash=old_hash, failed_attempts=4)
+        )
+    verify = PASSWORDS.verify
+    interleaved = False
+    concurrent_session = None
+
+    def concurrent_rehash(self, encoded, password):
+        nonlocal interleaved, concurrent_session
+        valid = verify(encoded, password)
+        if not interleaved:
+            interleaved = True
+            concurrent_session = store.login("reviewer", PASSWORD, NOW)
+            assert concurrent_session is not None
+        return valid
+
+    monkeypatch.setattr(type(PASSWORDS), "verify", concurrent_rehash)
+    assert store.login("reviewer", PASSWORD, NOW) is None
+    with store.engine.connect() as connection:
+        row = (
+            connection.execute(select(principal).where(principal.c.name == "reviewer"))
+            .mappings()
+            .one()
+        )
+        assert row["password_hash"] != old_hash
+        assert not PASSWORDS.check_needs_rehash(row["password_hash"])
+        assert row["failed_attempts"] == 0
+        assert row["locked_until"] is None
+        assert len(connection.execute(select(session)).all()) == 1
+        assert connection.execute(select(auth_event.c.action)).scalars().all() == [
+            "login_succeeded",
+            "login_failed",
+        ]
+    assert concurrent_session is not None
+    assert store.authenticate(concurrent_session[0], service=False, now=NOW) is not None
+    assert store.login("reviewer", PASSWORD, NOW) is not None
 
 
 def test_reload_recovers_csrf_without_revealing_session(client):

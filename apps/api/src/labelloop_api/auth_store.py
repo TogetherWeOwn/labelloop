@@ -85,16 +85,16 @@ class AuthStore:
                 .one_or_none()
             )
             locked = bool(record and record["locked_until"] and utc(record["locked_until"]) > now)
-            allowed = bool(
+            credentials_current = bool(
                 record
                 and snapshot
                 and encoded
-                and valid
                 and record["id"] == snapshot["id"]
                 and record["kind"] == "human"
                 and record["password_hash"] == encoded
-                and record["enabled"]
-                and not locked
+            )
+            allowed = bool(
+                record and credentials_current and valid and record["enabled"] and not locked
             )
             identity = record["id"] if record else None
             connection.execute(
@@ -106,7 +106,8 @@ class AuthStore:
                 )
             )
             if not allowed:
-                if record and record["kind"] == "human" and not locked:
+                # A stale snapshot proves neither success nor a bad current password.
+                if record and credentials_current and not valid and not locked:
                     previous = (
                         0 if record["locked_until"] is not None else record["failed_attempts"]
                     )
