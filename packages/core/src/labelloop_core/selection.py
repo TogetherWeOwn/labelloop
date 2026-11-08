@@ -7,8 +7,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from .domain import AnnotationRevision
-from .evidence import EvidenceScope
+from .evidence import EvidenceScope, SourceAnnotationRevision, require_revision_source
 
 SIGNALS = frozenset(
     {
@@ -44,7 +43,7 @@ class SelectionSignals:
 @dataclass(frozen=True, slots=True)
 class SelectionCandidate:
     asset_id: str
-    revision: AnnotationRevision
+    revision: SourceAnnotationRevision
     evidence_id: str
     signal_version: str
     signals: SelectionSignals
@@ -54,6 +53,7 @@ class SelectionCandidate:
     cost_units: int
 
     def __post_init__(self) -> None:
+        require_revision_source(self.revision, self.asset_id)
         if not all((self.asset_id, self.evidence_id, self.cluster_id, self.teacher_generation)):
             raise ValueError("selection evidence, cluster and teacher must be identified")
         if type(self.detection_count) is not int or self.detection_count < 0:
@@ -143,8 +143,8 @@ def select_evidence(
     if not ordered or len({item.asset_id for item in ordered}) != len(ordered):
         raise ValueError("selection requires unique source-bound evidence")
     for item in ordered:
-        source = scope.require_training_source(item.asset_id)
         scope.validate_revision(item.revision)
+        source = scope.require_training_source(item.asset_id)
         if item.signal_version != policy.signal_version:
             raise ValueError("selection signal evidence version differs from policy")
         for obj in item.revision.objects:

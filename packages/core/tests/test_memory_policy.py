@@ -16,7 +16,7 @@ from labelloop_core.domain import (
     SourceSplitAssignment,
     Split,
 )
-from labelloop_core.evidence import EvidenceScope
+from labelloop_core.evidence import EvidenceScope, SourceAnnotationRevision
 from labelloop_core.geometry import Box
 from labelloop_core.invalidation import (
     EvidenceArtifact,
@@ -66,9 +66,11 @@ def scope_for(project: str = "office", class_id: str = "keyboard") -> EvidenceSc
     )
 
 
-def revision_for(scope: EvidenceScope, *, auto: bool = False) -> AnnotationRevision:
+def revision_for(
+    scope: EvidenceScope, asset_id: str = "easy-a", *, auto: bool = False
+) -> SourceAnnotationRevision:
     class_id = next(iter(scope.ontology.class_map))
-    return AnnotationRevision(
+    return SourceAnnotationRevision(
         1,
         (DatasetObject("object", class_id, Box(1, 2, 15, 20), occluded=True),),
         "system" if auto else "human",
@@ -76,6 +78,8 @@ def revision_for(scope: EvidenceScope, *, auto: bool = False) -> AnnotationRevis
         review_tier="machine_verified_no_human_review" if auto else "adjudicated",
         scope_completeness="exhaustive_for_scope",
         training_eligible=True,
+        asset_id=asset_id,
+        project_id=scope.ontology.project_id,
     )
 
 
@@ -104,11 +108,10 @@ def policy() -> SelectionPolicy:
 
 
 def candidates_for(scope: EvidenceScope) -> tuple[SelectionCandidate, ...]:
-    revision = revision_for(scope, auto=True)
     return tuple(
         SelectionCandidate(
             name,
-            revision,
+            revision_for(scope, name, auto=True),
             f"evidence:{name}",
             "signals-v1",
             score,
@@ -185,7 +188,14 @@ def test_every_declared_signal_changes_ranked_selection(signal: str) -> None:
 def test_selection_refuses_holdouts_derivatives_and_missing_provenance(asset_id: str) -> None:
     scope = scope_for()
     candidates = candidates_for(scope)
-    contaminated = (replace(candidates[0], asset_id=asset_id), *candidates[1:])
+    contaminated = (
+        replace(
+            candidates[0],
+            asset_id=asset_id,
+            revision=replace(candidates[0].revision, asset_id=asset_id),
+        ),
+        *candidates[1:],
+    )
     with pytest.raises(ValueError, match="evaluation|derivative|missing canonical"):
         select_evidence(scope, contaminated, policy())
 
@@ -232,7 +242,13 @@ def test_insufficient_evidence_or_resources_never_weakens_mandatory_quotas(chang
         candidates = tuple(replace(item, signals=signals()) for item in candidates)
     elif change == "no-ordinary":
         candidates = tuple(
-            replace(item, revision=AnnotationRevision(1, (), "model")) for item in candidates
+            replace(
+                item,
+                revision=SourceAnnotationRevision(
+                    1, (), "model", asset_id=item.asset_id, project_id=scope.ontology.project_id
+                ),
+            )
+            for item in candidates
         )
     elif change == "cost":
         selected_policy = replace(selected_policy, budget_units=5)
@@ -290,7 +306,7 @@ def memory_for(scope: EvidenceScope, asset_id: str = "easy-a") -> MemoryExample:
             "physical-scene",
             Box(0, 0, 30, 30),
         ),
-        revision_for(scope),
+        revision_for(scope, asset_id),
         "anchor",
         None,
         "indoor",
@@ -299,6 +315,57 @@ def memory_for(scope: EvidenceScope, asset_id: str = "easy-a") -> MemoryExample:
         "positive",
         0.9,
     )
+
+
+@pytest.mark.parametrize("other_asset", ["holdout", "test", "easy-b", "train-tile"])
+def test_selection_and_memory_reject_swapped_source_revisions(other_asset: str) -> None:
+    scope = scope_for()
+    candidate = candidates_for(scope)[2]
+    anchor = memory_for(scope)
+    swapped = revision_for(scope, other_asset)
+    with pytest.raises(ValueError, match="revision source"):
+        replace(candidate, revision=swapped)
+    with pytest.raises(ValueError, match="revision source"):
+        replace(anchor, revision=swapped)
+    with pytest.raises(ValueError, match="revision source"):
+        replace(anchor, reference=replace(anchor.reference, asset_id=other_asset))
+
+
+def test_unbound_revisions_cannot_enter_selection_or_memory() -> None:
+    scope = scope_for()
+    unbound = AnnotationRevision(1, (), "model")
+    with pytest.raises(ValueError, match="source-bound revision"):
+        replace(candidates_for(scope)[0], revision=unbound)
+    with pytest.raises(ValueError, match="source-bound revision"):
+        replace(memory_for(scope), revision=unbound)
+
+
+def test_revision_project_binding_cannot_be_laundered_by_matching_asset_or_class_ids() -> None:
+    scope = scope_for()
+    foreign = scope_for("foreign-office")
+    candidates = candidates_for(scope)
+    swapped = replace(candidates[2], revision=revision_for(foreign))
+    with pytest.raises(ValueError, match="revision project"):
+        select_evidence(scope, (*candidates[:2], swapped, *candidates[3:]), policy())
+    anchor = replace(memory_for(scope), revision=revision_for(foreign))
+    with pytest.raises(ValueError, match="revision project"):
+        ReferencePack("pack", "1", scope, (anchor,))
+
+
+def test_source_bound_revision_preserves_identity_and_base_validation() -> None:
+    revision = revision_for(scope_for())
+    updated = revision.next_revision(
+        objects=revision.objects, expected_revision=1, actor_kind="human"
+    )
+    assert isinstance(updated, SourceAnnotationRevision)
+    assert (updated.asset_id, updated.project_id, updated.revision) == ("easy-a", "office", 2)
+    for change in ({"asset_id": ""}, {"project_id": " "}):
+        with pytest.raises(ValueError, match="revision source"):
+            replace(revision, **change)
+    with pytest.raises(ValueError, match="positive"):
+        replace(revision, revision=0)
+    with pytest.raises(ValueError, match="authenticated human"):
+        replace(revision, actor_kind="model")
 
 
 def query_for(scope: EvidenceScope) -> ReferenceQuery:
@@ -356,14 +423,14 @@ def test_reference_enrollment_preserves_collections_teacher_and_distributions() 
     anchor = memory_for(scope)
     automatic = replace(
         memory_for(scope, "easy-b"),
-        revision=revision_for(scope, auto=True),
+        revision=revision_for(scope, "easy-b", auto=True),
         collection="auto_expanded",
         teacher_generation="teacher-4",
     )
     gold = replace(
         memory_for(scope, "holdout"),
         collection="gold",
-        revision=replace(revision_for(scope), gold_eligible=True),
+        revision=replace(revision_for(scope, "holdout"), gold_eligible=True),
         gold_adjudication=adjudication_for("holdout"),
     )
     pack = ReferencePack("approved", "1", scope, (anchor, automatic, gold))
@@ -538,7 +605,8 @@ def test_retrieval_reserves_class_coverage_before_extra_high_utility_examples() 
         utility=0.7,
         reference=replace(memory_for(scope, "novel").reference, class_id="mouse"),
         revision=replace(
-            revision_for(scope), objects=(DatasetObject("mouse", "mouse", Box(1, 2, 15, 20)),)
+            revision_for(scope, "novel"),
+            objects=(DatasetObject("mouse", "mouse", Box(1, 2, 15, 20)),),
         ),
     )
     query = replace(query_for(scope), max_items=2)

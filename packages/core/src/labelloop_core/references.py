@@ -5,8 +5,13 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
 
-from .domain import AnnotationRevision, ReferenceExample
-from .evidence import EvidenceScope, require_accepted
+from .domain import ReferenceExample
+from .evidence import (
+    EvidenceScope,
+    SourceAnnotationRevision,
+    require_accepted,
+    require_revision_source,
+)
 
 Collection = Literal["anchor", "auto_expanded", "gold"]
 ReferenceKind = Literal["positive", "confusion_negative"]
@@ -51,7 +56,7 @@ class GoldAdjudication:
 @dataclass(frozen=True, slots=True)
 class MemoryExample:
     reference: ReferenceExample
-    revision: AnnotationRevision
+    revision: SourceAnnotationRevision
     collection: Collection
     teacher_generation: str | None
     scene: str
@@ -62,6 +67,7 @@ class MemoryExample:
     gold_adjudication: GoldAdjudication | None = None
 
     def __post_init__(self) -> None:
+        require_revision_source(self.revision, self.reference.asset_id)
         if self.collection not in {"anchor", "auto_expanded", "gold"}:
             raise ValueError("memory collection must remain distinguishable")
         if self.kind not in {"positive", "confusion_negative"}:

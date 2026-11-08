@@ -5,6 +5,26 @@ from dataclasses import dataclass, field
 from .domain import AnnotationRevision, OntologyRelease, SourceAsset, SourceSplitAssignment
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SourceAnnotationRevision(AnnotationRevision):
+    """Canonical revision projected with its authoritative persistence identity."""
+
+    asset_id: str
+    project_id: str
+
+    def __post_init__(self) -> None:
+        AnnotationRevision.__post_init__(self)
+        if not self.asset_id.strip() or not self.project_id.strip():
+            raise ValueError("revision source and project identities are required")
+
+
+def require_revision_source(revision: AnnotationRevision, asset_id: str) -> None:
+    if not isinstance(revision, SourceAnnotationRevision):
+        raise ValueError("evidence requires a source-bound revision")
+    if revision.asset_id != asset_id:
+        raise ValueError("revision source differs from the evidence source")
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceScope:
     ontology: OntologyRelease
@@ -77,7 +97,9 @@ class EvidenceScope:
             raise ValueError("evaluation source groups cannot enter training or retrieval")
         return next(asset for asset in self.sources if asset.asset_id == root)
 
-    def validate_revision(self, revision: AnnotationRevision) -> None:
+    def validate_revision(self, revision: SourceAnnotationRevision) -> None:
+        if revision.project_id != self.ontology.project_id:
+            raise ValueError("revision project differs from the pinned evidence project")
         if any(obj.class_id not in self.ontology.class_map for obj in revision.objects):
             raise ValueError("evidence class is absent from the pinned ontology")
 

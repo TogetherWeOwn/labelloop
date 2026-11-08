@@ -21,6 +21,15 @@ guide a change become development evidence; preserve the historical release and
 obtain a new independent final assessment rather than recycling its examples into
 training, active selection or references.
 
+`SourceAnnotationRevision` extends the existing revision record with immutable source
+and project identities. Selection candidates and memory examples require this bound
+record and reject a source mismatch or a bare `AnnotationRevision` before inspecting
+labels or eligibility. Scope validation also rejects a foreign project, even if its
+asset and class IDs happen to match. Persistence must project both identity and
+revision contents together from the authoritative canonical record, never attach a
+caller-selected source ID to an arbitrary revision. This structural binding is not
+authentication, a signature or proof that a caller supplied honest history.
+
 ## Active selection (`labelloop_core.selection`)
 
 `SelectionCandidate` binds an immutable annotation revision, source, teacher
