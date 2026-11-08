@@ -39,7 +39,17 @@ wrong-identity and missed-object observations, reconnects, records a clean repla
 sample, then attempts every persisted candidate and rollback at both recipe heads.
 It asserts that **the real registry heads and event count remain unchanged**, including
 models trained from a separately frozen release containing the same source labels.
-These assertions await exact-head Actions; they are not a claimed PASS.
+At `90ed50f`, [Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42442337445)
+failed in the [ML smoke job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42442337445/job/128614029440):
+the losing concurrent challenger had only a development evaluation, which the veto
+fixture incorrectly reused as a final ID (`StopIteration` before the veto assertions).
+The repair appends a separate explicitly synthetic final evaluation to each candidate,
+reloads linked evidence, verifies clean fixture qualification, and snapshots registry
+metadata after that preparation. It also requires coverage of the development-only
+losing challenger. Corrected-head Actions verification is pending; no veto PASS is claimed.
+The prior head's [unit job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42442337445/job/128614029452)
+passed **757 tests, 38 skipped**, including the 12 paired preparation cases; those
+results do not replace the failed PostgreSQL/CPU gate.
 
 `qualification_0001` follows the delivered ledger's `budget_0002`. The new
 `qualification_annotation_audit` table is append-only at the database boundary and

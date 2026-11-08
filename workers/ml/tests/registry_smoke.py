@@ -612,39 +612,65 @@ def exercise_annotation_veto(engine, request, common, gate):
         # are checked against their actual training membership, not evaluation inputs.
         for side in (320, 640):
             recipe = f"full-letterbox-{side}-v1"
-            before = load_registry(connection, request.project_id, recipe)
-            if before.champion is None:
+            if load_registry(connection, request.project_id, recipe).champion is None:
                 continue  # Also permits focused reproduction of the 640 case alone.
             scope = common | {"recipe_key": recipe}
             candidates = connection.execute(
                 sa.select(db.model_release.c.id, db.model_release.c.release_key).where(
+                    db.model_release.c.project_id
+                    == connection.execute(
+                        sa.select(project.c.id).where(project.c.project_key == request.project_id)
+                    ).scalar_one(),
                     db.model_release.c.recipe_id
                     == connection.execute(
                         sa.select(preprocessing_recipe.c.id).where(
                             preprocessing_recipe.c.recipe_key == recipe
                         )
-                    ).scalar_one()
+                    ).scalar_one(),
                 )
             ).all()
+            qualified = []
+            development_only = 0
             for candidate in candidates:
                 release = load_release(connection, candidate.id)
-                # Demonstrate that a synthetically clean qualification itself passes.
+                development_only += len(release.evaluation_run_ids) == 1
                 report = stored_report(connection, release, release.evaluation_run_ids[0])
+                # The losing racer has no final link. Never rename its development ID:
+                # append separate, explicitly synthetic evidence for every candidate.
                 final = synthetic_final(
                     report,
-                    run_id=release.evaluation_run_ids[-1],
-                    dataset_id="synthetic-passing-final",
+                    run_id=release.release_id + "-veto-synthetic-final",
+                    dataset_id=report.dataset_release_id,
                 )
-                qualification_context(release, final, gate).require_qualified(release, final)
+                variant_id = connection.execute(
+                    sa.select(db.evaluation_run.c.variant_id).where(
+                        db.evaluation_run.c.run_key == report.run_id
+                    )
+                ).scalar_one()
+                save_evaluation(
+                    connection,
+                    model_key=release.release_id,
+                    variant_id=variant_id,
+                    report=final,
+                )
+                release = load_release(connection, candidate.id)
+                context = qualification_context(release, final, gate)
+                context.require_qualified(release, final)
+                qualified.append((release, final, context))
+            assert development_only >= 1  # Regression: the unpromoted racer is still covered.
+            # Evaluation links are append-only model metadata. Snapshot only after
+            # fixture preparation, then prove the rejected operations change nothing.
+            before = load_registry(connection, request.project_id, recipe)
+            for release, final, context in qualified:
                 with pytest.raises(ValueError, match="annotation audit veto"):
                     change_registry(
                         connection,
                         **scope,
                         expected_revision=before.revision,
-                        candidate_key=candidate.release_key,
+                        candidate_key=release.release_id,
                         evaluation_key=final.run_id,
                         policy=gate,
-                        qualification=qualification_context(release, final, gate),
+                        qualification=context,
                     )
             with pytest.raises(ValueError, match="annotation audit veto"):
                 change_registry(connection, **scope, expected_revision=before.revision)
