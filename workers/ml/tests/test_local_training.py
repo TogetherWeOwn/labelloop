@@ -348,6 +348,27 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
     assert exported.sample_count == len(validation_images)
     assert all(0 < count < request.policy.max_det for count in exported.detection_counts)
+    from labelloop_api.management_evaluate_worker import evaluate_model
+    from labelloop_api.management_model_worker import candidate_release
+    from labelloop_worker_ml.training import predict_samples
+
+    # Run standalone development inference through the same delivered predictor and
+    # original-frame evaluator. This is not queue/DB publication or qualification.
+    model = candidate_release(result, manifest, request.project_id, export_stage["evidence"])
+    evaluated = evaluate_model(
+        f"standalone-{side}",
+        model,
+        manifest,
+        validation_images,
+        SimpleNamespace(read=stored.__getitem__),
+        predict_samples,
+    )
+    (output / "management-development-evaluation.json").write_text(json.dumps(evaluated))
+    assert evaluated["report"]["role"] == "development"
+    assert evaluated["report"]["weights_sha256"] == result.selected.sha256
+    assert evaluated["report"]["overall"] == report["overall"]
+    assert evaluated["report"]["slices"] == report["slices"]
+    assert evaluated["sample_count"] == len(validation_images)
     import numpy as np
     import onnxruntime as ort
 

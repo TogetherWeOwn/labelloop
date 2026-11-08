@@ -65,7 +65,13 @@ def checked_object(objects: CompilationObjects, digest: str, *, limit: int) -> b
     return data
 
 
-def materialize_dataset(objects: CompilationObjects, manifest: dict, root: Path) -> None:
+def materialize_dataset(
+    objects: CompilationObjects,
+    manifest: dict,
+    root: Path,
+    *,
+    selected_files: tuple[str, ...] | None = None,
+) -> None:
     hashes = manifest["file_hashes"]
     if not hashes or len(hashes) > 100000:
         raise ValueError("training dataset membership exceeds its bound")
@@ -82,9 +88,16 @@ def materialize_dataset(objects: CompilationObjects, manifest: dict, root: Path)
             or not path.parts
         ):
             raise ValueError("invalid compiled artifact path")
+    if selected_files is not None and (
+        not selected_files
+        or len(set(selected_files)) != len(selected_files)
+        or not set(selected_files) <= hashes.keys()
+    ):
+        raise ValueError("selected compiled files differ from manifest membership")
     root.mkdir()
     total = 0
-    for name, digest in hashes.items():
+    for name in hashes if selected_files is None else selected_files:
+        digest = hashes[name]
         data = checked_object(objects, digest, limit=64_000_000)
         total += len(data)
         if total > 512_000_000:
@@ -201,6 +214,35 @@ def decode_training(record: dict) -> TrainingResult:
                 "checkpoints": tuple(Checkpoint(**item) for item in record["checkpoints"]),
                 "selected": Checkpoint(**record["selected"]),
             }
+        )
+    )
+
+
+def frozen_validation_images(
+    release, manifest: dict, *, include_excluded: bool = False
+) -> tuple[EvaluationImage, ...]:
+    return tuple(
+        EvaluationImage(
+            sample.asset.asset_id,
+            sample.asset.width,
+            sample.asset.height,
+            tuple(
+                GroundTruth(
+                    obj.object_id,
+                    obj.class_id,
+                    obj.box,
+                    obj.occluded,
+                    obj.truncated_at_image_edge,
+                )
+                for obj in sample.revision.objects
+            ),
+            revision=sample.revision.revision,
+            source_sha256=sample.asset.sha256,
+        )
+        for sample in release.samples
+        if sample.split == "val"
+        and (
+            include_excluded or manifest["release_membership"][sample.asset.asset_id] == "compiled"
         )
     )
 
@@ -322,29 +364,7 @@ class CanonicalLocalTrainingWorker:
                     ),
                     self.workspace_id,
                 )
-        validation_images = tuple(
-            EvaluationImage(
-                sample.asset.asset_id,
-                sample.asset.width,
-                sample.asset.height,
-                tuple(
-                    GroundTruth(
-                        obj.object_id,
-                        obj.class_id,
-                        obj.box,
-                        obj.occluded,
-                        obj.truncated_at_image_edge,
-                    )
-                    for obj in sample.revision.objects
-                ),
-                revision=sample.revision.revision,
-                source_sha256=sample.asset.sha256,
-            )
-            for sample in release.samples
-            if sample.split == "val"
-            and manifest["release_membership"][sample.asset.asset_id] == "compiled"
-        )
-        return request, manifest, validation_images
+        return request, manifest, frozen_validation_images(release, manifest)
 
     def train(self, context: CompileContext) -> dict:
         request, manifest, validation_images = self.resolve(context)

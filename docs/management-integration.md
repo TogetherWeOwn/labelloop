@@ -603,9 +603,40 @@ or duplicate model evidence, incompatible compiled recipes, versioned protocols,
 and real restricted shared-session/CSRF/admin/reviewer composition. Small unit
 cases cover trusted-protocol validation and scope/bounds. These additions require
 exact-head Actions verification; they do not demonstrate real evaluation or CPU
-project-to-export acceptance. Evaluation worker execution, fenced report/link
-publication, lifecycle-safe final-set composition, runtime registration/grants,
-detailed reads and final app/admission mounting remain incomplete.
+project-to-export acceptance. Execution is the separate stage below; fenced
+report/link publication, lifecycle-safe final-set composition, runtime registration/
+grants, detailed reads and final app/admission mounting remain incomplete.
+
+### Standalone development-evaluation execution (partial, unmounted)
+
+`CanonicalLocalEvaluationWorker` rechecks the durable human-attributed intent,
+workspace/project ownership and fenced model/compiler publication in one read-only
+repeatable-read snapshot before object access. It rehydrates historical canonical
+truth through the existing compiler authority, never current labels. The accepted
+protocol remains pinned even if deployment configuration later changes. Neither
+model output nor a caller can substitute a run, split, role, recipe or threshold.
+
+Trusted ML composition injects the delivered `predict_samples` adapter. The helper
+hash-checks the stored manifest, selected weights and validation raster bytes;
+only validation image files are materialized, not train/test pixels or labels.
+Temporary paths are code-owned and cleaned on success and failure. It requires one
+prediction group for every compiled derivative with exact canonical transform and
+source identity, observed single-image tensors at the recipe size, and an unchanged
+checkpoint. Predictions may supply detections only, not metrics or lineage.
+The delivered `EvaluationRunner` computes original-frame development metrics and
+coverage against every frozen validation source, including a source excluded by
+the recipe; excluding difficult pixels must not remove its truth from the score.
+The bounded inline stage record contains the report, actual tensor shapes and
+sample count. This stage uploads no objects, publishes no report/link, changes no
+selection/registry state and installs no default worker or application route.
+
+Disposable DB cases use real canonical/compiler/queue/model authority with
+explicitly synthetic predictions at both sizes. Unit fixtures cover positive
+source-frame scoring, excluded-source coverage and refusal before I/O. The existing
+actual CPU smoke exercises this helper with `predict_samples` at 320/640 and retains
+its report; it is still not a DB-backed new-project-to-export proof. These are
+commissioned cases until exact-head Actions verifies them. Completion fencing and
+report/link publication must be composed before this job is available end to end.
 
 ## Canonical summary reads (partial, unmounted)
 

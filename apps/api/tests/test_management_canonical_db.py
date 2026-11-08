@@ -106,6 +106,213 @@ def database(tmp_path):
         owner.dispose()
 
 
+def prepared_evaluation_stage(
+    database, compilation, compiler_worker, recipe="full-letterbox-320-v1"
+):
+    from labelloop_api.management_evaluate_worker import CanonicalLocalEvaluationWorker
+    from labelloop_core.evaluation import DerivedPredictions
+    from labelloop_core.geometry import AffineTransform, Crop
+
+    evaluation, model_id, release_id, _ = prepared_evaluation(
+        database, compilation, compiler_worker, recipe
+    )
+    accepted = evaluation_request(evaluation, model_id, release_id)
+    lease = compiler_worker.store.claim(
+        "evaluate_local", "fixture-evaluator", job_id=accepted.job_id
+    )
+    assert lease is not None
+    compiler_worker.objects.put(lease.input["weights_key"], b"synthetic weights")
+    paths, reads = [], []
+
+    def predictor(weights, root, samples, class_ids, policy, shapes):
+        paths.extend([weights, root])
+        assert weights.read_bytes() == b"synthetic weights"
+        assert class_ids == ("package",)
+        assert list(root.rglob("*.png"))
+        assert not (root / "images/train").exists()
+        assert not (root / "images/test").exists()
+        assert not (root / "labels").exists()
+        derived = []
+        for sample in samples:
+            assert sample["split"] == "val"
+            assert Image.open(root / sample["image_path"]).size == (policy.imgsz,) * 2
+            transform = sample["transform"].copy()
+            transform.pop("valid_content_rectangle")
+            transform["crop"] = Crop(**transform["crop"])
+            for key in ("forward", "inverse"):
+                transform[key] = tuple(tuple(row) for row in transform[key])
+            derived.append(DerivedPredictions(sample["asset_id"], AffineTransform(**transform), ()))
+            shapes.append([1, 3, policy.imgsz, policy.imgsz])
+        return tuple(derived)
+
+    def read(key):
+        reads.append(key)
+        return compiler_worker.objects.read(key)
+
+    from types import SimpleNamespace
+
+    def unexpected(*args):
+        pytest.fail("evaluation stage must not upload objects")
+
+    worker = CanonicalLocalEvaluationWorker(
+        database[0].engine,
+        SimpleNamespace(read=read, put=unexpected),
+        database[0].workspace_id,
+        predictor,
+    )
+    return worker, accepted, lease, paths, reads
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_evaluation_stage_uses_frozen_truth_and_only_validation_pixels(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, accepted, lease, paths, reads = prepared_evaluation_stage(
+        database, compilation, compiler_worker, recipe
+    )
+    context = StageContext(compiler_worker.store, lease, {})
+    model, manifest, images = worker.resolve(context)
+    assert not reads
+    record = worker.evaluate(context)
+    report = record["report"]
+    assert report["run_id"] == accepted.resource.id
+    assert report["dataset_release_id"] == lease.input["dataset_release_id"]
+    assert report["weights_sha256"] == model.weights_sha256
+    assert report["role"] == "development" and report["policy"] == lease.input["policy"]
+    assert report["overall"]["images"] == len(images) == 1
+    assert report["overall"]["support"] == 0  # Explicitly synthetic negative-source fixture.
+    assert record["sample_count"] == 1 and report["coverage"][0]["covered_fraction"] == 1
+    assert paths and all(not path.exists() for path in paths)
+    assert set(reads) == {
+        lease.input["manifest_key"],
+        lease.input["weights_key"],
+        *(
+            content_key(manifest["file_hashes"][s["image_path"]])
+            for s in manifest["samples"]
+            if s["split"] == "val"
+        ),
+    }
+    saved = compiler_worker.store.save_stage(lease, "evaluation", record)
+    assert saved == record
+    # Execution does not yet publish a report/link or claim application/qualification.
+    with database[1].connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM evaluation_run WHERE run_key=:id"),
+                {"id": accepted.resource.id},
+            ).scalar_one()
+            == 0
+        )
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM worker_application WHERE job_id=:id"),
+                {"id": lease.job_id},
+            ).scalar_one()
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "change", ["workspace", "kind", "requester", "variant", "model", "protocol", "policy", "run"]
+)
+def test_evaluation_stage_refuses_forged_intent_before_io(
+    database, compilation, compiler_worker, change
+):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, _, lease, _, _ = prepared_evaluation_stage(database, compilation, compiler_worker)
+    inputs = deepcopy(lease.input)
+    if change in {"workspace", "variant"}:
+        inputs[change + "_id"] = str(uuid4())
+    elif change == "requester":
+        inputs["requested_by"] = "forged"
+    elif change == "model":
+        inputs["model_id"] = "forged"
+    elif change == "protocol":
+        inputs["protocol"]["role"] = "locked_final_test"
+    elif change == "policy":
+        inputs["policy"]["conf"] = 0
+    elif change == "run":
+        inputs["run_id"] = str(uuid4())
+    lease = replace(lease, input=inputs, kind="train_local" if change == "kind" else lease.kind)
+
+    def unexpected(*args):
+        pytest.fail("untrusted evaluation must fail before I/O")
+
+    worker = replace(worker, objects=SimpleNamespace(read=unexpected), predictor=unexpected)
+    with pytest.raises(ValueError):
+        worker.evaluate(StageContext(compiler_worker.store, lease, {}))
+
+
+@pytest.mark.parametrize("corrupt", ["manifest", "weights", "pixels"])
+def test_evaluation_stage_refuses_corrupt_content_before_inference(
+    database, compilation, compiler_worker, corrupt
+):
+    from types import SimpleNamespace
+
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, _, lease, _, _ = prepared_evaluation_stage(database, compilation, compiler_worker)
+    context = StageContext(compiler_worker.store, lease, {})
+    _, manifest, _ = worker.resolve(context)
+    image_path = next(s["image_path"] for s in manifest["samples"] if s["split"] == "val")
+    broken = {
+        "manifest": lease.input["manifest_key"],
+        "weights": lease.input["weights_key"],
+        "pixels": content_key(manifest["file_hashes"][image_path]),
+    }[corrupt]
+
+    def read(key):
+        return b"corrupt" if key == broken else worker.objects.read(key)
+
+    def unexpected(*args):
+        pytest.fail("corrupt content must fail before inference")
+
+    with pytest.raises(ValueError, match="digest differs"):
+        replace(worker, objects=SimpleNamespace(read=read), predictor=unexpected).evaluate(context)
+
+
+@pytest.mark.parametrize(
+    "failure", ["raises", "weights", "missing", "duplicate", "shape", "transform"]
+)
+def test_evaluation_stage_rejects_bad_predictions_and_cleans_paths(
+    database, compilation, compiler_worker, failure
+):
+    from labelloop_core.geometry import full_frame_transform
+    from labelloop_worker_core.jobs import StageContext
+
+    worker, _, lease, paths, _ = prepared_evaluation_stage(database, compilation, compiler_worker)
+
+    def predictor(weights, root, samples, classes, policy, shapes):
+        result = worker.predictor(weights, root, samples, classes, policy, shapes)
+        if failure == "raises":
+            raise ValueError("synthetic inference failure")
+        if failure == "weights":
+            weights.write_bytes(b"changed checkpoint")
+        elif failure == "missing":
+            return ()
+        elif failure == "duplicate":
+            return result + result
+        elif failure == "shape":
+            shapes[:] = [[1, 3, 352, 352]]
+        else:
+            return (replace(result[0], transform=full_frame_transform(9, 7, policy.imgsz)),)
+        return result
+
+    with pytest.raises(ValueError):
+        replace(worker, predictor=predictor).evaluate(
+            StageContext(compiler_worker.store, lease, {})
+        )
+    assert paths and all(not path.exists() for path in paths)
+
+
 def prepared_evaluation(database, compilation, compiler_worker, recipe="full-letterbox-320-v1"):
     from uuid import UUID
 
