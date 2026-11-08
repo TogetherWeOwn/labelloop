@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from labelloop_api import qualification_schema
-from labelloop_api.annotation_audit_store import lock_project, release_membership
+from labelloop_api.qualification_store import lock_project, release_membership
 from labelloop_api.schema import (
     annotation_revision,
     canonical_dataset_release,
@@ -190,18 +190,19 @@ def freeze_audit_sample(
 
 
 def load_audit_sample(
-    connection: sa.Connection, *, project_id: object, sample_key: str
+    connection: sa.Connection,
+    *,
+    project_id: object,
+    sample_key: str,
+    release_id: object | None = None,
 ) -> FrozenAuditSample:
-    row = (
-        connection.execute(
-            sa.select(qualification_schema.audit_sample).where(
-                qualification_schema.audit_sample.c.project_id == project_id,
-                qualification_schema.audit_sample.c.sample_key == sample_key,
-            )
-        )
-        .mappings()
-        .one()
+    statement = sa.select(qualification_schema.audit_sample).where(
+        qualification_schema.audit_sample.c.project_id == project_id,
+        qualification_schema.audit_sample.c.sample_key == sample_key,
     )
+    if release_id is not None:
+        statement = statement.where(qualification_schema.audit_sample.c.release_id == release_id)
+    row = connection.execute(statement).mappings().one()
     record = row["record"]
     population = loads(json.dumps(record["population"]), AuditSample)
     sample = loads(json.dumps(record["sample"]), AuditSample)

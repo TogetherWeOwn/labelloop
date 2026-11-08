@@ -738,11 +738,12 @@ def exercise_annotation_veto(engine, request, common, gate):
         project_key=request.project_id,
         release_key=request.dataset_release_id,
         actor_id=actor,
+        sample_key=sampling["sample_id"],
     )
     with engine.begin() as connection:
         for bad, message in (
-            (replace(ordinary_wrong, revision=2), "frozen annotation membership"),
-            (replace(ordinary_wrong, asset_id="foreign-asset"), "frozen annotation membership"),
+            (replace(ordinary_wrong, revision=2), "stale source revision"),
+            (replace(ordinary_wrong, asset_id="foreign-asset"), "outside the frozen sample"),
             (replace(ordinary_wrong, reviewer_id="forged-principal"), "authenticated principal"),
         ):
             with pytest.raises(ValueError, match=message):
@@ -788,6 +789,12 @@ def exercise_annotation_veto(engine, request, common, gate):
         )
         assert audited["actor_id"] == actor
         assert audited["vetoed_revisions"] == {positive: 1}
+        binding = audited["record"]["sample"]
+        assert binding["sample_key"] == sampling["sample_id"]
+        assert binding["population_sha256"] == sampling["population_sha256"]
+        assert binding["verdict"]["blocking_asset_ids"] == [positive]
+        assert binding["verdict"]["pending_asset_ids"] == [negative]
+        assert not binding["verdict"]["passed"]
         for statement in (
             sa.delete(qualification_schema.annotation_audit),
             sa.update(qualification_schema.annotation_audit).values(vetoed_revisions={}),

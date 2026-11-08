@@ -6,19 +6,20 @@ import runpy
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from labelloop_api import qualification_schema
+from labelloop_api import annotation_audit_store, qualification_schema
 from labelloop_api.audit_sample_store import (
     canonical_candidate,
     freeze_audit_sample,
     load_audit_sample,
 )
-from labelloop_core.audit import AuditSample, select_audit_sample
+from labelloop_core.audit import AuditObservation, AuditSample, select_audit_sample
 from labelloop_core.qualification_data import record_sha256
 from labelloop_core.qualification_wire import dumps, loads
 
@@ -159,6 +160,119 @@ def test_recovery_rejects_population_and_selection_substitution(tamper):
         record["sample"]["record_type"] = "QualificationContext"
     with pytest.raises(ValueError):
         load_audit_sample(StoredSample(value), project_id="project", sample_key="audit")
+
+
+def test_bound_sample_lookup_includes_project_release_and_sample_identity():
+    connection = MagicMock()
+    connection.execute.return_value.mappings.return_value.one.return_value = stored_sample()
+    load_audit_sample(connection, project_id="project", release_id="release", sample_key="audit")
+    statement = connection.execute.call_args.args[0]
+    assert statement.compile().params == {
+        "project_id_1": "project",
+        "sample_key_1": "audit",
+        "release_id_1": "release",
+    }
+
+
+@pytest.mark.parametrize("kind", ["clean", "partial", "adverse", "truncated", "unsampled"])
+def test_audit_write_derives_sample_binding_and_verdict(monkeypatch, kind):
+    stored = stored_sample()
+    if kind == "partial":
+        population = loads(json.dumps(stored["record"]["population"]), AuditSample)
+        stored["record"]["sample"] = json.loads(
+            dumps(
+                select_audit_sample(
+                    population.candidates, sample_id="audit", size=2, seed=population.seed
+                )
+            )
+        )
+    frozen = load_audit_sample(StoredSample(stored), project_id="project", sample_key="audit")
+    selected = frozen.sample.candidates[0]
+    observation = AuditObservation(
+        selected.asset_id, 2, "independent", True, kind != "adverse", True, kind == "truncated"
+    )
+    connection = MagicMock()
+    release = MagicMock()
+    release.mappings.return_value.one.return_value = {
+        "id": "release",
+        "sample_revisions": {
+            item.asset_id: item.revision.revision for item in frozen.sample.candidates
+        },
+    }
+    prior = MagicMock()
+    prior.mappings.return_value.one.return_value = {
+        "actor_id": "original",
+        "approval_state": "auto_accepted",
+    }
+    actors = MagicMock()
+    actors.scalars.return_value = []
+    connection.execute.side_effect = [release, prior, actors, MagicMock()]
+    monkeypatch.setattr(annotation_audit_store, "lock_project", lambda *args: "project")
+    loader = MagicMock(return_value=frozen)
+    monkeypatch.setattr(annotation_audit_store, "load_audit_sample", loader)
+    annotation_audit_store.record_annotation_audit(
+        connection,
+        project_key="p",
+        release_key="r",
+        audit_key="result",
+        actor_id="independent",
+        sample_key=None if kind == "unsampled" else "audit",
+        observations=(observation,),
+    )
+    saved = connection.execute.call_args.args[0].compile().params
+    assert saved["vetoed_revisions"] == (
+        {selected.asset_id: 2} if kind in {"adverse", "truncated"} else {}
+    )
+    if kind == "unsampled":
+        loader.assert_not_called()
+        assert "sample" not in saved["record"]
+    else:
+        loader.assert_called_once_with(
+            connection, project_id="project", sample_key="audit", release_id="release"
+        )
+        binding = saved["record"]["sample"]
+        assert binding["population_sha256"] == frozen.population_sha256
+        assert binding["group_ids"] == frozen.group_ids
+        assert binding["verdict"]["passed"] == (kind == "clean")
+        assert binding["verdict"]["pending_asset_ids"] == (
+            (frozen.sample.candidates[1].asset_id,) if kind == "partial" else ()
+        )
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"asset_id": "unselected"}, "outside the frozen sample"),
+        ({"revision": 3}, "stale source revision"),
+        ({"reviewer_id": " ORIGINAL "}, "independent"),
+    ],
+)
+def test_sample_binding_rejects_substitution_before_any_audit_insert(monkeypatch, changes, message):
+    frozen = load_audit_sample(
+        StoredSample(stored_sample()), project_id="project", sample_key="audit"
+    )
+    selected = frozen.sample.candidates[0]
+    connection = MagicMock()
+    connection.execute.return_value.mappings.return_value.one.return_value = {
+        "id": "release",
+        "sample_revisions": {selected.asset_id: 2, "unselected": 2},
+    }
+    monkeypatch.setattr(annotation_audit_store, "lock_project", lambda *args: "project")
+    monkeypatch.setattr(annotation_audit_store, "load_audit_sample", lambda *args, **kwargs: frozen)
+    observation = replace(
+        AuditObservation(selected.asset_id, 2, "independent", True, True, True), **changes
+    )
+    with pytest.raises(ValueError, match=message):
+        annotation_audit_store.record_annotation_audit(
+            connection,
+            project_key="p",
+            release_key="r",
+            audit_key="rejected",
+            actor_id=observation.reviewer_id,
+            sample_key="audit",
+            observations=(observation,),
+        )
+    assert connection.execute.call_count == 1  # Only release read, no append.
 
 
 def test_sampling_migration_is_frozen_append_only_and_after_joined_histories():

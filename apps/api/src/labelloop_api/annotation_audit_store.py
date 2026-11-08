@@ -11,31 +11,18 @@ from dataclasses import asdict
 import sqlalchemy as sa
 
 from labelloop_api import model_schema, qualification_schema
+from labelloop_api.audit_sample_store import load_audit_sample
+from labelloop_api.qualification_store import lock_project as lock_project
+from labelloop_api.qualification_store import release_membership as release_membership
 from labelloop_api.schema import (
     annotation_revision,
     canonical_dataset_release,
-    project,
     review_event,
     source_asset,
     yolo_dataset_variant,
 )
-from labelloop_core.audit import AuditObservation
-
-
-def lock_project(connection: sa.Connection, project_key: str) -> object:
-    """Shared lock order for audit evidence and every recipe's registry mutation."""
-    return connection.execute(
-        sa.select(project.c.id).where(project.c.project_key == project_key).with_for_update()
-    ).scalar_one()
-
-
-def release_membership(value: object) -> dict[str, int]:
-    if not isinstance(value, dict) or any(
-        not isinstance(key, str) or not key.strip() or type(revision) is not int or revision < 1
-        for key, revision in value.items()
-    ):
-        raise ValueError("frozen annotation membership must map asset keys to revisions")
-    return value
+from labelloop_core.audit import AuditObservation, assess_audit
+from labelloop_core.qualification_data import require_name
 
 
 def record_annotation_audit(
@@ -46,14 +33,18 @@ def record_annotation_audit(
     audit_key: str,
     actor_id: str,
     observations: tuple[AuditObservation, ...],
+    sample_key: str | None = None,
 ) -> None:
     """Append actual observations, loading membership and prior actors from canonical rows.
 
-    Observations are independent human audit results, never model confidence prose.
-    The eventual sampling producer owns frozen-population coverage and statistics;
-    this conservative veto port neither qualifies a clean sample nor infers scores.
+    Sample-bound writes additionally check the committed selection and save its
+    fingerprint and membership verdict. Partial/adverse results are retained, never
+    counted as complete clean evidence. Unsampled writes remain veto-only evidence;
+    neither path qualifies a release, proves representative truth or infers scores.
     Callers commit this evidence before attempting promotion in a separate transaction.
     """
+    if sample_key is not None:
+        require_name(sample_key)
     if not actor_id.strip() or not audit_key.strip() or not observations:
         raise ValueError("audit requires an authenticated actor, identity and observations")
     if len({item.asset_id for item in observations}) != len(observations):
@@ -72,6 +63,18 @@ def record_annotation_audit(
             .one()
         )
         membership = release_membership(release["sample_revisions"])
+        record = {"observations": [asdict(item) for item in observations]}
+        if sample_key is not None:
+            frozen = load_audit_sample(
+                connection, project_id=project_id, sample_key=sample_key, release_id=release["id"]
+            )
+            verdict = assess_audit(frozen.sample, observations)
+            record["sample"] = {
+                "sample_key": sample_key,
+                "population_sha256": frozen.population_sha256,
+                "group_ids": frozen.group_ids,
+                "verdict": asdict(verdict),
+            }
         vetoes: dict[str, int] = {}
         for observation in observations:
             if membership.get(observation.asset_id) != observation.revision:
@@ -119,7 +122,7 @@ def record_annotation_audit(
                 release_id=release["id"],
                 audit_key=audit_key,
                 actor_id=actor_id,
-                record={"observations": [asdict(item) for item in observations]},
+                record=record,
                 vetoed_revisions=vetoes,
             )
         )

@@ -1,12 +1,13 @@
 """Synthetic PostgreSQL audit-population persistence, not annotation quality."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
 
 from labelloop_api import qualification_schema
-from labelloop_api.annotation_audit_store import lock_project
+from labelloop_api.annotation_audit_store import lock_project, record_annotation_audit
 from labelloop_api.audit_sample_store import freeze_audit_sample, load_audit_sample
 from labelloop_api.schema import (
     annotation_revision,
@@ -14,6 +15,7 @@ from labelloop_api.schema import (
     source_asset,
     source_split_assignment,
 )
+from labelloop_core.audit import AuditObservation
 
 
 def exercise_audit_sampling(engine, request):
@@ -189,8 +191,132 @@ def exercise_audit_sampling(engine, request):
             ).scalar_one()
             == 0
         )
+    observations = tuple(
+        AuditObservation(
+            item.asset_id, item.revision.revision, "fixture-independent-auditor", True, True, True
+        )
+        for item in frozen.sample.candidates
+    )
+    audit_args = dict(
+        project_key=request.project_id,
+        release_key=request.dataset_release_id,
+        actor_id="fixture-independent-auditor",
+        sample_key=frozen.sample.sample_id,
+    )
+    with engine.begin() as connection:
+        record_annotation_audit(
+            connection, **audit_args, audit_key="sample-partial", observations=observations[:1]
+        )
+        record_annotation_audit(
+            connection, **audit_args, audit_key="sample-complete", observations=observations
+        )
+        for bad, message in (
+            (replace(observations[0], asset_id="unselected"), "outside the frozen sample"),
+            (replace(observations[0], revision=2), "stale source revision"),
+            (replace(observations[0], reviewer_id="forged"), "authenticated principal"),
+        ):
+            with pytest.raises(ValueError, match=message):
+                record_annotation_audit(
+                    connection, **audit_args, audit_key="invalid-sample-result", observations=(bad,)
+                )
+        with pytest.raises(ValueError, match="unique assets"):
+            record_annotation_audit(
+                connection,
+                **audit_args,
+                audit_key="duplicate-observation",
+                observations=(observations[0], observations[0]),
+            )
+        with pytest.raises(sa.exc.NoResultFound):
+            record_annotation_audit(
+                connection,
+                **(audit_args | {"sample_key": "missing-sample"}),
+                audit_key="unknown-sample",
+                observations=observations,
+            )
+        # Even identical canonical membership is not the sample's original release.
+        other_release = request.dataset_release_id + "-identical-membership"
+        connection.execute(
+            sa.insert(canonical_dataset_release).values(
+                **(
+                    {
+                        key: value
+                        for key, value in release.items()
+                        if key not in {"id", "created_at"}
+                    }
+                    | {"release_key": other_release}
+                )
+            )
+        )
+        with pytest.raises(sa.exc.NoResultFound):
+            record_annotation_audit(
+                connection,
+                **(audit_args | {"release_key": other_release}),
+                audit_key="wrong-release-sample",
+                observations=observations,
+            )
+
+    with engine.begin() as connection:
+        results = {
+            row["audit_key"]: row["record"]
+            for row in connection.execute(
+                sa.select(qualification_schema.annotation_audit)
+            ).mappings()
+        }
+        assert set(results) == {"sample-partial", "sample-complete"}
+        partial = results["sample-partial"]["sample"]["verdict"]
+        assert not partial["passed"]
+        assert partial["pending_asset_ids"] == [observations[1].asset_id]
+        binding = results["sample-complete"]["sample"]
+        assert binding["population_sha256"] == frozen.population_sha256
+        assert binding["group_ids"] == frozen.group_ids
+        assert binding["verdict"]["passed"]
+        assert not binding["verdict"]["pending_asset_ids"]
+
+    def race_audit():
+        try:
+            with engine.begin() as connection:
+                record_annotation_audit(
+                    connection,
+                    **audit_args,
+                    audit_key="racing-sample-result",
+                    observations=observations,
+                )
+            return "saved"
+        except sa.exc.IntegrityError:
+            return "duplicate"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda _: race_audit(), range(2))) == ["duplicate", "saved"]
+
+    def fail_audit(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO qualification_annotation_audit"):
+            raise RuntimeError("injected bound audit write failure")
+
+    with engine.begin() as connection:
+        sa.event.listen(connection, "before_cursor_execute", fail_audit)
+        try:
+            with pytest.raises(RuntimeError, match="injected bound audit"):
+                record_annotation_audit(
+                    connection,
+                    **audit_args,
+                    audit_key="failed-bound-result",
+                    observations=observations,
+                )
+        finally:
+            sa.event.remove(connection, "before_cursor_execute", fail_audit)
+        assert (
+            connection.execute(
+                sa.select(sa.func.count())
+                .select_from(qualification_schema.annotation_audit)
+                .where(qualification_schema.annotation_audit.c.audit_key == "failed-bound-result")
+            ).scalar_one()
+            == 0
+        )
     return {
         "scope": "synthetic sampling/persistence only, not independent truth or HTTP acceptance",
+        "observations_bound_to_sample_and_release": True,
+        "partial_observations_remain_pending": True,
+        "bound_result_restart_race_and_failure_checked": True,
         "sample_id": frozen.sample.sample_id,
         "population_sha256": frozen.population_sha256,
         "group_ids": frozen.group_ids,

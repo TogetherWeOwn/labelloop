@@ -261,6 +261,45 @@ registry current-final enforcement, not the new sampler, HTTP/UI/restore accepta
 independent domain quality or final milestone delivery. Devin and native reviews
 remain gates; the PR stays draft.
 
+## Sample-bound audit observations — new assertions pending Actions
+
+Audit writes can now name a previously committed canonical sample. The writer
+loads it by project, release **and** sample identity under the same project lock,
+reproduces its selection, and uses the existing pure audit assessment to reject
+unselected/stale/dependent observations. Principal and canonical prior-actor checks
+still apply. Durable observations carry the sample key, population fingerprint,
+group snapshot and computed membership verdict; none is accepted from a caller.
+Partial and adverse observations remain durable veto evidence with explicit pending
+members. A complete clean membership verdict is not truth, an error estimate,
+a calibrated threshold or release qualification. Legacy unsampled writes remain
+veto-only and cannot be treated as completed sampled evidence.
+
+New adapter cases cover clean/partial/adverse/truncated and unsampled writes,
+selection/revision/reviewer substitution, and release-scoped lookup. Actions
+PostgreSQL smoke adds cross-connection binding recovery, missing-sample and
+identical-membership foreign-release rejection, duplicate observations, same-key
+races and injected append failure. The existing real-registry adverse-veto cases
+now use the committed canonical sample, retain partial pending members, and still
+require unchanged heads/event counts after a later clean full result. These are
+**unverified new assertions**, not HTTP or domain-quality acceptance. No new table,
+migration, dependency, endpoint or runtime is introduced.
+
+Canonical sampling head `6edd3fa296ca5f7bc3a1e7165888b425fac7c034` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42452679939) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42452679477).
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42452679939/job/128645069510)
+reported **1077 passed, 80 skipped**;
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42452679939/job/128645069489)
+reported **19 passed**, plus **24 passed** in the separate budget step;
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42452679939/job/128645069641)
+reported **39 passed**. Migration cycles, dev-stack, lint/types/import-contract,
+gitleaks and standards passed; web-build was path-skipped. This verifies the prior
+canonical sample slice only. Current group-relation revalidation, source/condition
+and original-pipeline provenance, trusted measurements/thresholds/teacher lineage,
+authoritative qualification loaders, authenticated consumers and expanded restore/UI
+acceptance remain pending. Required Devin, fresh-context and native reviews remain
+gates; the PR stays draft. The fixed 2026-11-09T12:00:00Z checkpoint is unchanged.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable
