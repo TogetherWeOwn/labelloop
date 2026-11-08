@@ -25,6 +25,7 @@ from labelloop_api.budget_store import (
     decode_entry,
     digest,
 )
+from labelloop_api.review_budget import ReviewBatch, ReviewPriceTable, ReviewUsage
 from labelloop_api.schema import project
 from labelloop_core.budget import (
     BudgetPolicy,
@@ -40,6 +41,19 @@ NOW = datetime(2026, 11, 7, 12, tzinfo=UTC)
 PRICES = TokenPrices("fixture-v1", 1_000_000, 2_000_000)
 INTENT = DispatchIntent("llm", "fixture", True, 10, 5)
 MIGRATION = Path(__file__).parents[1] / "migrations/versions/budget_0001_ledger.py"
+REVIEW_MIGRATION = MIGRATION.with_name("budget_0002_review_requests.py")
+REVIEW_PRICES = ReviewPriceTable(
+    "review-fixture-v1",
+    "fixture",
+    "fixture-model",
+    1_000_000,
+    2_000_000,
+    3_000_000,
+    "2026-01-01",
+    "https://example.com/fixture-prices",
+)
+BATCH = ReviewBatch("annotation-job", ("image-a", "image-b"), "fixture-model", "release-v1", 1)
+BATCH_INTENT = replace(INTENT, review_batch=BATCH)
 
 
 @dataclass(frozen=True)
@@ -100,6 +114,9 @@ def test_migration_is_frozen_and_matches_metadata():
     )
     with Operations.context(context):
         migration["upgrade"]()
+        review_migration = runpy.run_path(str(REVIEW_MIGRATION))
+        assert review_migration["down_revision"] == "budget_0001"
+        review_migration["upgrade"]()
     ddl = output.getvalue()
     for table in db.metadata.tables:
         assert f"CREATE TABLE {table}" in ddl
@@ -127,6 +144,7 @@ def store(monkeypatch):
             project.create(connection)
             with Operations.context(MigrationContext.configure(connection)):
                 runpy.run_path(str(MIGRATION))["upgrade"]()
+                runpy.run_path(str(REVIEW_MIGRATION))["upgrade"]()
             connection.execute(
                 sa.insert(project).values(
                     project_key="budget-fixture",
@@ -545,3 +563,303 @@ def test_iteration_does_not_reset_across_month_and_projects_are_isolated(store):
     reserve(store, request("one", project_id="another", month="2026-12"))
     assert store.snapshot("another").monthly_exposure("2026-12") == 40
     assert store.snapshot("budget-fixture").iteration_exposure("iteration") == 80
+
+
+def configure_review(store, *, autonomous=False, prices=REVIEW_PRICES):
+    store.set_policy(
+        "budget-fixture",
+        actor=ADMIN,
+        expected_revision=1,
+        policy=BudgetPolicy(100, 100, 100, autonomous),
+        pixel_providers=("fixture",),
+        prices=PRICES,
+        review_prices=prices,
+    )
+
+
+def reserve_review(store, *, intent=BATCH_INTENT, estimate=40, actor=ADMIN):
+    req = request(price_version=REVIEW_PRICES.version, estimate=estimate)
+    dry = store.prepare(req, intent, actor=LLM)
+    store.reserve(req.project_id, req.operation_id, dry.digest, actor=actor)
+    return dry
+
+
+def review_claim(store, request_id="request-a", **kwargs):
+    return store.claim_review_request(
+        "budget-fixture",
+        "one",
+        request_id,
+        **{
+            "actor": LLM,
+            "configuration_sha256": "a" * 64,
+            "image_id": "image-a",
+            "pass_index": 0,
+            "estimate": 20,
+            "forecast": ReviewUsage(10, 5),
+            **kwargs,
+        },
+    )
+
+
+def review_actual(store, request_id="request-a", **kwargs):
+    return store.reconcile_review_request(
+        "budget-fixture",
+        "one",
+        request_id,
+        **{
+            "actor": LLM,
+            "usage": ReviewUsage(2, 3),
+            "usage_request_id": request_id,
+            "receipt_sha256": "b" * 64,
+            **kwargs,
+        },
+    )
+
+
+def test_review_contract_round_trip_and_child_exposure_floor():
+    from dataclasses import asdict
+
+    decoded = DispatchIntent(**json.loads(json.dumps(asdict(BATCH_INTENT))))
+    assert decoded == BATCH_INTENT
+    assert len(decoded.review_batch.image_set_sha256) == 64
+    assert REVIEW_PRICES.cost(ReviewUsage(1, 1, 1)) == 6
+    req = request()
+    entry = LedgerEntry(req, SpendApproval(ADMIN.id, req.digest), exposure_floor=200)
+    assert entry.actual is None and entry.exposure == 200
+    assert decode_entry(json.loads(json.dumps(asdict(entry)))) == entry
+    with pytest.raises(ValueError):
+        replace(entry, state="settled", actual=40)
+    for changed in (
+        {"currency": "EUR"},
+        {"source_url": "https://user:password@example.com"},
+        {"image_per_million": -1},
+        {"effective_date": "2026-1-1"},
+    ):
+        with pytest.raises(ValueError):
+            replace(REVIEW_PRICES, **changed)
+    for changed in (
+        {"max_passes": True},
+        {"image_ids": ("image-b", "image-a")},
+        {"image_ids": ("image-a", "image-a")},
+        {"max_passes": 0},
+    ):
+        with pytest.raises(ValueError):
+            replace(BATCH, **changed)
+
+
+def test_review_binding_prices_full_max_pass_reservation_and_stale_click(store):
+    configure_review(store)
+    req = request(price_version=REVIEW_PRICES.version)
+    dry = store.prepare(req, BATCH_INTENT, actor=LLM)
+    for batch in (
+        replace(BATCH, image_ids=("image-b",)),
+        replace(BATCH, model_id="other"),
+        replace(BATCH, release_id="release-v2"),
+        replace(BATCH, max_passes=2),
+    ):
+        intent = replace(BATCH_INTENT, review_batch=batch)
+        # Changed model requires its own price table; no fallback to another model's rates.
+        if batch.model_id == "other":
+            refused("price_version_mismatch", store.prepare, req, intent, actor=LLM)
+        elif batch.max_passes == 2:
+            refused("estimate_below_forecast", store.prepare, req, intent, actor=LLM)
+        else:
+            store.prepare(req, intent, actor=LLM)
+            refused(
+                "stale_dry_run",
+                store.reserve,
+                req.project_id,
+                req.operation_id,
+                dry.digest,
+                actor=ADMIN,
+            )
+    reserve_review(
+        store, intent=replace(BATCH_INTENT, review_batch=replace(BATCH, max_passes=2)), estimate=80
+    )
+    assert store.snapshot(req.project_id).monthly_exposure(req.month) == 80
+    refused("budget_exceeded", reserve, store, request("two"))
+    refused("review_request_required", claim, store)
+    refused("review_request_required", store.reconcile, req.project_id, req.operation_id, actor=LLM)
+
+
+def test_review_price_table_required_admin_audit_and_policy_staleness(store):
+    configure_review(store, prices=None)
+    refused("no_price_table", reserve_review, store)
+    store.set_policy(
+        "budget-fixture",
+        actor=ADMIN,
+        expected_revision=2,
+        policy=BudgetPolicy(100, 100, 100),
+        pixel_providers=("fixture",),
+        review_prices=REVIEW_PRICES,
+    )
+    reserve_review(store)
+    store.set_policy(
+        "budget-fixture",
+        actor=ADMIN,
+        expected_revision=3,
+        policy=BudgetPolicy(100, 100, 100),
+        pixel_providers=("fixture",),
+        review_prices=replace(REVIEW_PRICES, version="review-fixture-v2"),
+    )
+    refused("stale_dry_run", review_claim, store)
+    with store.engine.connect() as connection:
+        events = (
+            connection.execute(sa.select(db.event).where(db.event.c.action == "policy"))
+            .mappings()
+            .all()
+        )
+    assert events[-1]["principal_id"] == ADMIN.id
+    assert events[-1]["record"]["review_prices"]["source_url"] == REVIEW_PRICES.source_url
+
+
+def test_review_child_claim_race_exhaustion_is_durable_and_not_replayable(store):
+    configure_review(store)
+    reserve_review(store)
+    barrier = Barrier(2)
+
+    def run(image):
+        barrier.wait(timeout=20)
+        try:
+            return review_claim(store, image, image_id=image, estimate=30)
+        except BudgetRefused as error:
+            assert error.code == "approval_exhausted"
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = [c for c in pool.map(run, BATCH.image_ids) if c]
+    assert len(claims) == 1
+    store.engine.dispose()
+    view = store.review_snapshot("budget-fixture", "one")
+    assert view["pause_reason"] == "approval_exhausted"
+    assert len(view["requests"]) == 1
+    assert view["requests"][0]["estimate"] == 30
+    assert store.snapshot("budget-fixture").entry("one").exposure == 40
+    refused("approval_exhausted", review_claim, store, "request-new")
+    refused("reconciliation_required", store.cancel, "budget-fixture", "one", actor=ADMIN)
+
+
+def test_review_one_request_per_image_pass_across_restart_and_strict_scope(store):
+    configure_review(store)
+    reserve_review(store)
+    for code, kwargs in (
+        ("worker_scope_mismatch", {"actor": PLATFORM}),
+        ("review_scope_mismatch", {"image_id": "not-in-batch"}),
+        ("review_scope_mismatch", {"pass_index": 1}),
+        ("intent_mismatch", {"configuration_sha256": "c" * 64}),
+        ("forecast_exceeds_batch", {"forecast": ReviewUsage(11, 5)}),
+        ("estimate_below_forecast", {"estimate": 1}),
+    ):
+        refused(code, review_claim, store, **kwargs)
+    review_claim(store)
+    store.engine.dispose()
+    refused("operation_not_dispatchable", review_claim, store)
+    refused("operation_not_dispatchable", review_claim, store, "different-request-id")
+    assert len(store.review_snapshot("budget-fixture", "one")["requests"]) == 1
+
+
+def test_review_unknown_then_original_price_actual_and_batch_finalization(store):
+    configure_review(store)
+    reserve_review(store)
+    review_claim(store)
+    store.reconcile_review_request("budget-fixture", "one", "request-a", actor=LLM)
+    child = store.review_snapshot("budget-fixture", "one")["requests"][0]
+    assert child["state"] == "unconfirmed" and child["actual"] is None
+    with store.engine.connect() as connection:
+        assert connection.execute(sa.select(db.review_request.c.evidence.is_(None))).scalar_one()
+    refused(
+        "reconciliation_required", store.finish_review_batch, "budget-fixture", "one", actor=LLM
+    )
+    refused("usage_attribution_mismatch", review_actual, store, usage_request_id="other")
+    store.set_policy(
+        "budget-fixture",
+        actor=ADMIN,
+        expected_revision=2,
+        policy=BudgetPolicy(100, 100, 100),
+        review_prices=replace(REVIEW_PRICES, input_per_million=9_000_000),
+    )
+    review_actual(store)
+    review_actual(store)
+    refused("actual_conflict", review_actual, store, receipt_sha256="c" * 64)
+    entry = store.finish_review_batch("budget-fixture", "one", actor=LLM)
+    assert entry.actual == 8 and entry.exposure == 8
+    assert store.finish_review_batch("budget-fixture", "one", actor=LLM) == entry
+    # Parent is settled, not a reusable batch allowance.
+    refused("operation_not_dispatchable", review_claim, store, "request-b", image_id="image-b")
+
+
+def test_review_402_and_overrun_keep_uncertain_exposure_and_pause_every_paid_stage(store):
+    configure_review(store)
+    reserve_review(store)
+    review_claim(store)
+    review_claim(store, "request-b", image_id="image-b")
+    review_actual(store, usage=ReviewUsage(200, 0))
+    gate = store.snapshot("budget-fixture")
+    assert gate.pause_reason == "estimate_overrun"
+    assert gate.entry("one").actual is None and gate.entry("one").exposure == 220
+    assert store.review_snapshot("budget-fixture", "one")["pause_reason"] == "approval_exhausted"
+    store.reconcile_review_request(
+        "budget-fixture", "one", "request-b", actor=LLM, status="insufficient_credits"
+    )
+    assert store.snapshot("budget-fixture").pause_reason == "insufficient_credits"
+    refused("paid_stages_paused", reserve, store, request("two"))
+    refused("paid_stages_paused", review_claim, store, "third")
+    refused(
+        "reconciliation_required", store.finish_review_batch, "budget-fixture", "one", actor=LLM
+    )
+    review_actual(store, "request-b", usage=ReviewUsage(0, 0))
+    assert store.finish_review_batch("budget-fixture", "one", actor=LLM).actual == 200
+    assert store.snapshot("budget-fixture").pause_reason == "insufficient_credits"
+
+
+def test_review_autonomous_child_limits_and_image_pricing(store):
+    configure_review(store, autonomous=True)
+    batch = replace(BATCH, max_image_tokens=2)
+    intent = replace(BATCH_INTENT, review_batch=batch)
+    refused("estimate_below_forecast", reserve_review, store, intent=intent)
+    reserve_review(store, intent=intent, estimate=52, actor=LLM)
+    refused("estimate_below_forecast", review_claim, store, forecast=ReviewUsage(10, 5, 2))
+    review_claim(store, forecast=ReviewUsage(10, 5, 2), estimate=26)
+    review_actual(store, usage=ReviewUsage(2, 3, 1))
+    entry = store.finish_review_batch("budget-fixture", "one", actor=LLM)
+    assert entry.actual == 11 and entry.reserved_autonomously
+
+
+def test_review_audit_failure_rolls_back_child_claim_and_evidence(store):
+    configure_review(store)
+    reserve_review(store)
+    with store.engine.begin() as connection:
+        connection.execute(
+            sa.text("""
+CREATE FUNCTION reject_budget_test_event() RETURNS trigger AS $$
+BEGIN RAISE EXCEPTION 'injected audit failure'; END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER reject_budget_event BEFORE INSERT ON budget_event
+FOR EACH ROW EXECUTE FUNCTION reject_budget_test_event();
+""")
+        )
+    with pytest.raises(DBAPIError):
+        review_claim(store)
+    assert store.review_snapshot("budget-fixture", "one")["requests"] == []
+    assert store.snapshot("budget-fixture").entry("one").state == "reserved"
+    with store.engine.begin() as connection:
+        connection.execute(sa.text("DROP TRIGGER reject_budget_event ON budget_event"))
+    review_claim(store)
+    with store.engine.begin() as connection:
+        connection.execute(
+            sa.text("""
+CREATE TRIGGER reject_budget_event BEFORE INSERT ON budget_event
+FOR EACH ROW EXECUTE FUNCTION reject_budget_test_event();
+""")
+        )
+    with pytest.raises(DBAPIError):
+        review_actual(store, usage=ReviewUsage(200, 0))
+    assert store.snapshot("budget-fixture").pause_reason is None
+    assert store.review_snapshot("budget-fixture", "one")["requests"][0]["actual"] is None
+    for statement in (
+        sa.delete(db.review_request),
+        sa.update(db.review_request).values(estimate=0),
+        sa.update(db.review_request).values(claim_id=str(uuid4())),
+    ):
+        with pytest.raises(DBAPIError), store.engine.begin() as connection:
+            connection.execute(statement)

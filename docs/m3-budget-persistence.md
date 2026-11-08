@@ -1,7 +1,9 @@
 # Shared durable budget service
 
 This slice implements the PostgreSQL service behind plan §12.1 for both paid
-workers. It reuses `labelloop_core.budget` unchanged. It does not expose HTTP
+workers. It reuses `labelloop_core.budget`; the review-batch extension adds a
+conservative child-exposure floor without changing the existing transitions.
+It does not expose HTTP
 routes, authenticate a caller, perform provider I/O, enable spend, change a real
 budget or finish end-to-end acceptance checks 23/24. Authenticated HTTP and worker
 consumers remain separate integration work.
@@ -108,6 +110,76 @@ operation does not implicitly grant later pixel sharing. Worker consumers must
 use the exact persisted intent/configuration, never let model output choose the
 provider or the pixel flag.
 
+## Bounded review batches and child requests
+
+One admin click approves one annotation-job review stage: fixed sorted image IDs,
+one configured provider/model, pinned project release, maximum passes and full
+maximum-pass estimate. Supply `DispatchIntent.review_batch = ReviewBatch(...)`;
+its complete binding participates in the dry-run digest, including the image set.
+`ReviewBatch.image_set_sha256` is available for the summary. Repreparing with a
+different set, model, release, pass bound or estimate invalidates the old click.
+Provider/configuration/probe identity remains in the configuration hash. The
+consumer validates image membership in the pinned release and must not populate
+these records from model output.
+
+`ReviewPriceTable` is an admin-maintained, audited policy record for one configured
+provider/model, with USD input/output/image token rates, version, effective date
+and public source reference. It is never fetched from the provider. No current
+review table gives `no_price_table`; mismatched model/version or a future effective
+date refuses dispatch preparation. Each edit increments the policy revision,
+invalidating outstanding approvals. Reservation copies the original table for
+later actual reconciliation. Source references must contain no credentials or
+sensitive content; they are audit data, not endpoints the ledger will contact.
+Fixtures use invented rates only. Unsupported usage, including cached or
+separately priced reasoning usage, must stay unconfirmed rather than be coerced
+into this three-rate record.
+
+The parent reserves the full forecast: conservatively rounded cost of the
+per-image/pass input, output and image-token bounds × image count × max passes.
+It counts once against every project/month/iteration/operation limit. The worker
+uses `claim_review_request` for each full evidence-bundle request (one image/pass),
+not the flat `claim` API. It supplies the immutable parent configuration hash,
+image/pass, child request ID, estimate and supported token bounds. Multiple
+network requests/crops for a single image/pass are not authorized by this port;
+the worker must compose the evidence bundle in one request, or use a separately
+approved operation contract rather than bypass this bound.
+
+Under the same project lock, the service validates the image/pass and bounds,
+rechecks policy/month/privacy/limits and computes child actuals plus outstanding
+estimates. If another child would exceed the approved parent estimate, it commits
+`approval_exhausted` and audit **before** returning refusal. That batch pause is
+sticky: it is not cleared by lower actuals, replay or a policy edit. The remainder
+requires a new operation, dry run and click (or a new bounded autonomous
+reservation), never an in-place approval top-up. Autonomous mode applies all the
+same checks. A rejected child has no claim and performs no I/O.
+
+A successful child claim inserts its estimate and consumes its unique image/pass
+and request ID in one transaction, before returning dispatch permission. Only
+that successful call permits one provider attempt. Duplicate IDs/image-passes,
+restart, lost receipt and uncertain responses cannot obtain another claim.
+The first child also consumes the parent's reservation, preventing cancellation
+from releasing a potentially sent batch. The parent claim is never exposed.
+
+`reconcile_review_request` accepts operation-attributed supported `ReviewUsage`
+with a child request ID and receipt digest, or records unconfirmed/402 outcomes.
+Missing usage retains the child estimate and SQL NULL evidence. A 402 pauses all
+paid stages and never retries. A child actual above its estimate also pauses paid
+work. The parent remains unconfirmed and reserves at least its original estimate
+until the trusted job controller stops the stage and calls `finish_review_batch`.
+That method requires every sent child confirmed, closes the batch permanently and
+settles the exact sum of actuals, releasing unused capacity. It cannot release a
+lost/uncertain child estimate. Known child exposure above the parent estimate is
+retained in `LedgerEntry.exposure_floor` while the parent actual stays NULL; the
+ledger never hides an overrun or invents a confirmed total for unfinished work.
+`review_snapshot` exposes child state and batch pause to authorized consumers.
+
+Local admin-registered private/loopback endpoints do not use this paid port and
+write **no** budget ledger rows. Review run usage/probe/cache provenance is still
+required. Trusted registration and dispatch integration owns address validation,
+DNS re-resolution and no redirects under Security; this store provides no generic
+endpoint or arbitrary-network authority. Provider enabled/key/probe checks and
+actual request-bound enforcement are also dispatch integration obligations.
+
 ## Persistence and migration
 
 Alembic revision `budget_0001` follows delivered `0002_local_models`. Its distinct
@@ -115,7 +187,8 @@ identity is reserved with the authentication migration owner; sibling auth uses
 `0003_authentication`. Whichever sibling integrates second must reconcile the
 migration graph (a merge revision or a not-yet-shipped down-revision adjustment)
 with that owner before merge. This is integration ordering, not a global build
-hold. Historical DDL is explicit and does not import application metadata.
+hold. `budget_0002` follows `budget_0001`, adding the child request table and
+batch-specific pause. Historical DDL is explicit and does not import application metadata.
 
 Tables: `budget_head` (current policy/revision/pause), `budget_dry_run` (current
 unreserved summary), `budget_operation` (immutable reservation identity plus

@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import uuid4
@@ -20,6 +20,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import budget_schema as db
+from labelloop_api.review_budget import ReviewBatch, ReviewPriceTable, ReviewUsage
 from labelloop_core.budget import (
     BudgetGate,
     BudgetPolicy,
@@ -74,8 +75,13 @@ class DispatchIntent:
     sends_pixels: bool = True
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    review_batch: ReviewBatch | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.review_batch, dict):
+            object.__setattr__(self, "review_batch", ReviewBatch(**self.review_batch))
+        if self.review_batch is not None and self.stage != "llm":
+            raise ValueError("review batches require the LLM stage")
         if self.stage not in {"llm", "platform"}:
             raise ValueError("unsupported paid stage")
         if re.fullmatch("[a-z][a-z0-9_-]{0,63}", self.provider_id) is None:
@@ -133,6 +139,7 @@ def decode_entry(value: dict) -> LedgerEntry:
         state=value["state"],
         actual=value["actual"],
         reserved_autonomously=value["reserved_autonomously"],
+        exposure_floor=value.get("exposure_floor", 0),
     )
 
 
@@ -228,6 +235,7 @@ class BudgetStore:
         policy: BudgetPolicy,
         pixel_providers: tuple[str, ...] = (),
         prices: TokenPrices | None = None,
+        review_prices: ReviewPriceTable | None = None,
     ) -> int:
         """Admin-only CAS; every edit invalidates old dry runs and unsent claims.
 
@@ -243,6 +251,7 @@ class BudgetStore:
             "limits": asdict(policy),
             "pixel_providers": sorted(set(pixel_providers)),
             "prices": asdict(prices) if prices else None,
+            "review_prices": asdict(review_prices) if review_prices else None,
         }
         with self.engine.begin() as connection:
             connection.execute(
@@ -283,12 +292,42 @@ class BudgetStore:
                 raise BudgetRefused("reservation_month_mismatch")
             prices = head["policy"]["prices"]
             if intent.stage == "llm":
-                if not prices or prices["version"] != request.price_version:
-                    raise BudgetRefused("price_version_mismatch")
                 if intent.max_input_tokens is None or intent.max_output_tokens is None:
                     raise BudgetRefused("forecast_required")
-                bound = TokenUsage(intent.max_input_tokens, intent.max_output_tokens)
-                if request.estimate < TokenPrices(**prices).cost(bound):
+                if intent.review_batch is not None:
+                    table = head["policy"].get("review_prices")
+                    if table is None:
+                        raise BudgetRefused("no_price_table")
+                    review_prices = ReviewPriceTable(**table)
+                    batch = intent.review_batch
+                    if (
+                        review_prices.version != request.price_version
+                        or review_prices.provider_id != intent.provider_id
+                        or review_prices.model_id != batch.model_id
+                        or review_prices.effective_date > self._now().strftime("%Y-%m-%d")
+                    ):
+                        raise BudgetRefused("price_version_mismatch")
+                    # Bounds are per image/pass; reserve the full maximum batch.
+                    bound_cost = (
+                        review_prices.cost(
+                            ReviewUsage(
+                                intent.max_input_tokens,
+                                intent.max_output_tokens,
+                                batch.max_image_tokens,
+                            )
+                        )
+                        * len(batch.image_ids)
+                        * batch.max_passes
+                    )
+                else:
+                    if not prices:
+                        raise BudgetRefused("no_price_table")
+                    if prices["version"] != request.price_version:
+                        raise BudgetRefused("price_version_mismatch")
+                    bound_cost = TokenPrices(**prices).cost(
+                        TokenUsage(intent.max_input_tokens, intent.max_output_tokens)
+                    )
+                if request.estimate < bound_cost:
                     raise BudgetRefused("estimate_below_forecast")
             if connection.execute(
                 sa.select(db.operation.c.operation_id).where(
@@ -359,7 +398,11 @@ class BudgetStore:
                         policy_revision=head["revision"],
                         entry=asdict(entry),
                         intent=asdict(intent),
-                        prices=head["policy"]["prices"],
+                        prices=(
+                            head["policy"].get("review_prices")
+                            if intent.review_batch is not None
+                            else head["policy"]["prices"]
+                        ),
                     )
                 )
                 self._event(connection, actor, head, "reserve", asdict(entry), operation_id)
@@ -384,6 +427,8 @@ class BudgetStore:
             row = self._operation(connection, project_id, operation_id)
             intent = DispatchIntent(**row["intent"])
             self._worker(actor, intent)
+            if intent.review_batch is not None:
+                raise BudgetRefused("review_request_required")
             self._privacy(head, intent)
             request = decode_entry(row["entry"]).request
             if row["policy_revision"] != head["revision"]:
@@ -457,7 +502,10 @@ class BudgetStore:
         with self.engine.begin() as connection:
             head = self._head(connection, project_id)
             row = self._operation(connection, project_id, operation_id)
-            self._worker(actor, DispatchIntent(**row["intent"]))
+            intent = DispatchIntent(**row["intent"])
+            self._worker(actor, intent)
+            if intent.review_batch is not None:
+                raise BudgetRefused("review_request_required")
             gate = self._gate(connection, head)
             changed = getattr(gate, status)(operation_id)
             if changed != gate:
@@ -487,6 +535,8 @@ class BudgetStore:
             row = self._operation(connection, project_id, operation_id)
             intent = DispatchIntent(**row["intent"])
             self._worker(actor, intent)
+            if intent.review_batch is not None:
+                raise BudgetRefused("review_request_required")
             gate = self._gate(connection, head)
             evidence = None
             actual = None
@@ -542,6 +592,268 @@ class BudgetStore:
                     operation_id,
                 )
         return changed.entry(operation_id)
+
+    @staticmethod
+    def _review_requests(connection, project_id, operation_id):
+        return (
+            connection.execute(
+                sa.select(db.review_request).where(
+                    *BudgetStore._scope(db.review_request, project_id, operation_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    def claim_review_request(
+        self,
+        project_id: str,
+        operation_id: str,
+        request_id: str,
+        *,
+        actor: Principal,
+        configuration_sha256: str,
+        image_id: str,
+        pass_index: int,
+        estimate: int,
+        forecast: ReviewUsage,
+    ) -> DispatchClaim:
+        """Commit a child estimate and one-use claim under the approved batch.
+
+        One request contains the full evidence bundle for an image/pass. Consumers
+        compare the parent configuration hash and enforce these request bounds.
+        The returned operation_id is the child request ID, not the batch ID.
+        """
+        identity(request_id)
+        identity(image_id)
+        sha256(configuration_sha256)
+        nonnegative(pass_index)
+        nonnegative(estimate)
+        exhausted = False
+        with self.engine.begin() as connection:
+            head = self._head(connection, project_id)
+            row = self._operation(connection, project_id, operation_id)
+            intent = DispatchIntent(**row["intent"])
+            self._worker(actor, intent)
+            batch = intent.review_batch
+            if batch is None:
+                raise BudgetRefused("review_batch_required")
+            self._privacy(head, intent)
+            gate = self._gate(connection, head)
+            gate._require_active()
+            entry = gate.entry(operation_id)
+            if row["review_pause"] is not None:
+                raise BudgetRefused(row["review_pause"])
+            if entry.state not in {"reserved", "dispatched", "unconfirmed"}:
+                raise BudgetRefused("operation_not_dispatchable")
+            if row["policy_revision"] != head["revision"]:
+                raise BudgetRefused("stale_dry_run")
+            if configuration_sha256 != entry.request.configuration_sha256:
+                raise BudgetRefused("intent_mismatch")
+            if entry.request.month != self._now().strftime("%Y-%m"):
+                raise BudgetRefused("reservation_month_mismatch")
+            if image_id not in batch.image_ids or pass_index >= batch.max_passes:
+                raise BudgetRefused("review_scope_mismatch")
+            if (
+                forecast.input_tokens > intent.max_input_tokens
+                or forecast.output_tokens > intent.max_output_tokens
+                or forecast.image_tokens > batch.max_image_tokens
+            ):
+                raise BudgetRefused("forecast_exceeds_batch")
+            prices = ReviewPriceTable(**row["prices"])
+            if estimate < prices.cost(forecast):
+                raise BudgetRefused("estimate_below_forecast")
+            gate._check_limits(entry.request, extra=0)
+            if estimate > gate.policy.operation_limit:
+                raise BudgetRefused("budget_exceeded")
+            children = self._review_requests(connection, project_id, operation_id)
+            if any(
+                child["request_id"] == request_id
+                or (child["image_id"] == image_id and child["pass_index"] == pass_index)
+                for child in children
+            ):
+                raise BudgetRefused("operation_not_dispatchable")
+            exposure = sum(
+                child["actual"] if child["actual"] is not None else child["estimate"]
+                for child in children
+            )
+            if exposure + estimate > entry.request.estimate:
+                # Commit the pause/audit before reporting refusal to the caller.
+                connection.execute(
+                    sa.update(db.operation)
+                    .where(*self._scope(db.operation, project_id, operation_id))
+                    .values(review_pause="approval_exhausted")
+                )
+                self._event(
+                    connection,
+                    actor,
+                    head,
+                    "approval_exhausted",
+                    {"request_id": request_id, "estimate": estimate},
+                    operation_id,
+                )
+                exhausted = True
+            else:
+                claim = DispatchClaim(project_id, request_id, str(uuid4()), configuration_sha256)
+                record = {
+                    "project_id": project_id,
+                    "operation_id": operation_id,
+                    "request_id": request_id,
+                    "image_id": image_id,
+                    "pass_index": pass_index,
+                    "estimate": estimate,
+                    "forecast": asdict(forecast),
+                    "configuration_sha256": configuration_sha256,
+                    "claim_id": claim.claim_id,
+                    "claimed_by": actor.id,
+                    "state": "dispatched",
+                }
+                connection.execute(sa.insert(db.review_request).values(**record))
+                if entry.state == "reserved":
+                    changed = gate.dispatch(operation_id)
+                    # The parent receipt is never exposed as dispatch permission.
+                    self._save(
+                        connection,
+                        head,
+                        changed,
+                        operation_id,
+                        {"claim_id": str(uuid4()), "claimed_by": actor.id},
+                    )
+                self._event(connection, actor, head, "review_request_claim", record, operation_id)
+        if exhausted:
+            raise BudgetRefused("approval_exhausted")
+        return claim
+
+    def reconcile_review_request(
+        self,
+        project_id: str,
+        operation_id: str,
+        request_id: str,
+        *,
+        actor: Principal,
+        usage: ReviewUsage | None = None,
+        usage_request_id: str | None = None,
+        receipt_sha256: str | None = None,
+        status: Literal["unconfirmed", "insufficient_credits"] = "unconfirmed",
+    ) -> None:
+        """Reconcile only supported, attributed usage using original batch prices.
+
+        Missing/unsupported usage keeps the child estimate. Known child overruns
+        pause all paid work and raise the parent's conservative exposure floor;
+        they never fabricate a confirmed total while another child is uncertain.
+        """
+        if status not in {"unconfirmed", "insufficient_credits"}:
+            raise ValueError("unsupported review outcome")
+        if status == "insufficient_credits" and usage is not None:
+            raise ValueError("record a 402 separately from attributed usage")
+        with self.engine.begin() as connection:
+            head = self._head(connection, project_id)
+            row = self._operation(connection, project_id, operation_id)
+            intent = DispatchIntent(**row["intent"])
+            self._worker(actor, intent)
+            if intent.review_batch is None:
+                raise BudgetRefused("review_batch_required")
+            gate = self._gate(connection, head)
+            children = self._review_requests(connection, project_id, operation_id)
+            child = next((c for c in children if c["request_id"] == request_id), None)
+            if child is None:
+                raise BudgetRefused("operation_not_dispatched")
+            evidence = None
+            actual = None
+            if usage is not None:
+                if usage_request_id != request_id:
+                    raise BudgetRefused("usage_attribution_mismatch")
+                sha256(receipt_sha256)
+                actual = ReviewPriceTable(**row["prices"]).cost(usage)
+                evidence = {
+                    "request_id": request_id,
+                    "receipt_sha256": receipt_sha256,
+                    "usage": asdict(usage),
+                }
+                if child["evidence"] is not None:
+                    if child["evidence"] != evidence:
+                        raise BudgetRefused("actual_conflict")
+                    return
+            elif child["state"] in {"settled", "insufficient_credits"}:
+                return
+            if gate.entry(operation_id).state == "settled":
+                raise BudgetRefused("operation_not_dispatchable")
+            state = "settled" if actual is not None else status
+            updates = {"state": state}
+            if actual is not None:
+                updates |= {"actual": actual, "evidence": evidence}
+            connection.execute(
+                sa.update(db.review_request)
+                .where(
+                    *self._scope(db.review_request, project_id, operation_id),
+                    db.review_request.c.request_id == request_id,
+                )
+                .values(**updates)
+            )
+            children = self._review_requests(connection, project_id, operation_id)
+            exposure = sum(
+                c["actual"] if c["actual"] is not None else c["estimate"] for c in children
+            )
+            entry = replace(gate.entry(operation_id), exposure_floor=exposure)
+            pause = gate.pause_reason
+            if status == "insufficient_credits" and actual is None:
+                entry = replace(entry, state="insufficient_credits")
+                pause = "insufficient_credits"
+            elif actual is not None and actual > child["estimate"] and pause is None:
+                pause = "estimate_overrun"
+            changed = gate._replace(entry, pause)
+            extra = (
+                {"review_pause": "approval_exhausted"}
+                if (exposure > entry.request.estimate)
+                else None
+            )
+            self._save(connection, head, changed, operation_id, extra)
+            self._event(
+                connection,
+                actor,
+                head,
+                "review_request_outcome",
+                {"request_id": request_id, **updates},
+                operation_id,
+            )
+
+    def finish_review_batch(
+        self, project_id: str, operation_id: str, *, actor: Principal
+    ) -> LedgerEntry:
+        """Close the batch only with all dispatched requests confirmed; no retry.
+
+        The trusted job controller calls this after stopping the bounded stage.
+        Unused capacity is released only then. A remainder uses a new operation,
+        dry run and click; an exhausted approval is never topped up in place.
+        """
+        with self.engine.begin() as connection:
+            head = self._head(connection, project_id)
+            row = self._operation(connection, project_id, operation_id)
+            intent = DispatchIntent(**row["intent"])
+            self._worker(actor, intent)
+            if intent.review_batch is None:
+                raise BudgetRefused("review_batch_required")
+            children = self._review_requests(connection, project_id, operation_id)
+            if not children or any(c["actual"] is None for c in children):
+                raise BudgetRefused("reconciliation_required")
+            gate = self._gate(connection, head)
+            changed = gate.settle(operation_id, sum(c["actual"] for c in children))
+            if changed != gate:
+                self._save(connection, head, changed, operation_id)
+                self._event(connection, actor, head, "review_batch_finished", {}, operation_id)
+        return changed.entry(operation_id)
+
+    def review_snapshot(self, project_id: str, operation_id: str) -> dict:
+        """Internal query; consuming HTTP adapter must authorize access."""
+        with self.engine.begin() as connection:
+            self._head(connection, project_id)
+            row = self._operation(connection, project_id, operation_id)
+            return {
+                "pause_reason": row["review_pause"],
+                "requests": [
+                    dict(c) for c in self._review_requests(connection, project_id, operation_id)
+                ],
+            }
 
     def snapshot(self, project_id: str) -> BudgetGate:
         """Internal query; HTTP authorization belongs to the consuming admin adapter."""
