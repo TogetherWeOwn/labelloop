@@ -260,14 +260,13 @@ def current_qualification_context(
     Keep the outer transaction alive through the consuming state change.
     """
     from labelloop_api.evaluation_group_store import load_evaluation_set
-    from labelloop_api.training_group_store import model_training_groups
+    from labelloop_api.training_group_store import model_input_groups
 
     dataset = context.evidence.final_test.dataset
     lineage = context.evidence.lineage
     project_id = lock_project(connection, dataset.project_id)
-    training_groups = model_training_groups(connection, project_id=project_id, model_id=model_id)
-    if not set(training_groups) <= set(lineage.training_group_ids):
-        raise ValueError("qualification lineage omits compiled training groups")
+    inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
+    inputs.require_isolated(context.evidence)
     require_development_uses(
         connection,
         project_key=dataset.project_id,

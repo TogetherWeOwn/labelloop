@@ -1,9 +1,11 @@
-"""Current compiled training groups across stored checkpoint and teacher ancestors.
+"""Current compiled input groups across stored checkpoint and teacher ancestors.
 
-Reference use, selection and calibration still need authoritative producers. Missing
-external/imported lineage is not inferred. The caller retains the project and
-canonical group locks through its decision.
+Reference use and noncompiled selection/calibration still need trusted producers.
+Missing external/imported lineage is not inferred. The caller retains the project
+and canonical group locks through its decision.
 """
+
+from dataclasses import dataclass
 
 import sqlalchemy as sa
 
@@ -13,17 +15,40 @@ from labelloop_api.generated_label_store import label_teacher_runs
 from labelloop_api.qualification_store import release_membership
 from labelloop_api.schema import canonical_dataset_release, yolo_dataset_variant
 from labelloop_api.source_group_store import current_release_groups
+from labelloop_core.qualification import QualificationEvidence
 from labelloop_core.qualification_data import require_name
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInputGroups:
+    training: tuple[str, ...]
+    selection: tuple[str, ...]
+
+    def require_isolated(self, evidence: QualificationEvidence) -> None:
+        if not set(self.training) <= set(evidence.lineage.training_group_ids):
+            raise ValueError("qualification lineage omits compiled training groups")
+        if set(self.selection) & set(evidence.final_test.dataset.group_ids):
+            raise ValueError("final-test groups overlap compiled checkpoint selection")
+        if set(self.selection) & {source.group_id for source in evidence.canary_audit.sources}:
+            raise ValueError("canary groups overlap compiled checkpoint selection")
 
 
 def model_training_groups(
     connection: sa.Connection, *, project_id: object, model_id: object
 ) -> tuple[str, ...]:
+    return model_input_groups(connection, project_id=project_id, model_id=model_id).training
+
+
+def model_input_groups(
+    connection: sa.Connection, *, project_id: object, model_id: object
+) -> ModelInputGroups:
     """Check all reachable immutable inputs using the veto's existing ancestry graph.
 
-    Unregistered runs and unselected checkpoints still contribute weight-fitting
-    groups. Teacher edges use frozen canonical revisions, conservatively retaining
-    influence after later revisions. No unrelated run's groups are included.
+    Unregistered runs and unselected checkpoints contribute weight-fitting and
+    compiled validation groups. Validation guided checkpoint selection, so it cannot
+    be independent final/canary evidence even for an inherited teacher/checkpoint.
+    Teacher edges conservatively retain influence after later revisions. Unrelated
+    runs are excluded; compiled test members are checked but not assumed accessed.
     """
     run_id = connection.execute(
         sa.select(model_schema.model_release.c.training_run_id).where(
@@ -59,18 +84,17 @@ def model_training_groups(
         run_id,
         label_teacher_runs(connection, project_id),
     )
-    return tuple(
-        sorted(
-            {
-                group
-                for ancestor in sorted(ancestors, key=str)
-                for group in _compiled_training_groups(connection, project_id, inputs[ancestor])
-            }
-        )
+    compiled = tuple(
+        _compiled_input_groups(connection, project_id, inputs[ancestor])
+        for ancestor in sorted(ancestors, key=str)
+    )
+    return ModelInputGroups(
+        tuple(sorted({group for groups in compiled for group in groups.training})),
+        tuple(sorted({group for groups in compiled for group in groups.selection})),
     )
 
 
-def _compiled_training_groups(connection, project_id, row):
+def _compiled_input_groups(connection, project_id, row):
     # Validate all derivatives, but never misreport val/test as weight-fitting data.
     manifest = row["input_manifest"]
     if (
@@ -110,4 +134,7 @@ def _compiled_training_groups(connection, project_id, row):
     groups = tuple(sorted({group for group, split in assignments.values() if split == "train"}))
     if not groups:
         raise ValueError("qualification requires nonempty compiled training groups")
-    return groups
+    return ModelInputGroups(
+        groups,
+        tuple(sorted({group for group, split in assignments.values() if split == "val"})),
+    )

@@ -35,9 +35,11 @@ from labelloop_core.qualification_data import SourceGroup
 from labelloop_core.registry import PromotionPolicy
 
 
-def _outcome(connection, release, context, actor, *, canary):
-    """Seed separate synthetic canonical sources; never relabel actual CPU fixtures."""
-    prefix = release.release_id + ("-assembly-canary" if canary else "-assembly-audit")
+def _outcome(
+    connection, release, context, actor, *, canary, group_id=None, split="train", suffix=""
+):
+    """Seed synthetic sources, optionally on an already-used group; never edit CPU inputs."""
+    prefix = release.release_id + ("-assembly-canary" if canary else "-assembly-audit") + suffix
     project_id = lock_project(connection, release.project_id)
     original = (
         connection.execute(
@@ -49,7 +51,7 @@ def _outcome(connection, release, context, actor, *, canary):
         .one()
     )
     membership = {}
-    group = prefix + "-group"
+    group = group_id if group_id is not None else prefix + "-group"
     for positive in (True, False):
         key = prefix + ("-positive" if positive else "-negative")
         digest = hashlib.sha256(key.encode()).hexdigest()
@@ -91,7 +93,7 @@ def _outcome(connection, release, context, actor, *, canary):
                 assignment_version=original["assignment_version"],
                 asset_id=asset_id,
                 group_id=group,
-                split="train",
+                split=split,
                 seed=7,
                 algorithm="explicit-synthetic",
                 thresholds={},
@@ -644,7 +646,78 @@ def exercise_context_assembly(engine, release, final, context, actor):
         training_asset = next(
             sample["asset_id"] for sample in manifest["samples"] if sample["split"] == "train"
         )
-        for scenario in ("omitted", "relation"):
+        validation_sample = next(
+            sample for sample in manifest["samples"] if sample["split"] == "val"
+        )
+        from labelloop_api.training_group_store import model_input_groups
+
+        inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
+        assert inputs.training == training_groups
+        assert {
+            sample["group_id"] for sample in manifest["samples"] if sample["split"] == "val"
+        } <= set(inputs.selection)
+        with connection.begin_nested() as transaction:
+            # This new persisted candidate-bound canary has valid sampling and clean
+            # synthetic measurements, but its group already guided CPU checkpoint selection.
+            reused = _outcome(
+                connection,
+                release,
+                context,
+                actor,
+                canary=True,
+                group_id=validation_sample["group_id"],
+                split="val",
+                suffix="-reused-selection",
+            )
+            from labelloop_api.annotation_evidence_store import load_annotation_evidence
+
+            stored = load_annotation_evidence(
+                connection,
+                project_key=release.project_id,
+                release_key=reused.release_key,
+                audit_key=reused.audit_key,
+                evidence_key=reused.evidence_key,
+                canary_model_key=release.release_id,
+            )
+            replay = replace(
+                loaded, evidence=replace(loaded.evidence, canary_audit=stored.evidence)
+            )
+            with pytest.raises(
+                ValueError, match="canary groups overlap compiled checkpoint selection"
+            ):
+                load_qualification_context(connection, **(arguments | {"canary": reused}))
+            with pytest.raises(
+                ValueError, match="canary groups overlap compiled checkpoint selection"
+            ):
+                require_automatic_acceptance(
+                    connection,
+                    **scope,
+                    evaluation_key=final.run_id,
+                    qualification=replay,
+                    scope=context.evidence.scope[0],
+                )
+            with pytest.raises(
+                ValueError, match="canary groups overlap compiled checkpoint selection"
+            ):
+                change_registry(
+                    connection,
+                    **scope,
+                    actor_id=actor,
+                    expected_revision=before.revision,
+                    candidate_key=release.release_id,
+                    evaluation_key=final.run_id,
+                    policy=PromotionPolicy(1, 0.0),
+                    qualification=replay,
+                )
+            assert load_registry(connection, **scope) == before
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(model_schema.promotion_event)
+                ).scalar_one()
+                == count
+            )
+            transaction.rollback()
+        for scenario in ("omitted", "relation", "validation-relation"):
             with connection.begin_nested() as transaction:
                 replay = loaded
                 message = "omits compiled training groups"
@@ -659,7 +732,12 @@ def exercise_context_assembly(engine, release, final, context, actor):
                         ),
                     )
                 else:
-                    keys = (training_asset, annotation.release_key + "-positive")
+                    keys = (
+                        validation_sample["asset_id"]
+                        if scenario == "validation-relation"
+                        else training_asset,
+                        annotation.release_key + "-positive",
+                    )
                     identities = {
                         row.asset_key: row.id
                         for row in connection.execute(

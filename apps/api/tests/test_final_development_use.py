@@ -162,7 +162,11 @@ def test_current_context_rechecks_development_and_calibration_identities(failure
     context = qualification_context(release, report, PromotionPolicy(1, 0.9))
     with (
         patch.object(store, "lock_project", return_value="project-id"),
-        patch.object(training_group_store, "model_training_groups", return_value=()),
+        patch.object(
+            training_group_store,
+            "model_input_groups",
+            return_value=training_group_store.ModelInputGroups((), ()),
+        ),
         patch.object(store, "load_final_test", return_value=context.current_final_test),
         patch.object(
             evaluation_group_store,
@@ -238,7 +242,11 @@ def test_current_context_reloads_every_canonical_evaluation_population(side, tar
 
     with (
         patch.object(store, "lock_project", return_value="project-id"),
-        patch.object(training_group_store, "model_training_groups", return_value=()),
+        patch.object(
+            training_group_store,
+            "model_input_groups",
+            return_value=training_group_store.ModelInputGroups((), ()),
+        ),
         patch.object(store, "require_development_uses"),
         patch.object(store, "load_final_test", return_value=current),
         patch.object(evaluation_group_store, "load_evaluation_set", side_effect=canonical) as load,
@@ -289,11 +297,11 @@ def test_current_context_reloads_candidate_and_ancestor_training_groups(side, sc
         assert kwargs == {"project_id": "project-id", "model_id": "candidate-id"}
         if scenario in {"conflict", "missing"}:
             raise ValueError("invalid current compiled training groups")
-        return groups
+        return training_group_store.ModelInputGroups(groups, ())
 
     with (
         patch.object(store, "lock_project", side_effect=lock),
-        patch.object(training_group_store, "model_training_groups", side_effect=training) as load,
+        patch.object(training_group_store, "model_input_groups", side_effect=training) as load,
         patch.object(store, "require_development_uses") as uses,
         patch.object(store, "load_final_test", return_value=context.current_final_test),
         patch.object(

@@ -6,7 +6,45 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Canonical training reload in consuming transactions — pending Actions
+## Compiled checkpoint-selection isolation — pending Actions
+
+The existing compiled-input reader now returns distinct training and validation-use
+sets from one traversal of the same stored checkpoint/recorded teacher ancestry.
+Validation guided checkpoint selection, including for unselected checkpoints and
+unregistered ancestor runs; it is not weight-fitting data, but cannot become
+independent final or fresh canary evidence. Unrelated runs are excluded. All source
+revisions, assignments and current transitive relations retain the existing checks
+and locks. Compiled test members are checked, not assumed accessed.
+
+Both persisted assembly and the transaction-bound registry/acceptance/drift guard
+reject final/canary groups that overlap those derived selection groups. Shared
+current development data remains permitted. The old training-only read delegates
+to the same reader, so there is no second ancestry engine, repeated graph per use,
+new endpoint, schema/codec change, migration or dependency.
+
+Thirty-six new adapter cases cover inherited validation through checkpoint/teacher
+edges and mixed cycles, exclusion of unrelated/test groups, both recipes and both
+assembly/consumer paths, rejection of final/canary reuse and shared-development
+controls. Paired PostgreSQL controls persist a clean synthetic candidate-bound
+canary on an already-used validation group, require rejection by assembly and the
+actual registry/automatic-acceptance transactions, and retain complete heads/event
+count. A new validation-to-audit relation also rejects historical-context replay.
+These new assertions await exact-head Actions; no local tests or builds ran.
+
+Preceding exact `70b7094a711c140212b91a7e202fa925b0ec0254`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42488733871) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42488733601) succeeded,
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42488733871/job/128756244112),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42488733871/job/128756244068),
+[queue PostgreSQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42488733871/job/128756244016),
+migration round trip/all four parent upgrades, dev-stack, web-build and lint/types/
+import-contract. This verifies prior canonical training reload, not the new selection
+checks or final HTTP/UI/expanded-restore acceptance. Reference use and noncompiled
+ancestor selection/calibration, original pipeline/acceptance/score/threshold/source/
+condition and independent measurement producers remain unfinished. Real null targets
+stay fail-closed; synthetic mechanics are not domain gold.
+
+## Canonical training reload in consuming transactions — historical preparation
 
 The shared current-context loader now requires the consuming candidate/champion's
 stored model identity. It reloads every compiled checkpoint/recorded label-teacher
