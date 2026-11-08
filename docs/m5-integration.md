@@ -6,7 +6,48 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Recorded proposal reference isolation — pending Actions
+## Original automatic-acceptance policy snapshot — pending Actions
+
+After the current qualification/drift guard succeeds, the annotation transaction
+now records the checked pipeline and qualification targets using the existing
+strict `QualificationPolicy` codec in the immutable review event. It also retains
+the qualification identity, complete release digest, final evaluation identity,
+actual accepted scope, and fingerprint of every canonical revision decision field.
+The snapshot shares the revision/teacher-origin savepoint, including negatives
+and accepted labels that are not yet training-eligible. Human/proposed revisions
+do not acquire an automatic-acceptance snapshot.
+
+The exact-revision reader checks project/source, parent revision, unique apply
+event, principal identity, record schema, canonical fingerprint, typed policy and
+scope. Historical revisions lacking the snapshot fail closed; no current champion,
+policy or latest annotation is substituted. Existing event mutation guards apply.
+No new table, migration, endpoint, dependency or core codec is introduced.
+
+Adapter controls exercise positive/negative round trips on both recipes, missing/
+duplicate events, substituted revisions/principals, malformed policy/scope/digests,
+legacy records and pre-write failure. Both-recipe PostgreSQL annotation exercises
+now reload the actual saved snapshot, change current reviewer policy and retain the
+original snapshot while rejecting old-context acceptance, and verify injected
+revision/origin failures leave no next-revision provenance before a successful retry.
+These new assertions await exact-head Actions; no local tests or new PASS claimed.
+
+This records the policy actually checked by the internal acceptance guard, not
+proof the pinned reviewer/prompt/reference pipeline executed, score/threshold
+calibration, authenticated source/condition truth or independent measurement.
+Ordinary population sampling does not yet require this reader; historical and
+human acceptance attribution still need explicit handling. Authenticated consumers,
+full audit/canary provenance and expanded restore/UI acceptance remain unfinished.
+Real targets remain null and fail closed; synthetic fixture policy is preserved
+as fixture-only. The fixed 2026-11-09T12:00:00Z checkpoint is unchanged.
+
+Previous exact `5a574009af70dbbc8f8b8cf4235d53d273e9d2e8`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42494499212) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42494498908) succeeded,
+including unit, ML smoke, queue PostgreSQL, migration round trip/all four parent
+upgrades, dev-stack, web-build and lint/types/import-contract. This verifies the
+prior reference slice, not the new snapshot reader or milestone acceptance.
+
+## Recorded proposal reference isolation — historical preparation
 
 Annotation review events now retain every supplied completed proposal run in their
 existing correction JSON, atomically with the revision and teacher origins. The

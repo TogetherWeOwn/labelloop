@@ -11,11 +11,16 @@ from labelloop_api.acceptance_store import pause_acceptance, require_automatic_a
 from labelloop_api.annotation_audit_store import record_annotation_audit
 from labelloop_api.annotation_evidence_store import record_annotation_evidence
 from labelloop_api.audit_sample_store import freeze_audit_sample
+from labelloop_api.automatic_review_store import load_automatic_acceptance
 from labelloop_api.final_test_store import register_final_test
 from labelloop_api.model_store import change_registry, load_registry
 from labelloop_api.qualification_context_store import (
     AnnotationOutcomeRef,
     load_qualification_context,
+)
+from labelloop_api.qualification_policy_store import (
+    append_qualification_policy,
+    load_qualification_policy,
 )
 from labelloop_api.qualification_store import lock_project
 from labelloop_api.revision_store import AutomaticReview, append_review, completeness_context_hash
@@ -306,6 +311,44 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 _proposal_origin_fixture(connection, release, asset_key, 1, "-b"),
             )
             assert append_review(connection, expected_revision=1, **arguments) == 2
+            original = load_automatic_acceptance(
+                connection, project_key=release.project_id, asset_key=asset_key, revision=2
+            )
+            assert original.policy.pipeline == loaded.current_pipeline
+            assert original.policy.targets == loaded.evidence.targets
+            assert original.policy.targets.fixture_only is True
+            assert original.scope == automatic.scope
+            assert original.release_sha256 == loaded.evidence.release_sha256
+            assert original.evaluation_key == final.run_id
+            with pytest.raises(ValueError, match="one exact original"):
+                load_automatic_acceptance(
+                    connection, project_key=release.project_id, asset_key=asset_key, revision=3
+                )
+            # Original provenance does not silently become today's policy on reload.
+            with connection.begin_nested() as policy_transaction:
+                current = load_qualification_policy(
+                    connection, project_key=release.project_id, recipe_key=release.recipe_id
+                )
+                append_qualification_policy(
+                    connection,
+                    project_key=release.project_id,
+                    recipe_key=release.recipe_id,
+                    actor_id=actor,
+                    expected_revision=current.revision,
+                    policy=replace(
+                        current.policy,
+                        pipeline=replace(current.policy.pipeline, reviewer_model_version="changed"),
+                    ),
+                )
+                assert (
+                    load_automatic_acceptance(
+                        connection, project_key=release.project_id, asset_key=asset_key, revision=2
+                    )
+                    == original
+                )
+                with pytest.raises(ValueError):
+                    append_review(connection, expected_revision=2, **arguments)
+                policy_transaction.rollback()
             from labelloop_api.generated_label_store import label_teacher_runs
 
             project_id = connection.execute(
@@ -459,7 +502,29 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     == 2
                 )
                 pause_transaction.rollback()
+            with pytest.raises(ValueError, match="one exact original"):
+                load_automatic_acceptance(
+                    connection, project_key=release.project_id, asset_key=asset_key, revision=3
+                )
+            assert (
+                load_automatic_acceptance(
+                    connection, project_key=release.project_id, asset_key=asset_key, revision=2
+                )
+                == original
+            )
             assert append_review(connection, expected_revision=2, **arguments) == 3
+            assert (
+                load_automatic_acceptance(
+                    connection, project_key=release.project_id, asset_key=asset_key, revision=3
+                )
+                == original
+            )
+            assert (
+                load_automatic_acceptance(
+                    connection, project_key=release.project_id, asset_key=asset_key, revision=2
+                )
+                == original
+            )
             expected_runs = {
                 connection.execute(
                     sa.select(model_schema.model_release.c.training_run_id).where(

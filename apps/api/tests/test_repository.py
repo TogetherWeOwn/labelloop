@@ -254,6 +254,8 @@ def test_system_policy_auto_acceptance_is_not_categorically_forbidden(monkeypatc
 
     guard = MagicMock()
     monkeypatch.setattr(revision_store, "require_automatic_acceptance", guard)
+    snapshot = MagicMock(return_value={"checked-policy": "snapshot"})
+    monkeypatch.setattr(revision_store, "automatic_acceptance_record", snapshot)
     monkeypatch.setattr(revision_store, "lock_project", MagicMock())
     automatic = revision_store.AutomaticReview(
         "recipe", "final-evaluation", (ScopeCell("item", "source", "ordinary"),), MagicMock()
@@ -284,6 +286,11 @@ def test_system_policy_auto_acceptance_is_not_categorically_forbidden(monkeypatc
             )
             == 2
         )
+    snapshot.assert_called_once()
+    assert snapshot.call_args.kwargs["qualification"] is automatic.qualification
+    assert snapshot.call_args.kwargs["scope"] == automatic.scope
+    assert snapshot.call_args.kwargs["evaluation_key"] == automatic.evaluation_key
+    assert snapshot.call_args.kwargs["revision"]["revision"] == 2
     guard.assert_called_once()
     assert guard.call_args.kwargs == {
         "project_key": "project-key",

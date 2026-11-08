@@ -13,6 +13,7 @@ from labelloop_core.qualification import QualificationContext
 from labelloop_core.qualification_data import ScopeCell, require_name, require_names, require_scope
 
 from .acceptance_store import require_automatic_acceptance
+from .automatic_review_store import automatic_acceptance_record
 from .generated_label_store import proposal_teacher, record_generated_label_origin
 from .qualification_store import lock_project
 from .repository import source_uuid
@@ -256,6 +257,18 @@ def append_review(
             "training_eligible": training_eligible,
             "gold_eligible": gold_eligible,
         }
+        correction = {"new_revision": expected_revision + 1}
+        if proposal_run_keys:
+            correction["proposal_run_keys"] = sorted(proposal_run_keys)
+        if automatic is not None:
+            correction["automatic_acceptance"] = automatic_acceptance_record(
+                project_key=project_key,
+                asset_key=asset_id,
+                revision=values,
+                evaluation_key=automatic.evaluation_key,
+                scope=automatic.scope,
+                qualification=automatic.qualification,
+            )
         connection.execute(
             insert(review_event).values(
                 asset_id=asset_uuid,
@@ -263,8 +276,7 @@ def append_review(
                 actor_id=actor_id,
                 decision="apply_revision",
                 expected_revision=expected_revision,
-                correction={"new_revision": expected_revision + 1}
-                | ({"proposal_run_keys": sorted(proposal_run_keys)} if proposal_run_keys else {}),
+                correction=correction,
                 reason="expected-revision guarded",
             )
         )
