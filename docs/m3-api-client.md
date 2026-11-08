@@ -26,6 +26,8 @@ snapshot. The browser uses `openapi-fetch` **0.15.0**, sharing the generated pat
 parameter and response types rather than a second hand-maintained API interface.
 Both direct versions and their transitive resolutions are locked. The Actions web
 job regenerates the declarations and refuses a diff before lint/types/tests/build.
+The OpenAPI snapshot selects both Python and web jobs, even on an API-only PR;
+a regression checks the actual workflow area configuration to keep this edge intact.
 No remote schema URL or provider credential is used during generation. Do not edit
 the generated JSON/declarations directly or run CI gates locally.
 

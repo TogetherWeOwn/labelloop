@@ -102,7 +102,7 @@ describe('generated annotation consumer', () => {
     [404, 'annotation_not_found'], [422, 'invalid_request'],
     [503, 'annotations_unavailable'], [500, 'request_failed'],
   ])('redacts HTTP %i without retrying or rendering server text', async (status, code) => {
-    const fetch = respond({ detail: 'fixture-private-driver-detail' }, status as number)
+    const fetch = respond({ detail: 'fixture-private-driver-detail' }, status)
     await expect(readAnnotation(project, asset)).rejects.toMatchObject({
       name: 'AnnotationReadError', code, message: code, status,
     })

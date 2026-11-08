@@ -1,6 +1,8 @@
 """Schema drift and boundary documentation checks; no provider or database access."""
 
 import json
+import re
+from fnmatch import fnmatchcase
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -63,6 +65,17 @@ def test_auth_contract_does_not_document_raw_validation_inputs():
     password = schema["components"]["schemas"]["Login"]["properties"]["password"]
     assert password["writeOnly"] is True
     assert password["format"] == "password"
+
+
+def test_api_snapshot_selects_both_schema_and_client_drift_gates():
+    workflow = SNAPSHOT.parents[2] / ".github" / "workflows" / "ci.yml"
+    match = re.search(r"^\s+areas-json: '(.+)'$", workflow.read_text(encoding="utf-8"), re.M)
+    assert match is not None, "cannot find the actual CI change-area configuration"
+    areas = json.loads(match[1])
+    for area in ("python", "web"):
+        assert any(fnmatchcase("apps/api/openapi.json", pattern) for pattern in areas[area]), (
+            f"API-only snapshot edits must select {area} drift checks"
+        )
 
 
 def test_export_does_not_enable_public_schema_or_docs(monkeypatch):
