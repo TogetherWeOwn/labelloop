@@ -108,6 +108,52 @@ jobs:
       - run: uv run pytest
       - run: uv run python scripts/check-fixtures.py
 
+  queue-postgres:
+    needs: [changes, full-run]
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LABELLOOP_QUEUE_TESTS: "1"
+      DATABASE_URL: postgresql+psycopg://fixture:fixture@localhost:5432/labelloop
+    services:
+      postgres:
+        image: docker.io/pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: labelloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d labelloop"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Check migration round trip on disposable PostgreSQL
+        run: |
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini downgrade base
+          uv run alembic -c apps/api/alembic.ini upgrade head
+      - run: uv run pytest workers/core/tests/test_jobs.py -v --junitxml=queue-evidence.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: queue-evidence
+          path: queue-evidence.xml
+          if-no-files-found: error
+          retention-days: 7
+
   import-contract:
     needs: [changes, full-run]
     if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).python
@@ -215,7 +261,7 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
-      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py -v --basetemp=ml-smoke-evidence
+      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -232,7 +278,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, full-run, lint, types, unit, import-contract, web-build, dev-stack, ml-smoke]
+    needs: [changes, full-run, lint, types, unit, queue-postgres, import-contract, web-build, dev-stack, ml-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
