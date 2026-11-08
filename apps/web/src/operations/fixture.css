@@ -1,0 +1,13 @@
+/* Isolated evidence entry only; the application shell remains owned by M3. */
+body { margin: 0; background: var(--two-color-bg-canvas); color: var(--two-color-text-primary); }
+.fixture-frame { font-family: var(--two-font-ui); line-height: var(--two-line-height-body); }
+.fixture-frame :is(main,footer,.fixture-header) { max-width: var(--two-layout-container); margin: auto; padding: var(--two-space-5); }
+.fixture-header { border-bottom: 1px solid var(--two-color-line-hairline); }
+.fixture-header p { margin: 0; }
+.fixture-header .danger-text { color: var(--two-color-state-danger); }
+.fixture-header nav { display: flex; gap: var(--two-space-4); flex-wrap: wrap; }
+.fixture-frame a { color: inherit; }
+.fixture-frame :focus-visible { outline: var(--two-size-focus-width) solid var(--two-color-focus-ring); outline-offset: var(--two-size-focus-offset); }
+.fixture-skip:not(:focus) { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+.fixture-frame footer { border-top: 1px solid var(--two-color-line-hairline); font-size: var(--two-font-size-small); }
+@media (max-width: 820px) { .fixture-frame :is(main,footer,.fixture-header) { padding: var(--two-space-4); } }
