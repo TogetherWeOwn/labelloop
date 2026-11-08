@@ -17,17 +17,7 @@ SNAPSHOT = Path("packages/platform/src/labelloop_platform/contract/openapi.json"
 
 
 def check(image: str) -> None:
-    if (ROOT / SNAPSHOT).is_file():
-        snapshot = (ROOT / SNAPSHOT).read_text()
-    else:
-        # Consumer branches can adopt the accepted scanner repair without the
-        # Platform implementation. Full-history checkout contains its merged fixture.
-        snapshot = subprocess.check_output(
-            ["git", "show", f"93a4e40dcfd5a6729f7c8ee7c4093208a2ad10f2:{SNAPSHOT.as_posix()}"],
-            cwd=ROOT,
-            text=True,
-            timeout=30,
-        )
+    snapshot = (ROOT / SNAPSHOT).read_text()
     config = (ROOT / ".gitleaks.toml").read_text()
     # Public, invalid key material; never generate or read an actual credential.
     canary = base64.b64encode(b"public scanner regression canary, not key material" * 4).decode()
