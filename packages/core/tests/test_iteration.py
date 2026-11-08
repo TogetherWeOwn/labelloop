@@ -615,14 +615,20 @@ def test_uncertain_external_intent_reconciles_never_dispatches_twice() -> None:
     key = StageKey("sync", "full320")
     state = begin_stage(state, key)
     # Simulated provider mutation applied, response lost before the job stores a receipt.
-    calls = [operation_id(state, key)]
+    committed = state.record(key)
+    assert committed is not None
     restored = pickle.loads(pickle.dumps(state))
     for _ in range(3):
-        restored = begin_stage(restored, key)
+        repeated = begin_stage(restored, key)
+        assert repeated == restored
+        assert repeated.record(key) == committed
+        restored = repeated
         assert recover_stage(restored, key) == "reconcile"
-    assert len(calls) == 1
     restored = finish_stage(restored, key, receipt_for(restored, key))
-    assert recover_stage(restored, key) == "reuse" and len(calls) == 1
+    assert recover_stage(restored, key) == "reuse"
+    completed = restored.record(key)
+    assert completed is not None and completed.operation_id == committed.operation_id
+    assert operation_id(restored, key) == committed.operation_id
 
 
 def test_cancel_retains_pending_intent_until_readback() -> None:
