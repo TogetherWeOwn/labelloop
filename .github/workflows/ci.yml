@@ -238,7 +238,7 @@ jobs:
       LABELLOOP_RECOVERY_DRILL: "1"
       RECOVERY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       RECOVERY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      RECOVERY_EVIDENCE_DIR: ${{ runner.temp }}/recovery-evidence
+      RECOVERY_EVIDENCE_DIR: ${{ github.workspace }}/recovery-evidence
       COMPOSE_PROJECT_NAME: recovery-${{ github.run_id }}-${{ github.run_attempt }}
       POSTGRES_PORT: "55432"
       S3_PORT: "59000"
@@ -266,7 +266,7 @@ jobs:
         if: always()
         with:
           name: recovery-drill-evidence
-          path: ${{ runner.temp }}/recovery-evidence
+          path: recovery-evidence
           if-no-files-found: error
           retention-days: 7
 

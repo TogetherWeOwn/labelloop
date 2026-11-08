@@ -18,7 +18,6 @@ from labelloop_api.backup_manifest import (
     MAX_ROWS,
     MAX_SNAPSHOT_BYTES,
     SCHEMA_REVISION,
-    AuditSeal,
     BackupManifest,
     EncryptionMetadata,
     ObjectInventory,
