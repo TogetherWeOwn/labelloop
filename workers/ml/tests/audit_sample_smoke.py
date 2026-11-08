@@ -12,6 +12,7 @@ from labelloop_api.audit_sample_store import freeze_audit_sample, load_audit_sam
 from labelloop_api.schema import (
     annotation_revision,
     canonical_dataset_release,
+    similarity_relation,
     source_asset,
     source_split_assignment,
 )
@@ -312,8 +313,10 @@ def exercise_audit_sampling(engine, request):
             ).scalar_one()
             == 0
         )
+    exercise_current_groups(engine, request, arguments, project_id, frozen, observations)
     return {
         "scope": "synthetic sampling/persistence only, not independent truth or HTTP acceptance",
+        "current_transitive_group_checks_and_writer_fence": True,
         "observations_bound_to_sample_and_release": True,
         "partial_observations_remain_pending": True,
         "bound_result_restart_race_and_failure_checked": True,
@@ -325,3 +328,146 @@ def exercise_audit_sampling(engine, request):
         "racing_identity_has_one_winner": True,
         "missing_population_and_failed_write_leave_no_sample": True,
     }
+
+
+def exercise_current_groups(engine, request, arguments, project_id, frozen, observations):
+    checked = dict(
+        project_id=project_id, sample_key=frozen.sample.sample_id, require_current_groups=True
+    )
+    with engine.begin() as connection:
+        lock_project(connection, request.project_id)
+        assert load_audit_sample(connection, **checked) == frozen
+    with engine.begin() as connection:
+        assets = dict(
+            connection.execute(
+                sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                    source_asset.c.project_id == project_id
+                )
+            ).all()
+        )
+        ordinary = assets[observations[0].asset_id]
+        other = assets[observations[1].asset_id]
+        # Identical canonical pixels cannot become independent by relabelling a
+        # pinned assignment. Check both fresh sampling and reuse of an old sample.
+        with connection.begin_nested() as transaction:
+            connection.execute(
+                sa.update(source_split_assignment)
+                .where(
+                    source_split_assignment.c.asset_id == other,
+                    source_split_assignment.c.assignment_version
+                    == request.split_assignment_version,
+                )
+                .values(group_id="invented-independent-group")
+            )
+            for operation in ("reuse", "freeze"):
+                with pytest.raises(ValueError, match="merge pinned groups"):
+                    if operation == "reuse":
+                        load_audit_sample(connection, **checked)
+                    else:
+                        freeze_audit_sample(
+                            connection, **(arguments | {"sample_key": "invalid-current-groups"})
+                        )
+            transaction.rollback()
+
+        def add_source(key, digest, split=None, group="one-shared-group"):
+            asset_id = connection.execute(
+                sa.insert(source_asset).values(
+                    asset_key=request.project_id + key,
+                    project_id=project_id,
+                    sha256=digest,
+                    object_key=f"sha256/{digest[:2]}/{digest}",
+                    width=32,
+                    height=32,
+                    exif_orientation=1,
+                    source_uri="fixture://current-groups",
+                )
+            ).inserted_primary_key[0]
+            if split is not None:
+                connection.execute(
+                    sa.insert(source_split_assignment).values(
+                        assignment_version=request.split_assignment_version,
+                        asset_id=asset_id,
+                        group_id=group,
+                        split=split,
+                        seed=9,
+                        algorithm="explicit-synthetic",
+                        thresholds={},
+                        reason="fixture current-relation check",
+                        locked=True,
+                    )
+                )
+            return asset_id
+
+        def relate(left, right):
+            connection.execute(
+                sa.insert(similarity_relation).values(
+                    left_asset_id=left,
+                    right_asset_id=right,
+                    reason="metadata",
+                    evidence="synthetic relation",
+                    algorithm_version="fixture-current-groups",
+                )
+            )
+
+        with connection.begin_nested() as transaction:
+            bridge = add_source("-current-bridge", "b" * 64)
+            # An unrelated unassigned source does not block a valid population.
+            assert load_audit_sample(connection, **checked) == frozen
+            relate(ordinary, bridge)
+            with pytest.raises(ValueError, match="foreign or unassigned"):
+                load_audit_sample(connection, **checked)
+            transaction.rollback()
+        with connection.begin_nested() as transaction:
+            bridge = add_source("-current-bridge", "b" * 64, "train")
+            heldout = add_source("-current-heldout", "c" * 64, "test", "separate-final-group")
+            relate(ordinary, bridge)
+            relate(bridge, heldout)
+            with pytest.raises(ValueError, match="cross pinned splits"):
+                load_audit_sample(connection, **checked)
+            # Historical evidence remains readable and an adverse observation is
+            # still appended, never discarded because new relationships surfaced.
+            assert (
+                load_audit_sample(connection, **(checked | {"require_current_groups": False}))
+                == frozen
+            )
+            record_annotation_audit(
+                connection,
+                project_key=request.project_id,
+                release_key=request.dataset_release_id,
+                audit_key="adverse-after-new-relation",
+                actor_id="fixture-independent-auditor",
+                sample_key=frozen.sample.sample_id,
+                observations=(replace(observations[0], labels_correct=False),),
+            )
+            assert connection.execute(
+                sa.select(qualification_schema.annotation_audit.c.vetoed_revisions).where(
+                    qualification_schema.annotation_audit.c.audit_key
+                    == "adverse-after-new-relation"
+                )
+            ).scalar_one() == {observations[0].asset_id: observations[0].revision}
+            transaction.rollback()
+
+    # A raw edge writer that does not take the project lock cannot race a current
+    # check. The database timeout bounds this negative control; no polling/sleep.
+    edge = sa.insert(similarity_relation).values(
+        left_asset_id=ordinary,
+        right_asset_id=other,
+        reason="metadata",
+        evidence="synthetic writer fence",
+        algorithm_version="fixture-current-groups",
+    )
+    with engine.begin() as reader:
+        lock_project(reader, request.project_id)
+        assert load_audit_sample(reader, **checked) == frozen
+        with engine.begin() as writer:
+            writer.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+            with writer.begin_nested() as transaction:
+                with pytest.raises(sa.exc.DatabaseError, match="lock timeout"):
+                    writer.execute(edge)
+                transaction.rollback()
+    # Once the reader commits the same writer can proceed; do not retain the edge.
+    with engine.connect() as writer:
+        with writer.begin() as transaction:
+            writer.execute(sa.text("SET LOCAL lock_timeout = '1s'"))
+            writer.execute(edge)
+            transaction.rollback()

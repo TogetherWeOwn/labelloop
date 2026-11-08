@@ -20,6 +20,7 @@ from labelloop_api.schema import (
     source_asset,
     source_split_assignment,
 )
+from labelloop_api.source_group_store import current_release_groups
 from labelloop_core.audit import AuditCandidate, AuditSample, select_audit_sample
 from labelloop_core.domain import AnnotationRevision, DatasetObject
 from labelloop_core.geometry import Box
@@ -147,6 +148,14 @@ def freeze_audit_sample(
         )
         if len(rows) != len(membership) or {row["asset_key"] for row in rows} != set(membership):
             raise ValueError("audit population has missing canonical revisions or pinned groups")
+        checked_groups = current_release_groups(
+            connection,
+            project_id=project_id,
+            assignment_version=release["assignment_version"],
+            asset_keys=frozenset(membership),
+        )
+        if checked_groups != {row["asset_key"]: row["group_id"] for row in rows}:
+            raise ValueError("pinned groups changed during audit population preparation")
         prior: dict[object, list[tuple[int, str]]] = {}
         for event in connection.execute(
             sa.select(
@@ -195,7 +204,14 @@ def load_audit_sample(
     project_id: object,
     sample_key: str,
     release_id: object | None = None,
+    require_current_groups: bool = False,
 ) -> FrozenAuditSample:
+    """Historical reads preserve adverse evidence; qualification must recheck groups.
+
+    The checked path requires the caller's project lock and retains relation-table
+    read locks through commit. A valid grouping is necessary, never sufficient for
+    independent audit truth, representative error bounds or qualification.
+    """
     statement = sa.select(qualification_schema.audit_sample).where(
         qualification_schema.audit_sample.c.project_id == project_id,
         qualification_schema.audit_sample.c.sample_key == sample_key,
@@ -223,6 +239,31 @@ def load_audit_sample(
         raise ValueError("durable audit sample does not match its frozen population")
     for value in groups.values():
         require_name(value)
+    if require_current_groups:
+        release = (
+            connection.execute(
+                sa.select(canonical_dataset_release).where(
+                    canonical_dataset_release.c.id == row["release_id"],
+                    canonical_dataset_release.c.project_id == project_id,
+                    canonical_dataset_release.c.frozen,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        membership = release_membership(release["sample_revisions"])
+        if membership != {
+            item.asset_id: item.revision.revision for item in population.candidates
+        } or set(membership) & set(release["excluded_asset_ids"]):
+            raise ValueError("audit population no longer matches canonical release membership")
+        current = current_release_groups(
+            connection,
+            project_id=project_id,
+            assignment_version=release["assignment_version"],
+            asset_keys=frozenset(membership),
+        )
+        if current != groups:
+            raise ValueError("audit population no longer matches pinned source groups")
     return FrozenAuditSample(
         sample,
         row["population_sha256"],

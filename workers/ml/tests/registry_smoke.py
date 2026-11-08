@@ -227,6 +227,9 @@ def seed_variant(connection, request, manifest, *, asset_suffix=""):
     # Explicit synthetic canonical rows exercise persisted audit lineage only;
     # these are not the actual image labels or domain gold of the CPU run.
     membership = {}
+    # The paired ordinary sources are correlated; unrelated lineage-control
+    # sources must not claim the same pixel digest as the audited population.
+    source_digest = hashlib.sha256((request.project_id + asset_suffix).encode()).hexdigest()
     for kind in ("positive", "negative"):
         asset_key = f"{request.project_id}-synthetic-ordinary-{kind}{asset_suffix}"
         connection.execute(
@@ -234,8 +237,8 @@ def seed_variant(connection, request, manifest, *, asset_suffix=""):
             .values(
                 project_id=project_id,
                 asset_key=asset_key,
-                sha256="a" * 64,
-                object_key="sha256/aa/" + "a" * 64,
+                sha256=source_digest,
+                object_key=f"sha256/{source_digest[:2]}/{source_digest}",
                 width=32,
                 height=32,
                 exif_orientation=1,

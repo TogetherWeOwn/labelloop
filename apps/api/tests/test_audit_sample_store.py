@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from labelloop_api import annotation_audit_store, qualification_schema
+from labelloop_api import annotation_audit_store, audit_sample_store, qualification_schema
 from labelloop_api.audit_sample_store import (
     canonical_candidate,
     freeze_audit_sample,
@@ -172,6 +172,44 @@ def test_bound_sample_lookup_includes_project_release_and_sample_identity():
         "sample_key_1": "audit",
         "release_id_1": "release",
     }
+
+
+@pytest.mark.parametrize("change", ["none", "membership", "exclusion", "groups", "relation"])
+def test_current_sample_rechecks_entire_population_not_only_selection(monkeypatch, change):
+    sample_row = stored_sample() | {"release_id": "release"}
+    membership = {"ordinary": 2, "second": 2}
+    release_row = {
+        "sample_revisions": membership | ({"second": 3} if change == "membership" else {}),
+        "excluded_asset_ids": ["second"] if change == "exclusion" else [],
+        "assignment_version": "pinned-version",
+    }
+    connection = MagicMock()
+    first, second = MagicMock(), MagicMock()
+    first.mappings.return_value.one.return_value = sample_row
+    second.mappings.return_value.one.return_value = release_row
+    connection.execute.side_effect = [first, second]
+    checker = MagicMock(return_value=sample_row["record"]["groups"])
+    if change == "groups":
+        checker.return_value = {"ordinary": "changed", "second": "changed"}
+    elif change == "relation":
+        checker.side_effect = ValueError("current source relationships cross pinned splits")
+    monkeypatch.setattr(audit_sample_store, "current_release_groups", checker)
+    arguments = dict(project_id="project", sample_key="audit", require_current_groups=True)
+    if change == "none":
+        assert load_audit_sample(connection, **arguments) == load_audit_sample(
+            StoredSample(sample_row), project_id="project", sample_key="audit"
+        )
+        checker.assert_called_once_with(
+            connection,
+            project_id="project",
+            assignment_version="pinned-version",
+            asset_keys=frozenset(membership),
+        )
+    else:
+        with pytest.raises(ValueError):
+            load_audit_sample(connection, **arguments)
+        if change in {"membership", "exclusion"}:
+            checker.assert_not_called()
 
 
 @pytest.mark.parametrize("kind", ["clean", "partial", "adverse", "truncated", "unsampled"])
