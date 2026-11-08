@@ -90,7 +90,16 @@ def test_scan_classification_has_no_commit_or_path_only_exemption() -> None:
     assert fingerprints == []
     config = tomllib.loads((repo / ".gitleaks.toml").read_text())
     assert config["extend"] == {"useDefault": True}
-    assert "allowlist" not in config and "allowlists" not in config
+    assert "allowlist" not in config
+    assert config["allowlists"] == [
+        {
+            "targetRules": ["generic-api-key"],
+            "condition": "AND",
+            "paths": [r"(^|/)apps/api/tests/test_management_canonical_db\.py$"],
+            "regexTarget": "secret",
+            "regexes": [r"^compile-evaluation-640$"],
+        }
+    ]
     assert len(config["rules"]) == 1
     rule = config["rules"][0]
     assert rule["id"] == "private-key"

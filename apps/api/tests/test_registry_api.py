@@ -158,14 +158,15 @@ def test_store_failure_is_redacted_and_rolls_back_outer_transaction(
 
     client, _ = http
     headers = admin_headers(client)
+    probe_id = str(uuid4())
 
     def fail(connection, **kwargs):
         connection.execute(
             insert(auth_event).values(
-                id=str(uuid4()),
+                id=probe_id,
                 principal_id=kwargs["actor_id"],
                 occurred_at=NOW,
-                action="registry_adapter_probe",
+                action="logout",
             )
         )
         raise error
@@ -176,8 +177,6 @@ def test_store_failure_is_redacted_and_rolls_back_outer_transaction(
     assert response.json() == {"detail": detail}
     with store.engine.connect() as connection:
         assert (
-            connection.execute(
-                select(auth_event.c.id).where(auth_event.c.action == "registry_adapter_probe")
-            ).all()
+            connection.execute(select(auth_event.c.id).where(auth_event.c.id == probe_id)).all()
             == []
         )
