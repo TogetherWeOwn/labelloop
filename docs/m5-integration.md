@@ -472,6 +472,43 @@ No dependencies were installed and no test ran locally. Raw-log escape protectio
 was retained; without a complete failure transcript, no claim is made that the
 head assertion explains every unit failure. Corrected-head Actions remains required.
 
+## Current persisted context assembly — new assertions pending Actions
+
+`qualification_context_store.load_qualification_context` loads the exact scoped model
+and linked report, current policy and final-test journal, committed measured audit,
+and complete-model-bound canary. It derives the final release and exact selection
+from stored report/exposure records rather than caller-provided state. Both outcome
+reads require current canonical group validation; there is no historical-read option.
+The existing pure qualification engine then enforces configured targets, full pipeline
+identity, scope, independent final-test use, measured quality and canary freshness.
+Partial/adverse outcomes, adapted/quarantined tests, changed complete model metadata,
+missing records and canary reuse of training/evaluation/reference/prior-audit groups
+cannot yield a passing assembled context.
+
+This remains a trusted internal preflight, not an authenticated service or a complete
+provenance producer. Its caller must derive canonical lineage and authorized selectors;
+original pipeline execution, source/condition metadata and measurement truth are not
+established by storage. Retain the same outer transaction and locks through registry
+or acceptance checks. Do not cache contexts across transactions. Registry incumbent
+non-regression, durable vetoes, current state and scoped drift remain separate gates.
+No table, migration, endpoint, dependency or runtime is added.
+
+Adapter tests exercise real pure gates with mocked reads for both recipes. The paired
+Actions PostgreSQL smoke now prepares explicitly synthetic canonical positive/negative
+sources on separate audit/canary groups, commits samples, observations and measurements,
+reconnects, assembles the context and exercises the actual automatic-acceptance guard.
+It rejects partial canaries and prior-audit group reuse, requiring registry heads/event
+counts to remain unchanged. Counts, groups and truth are invented fixture mechanics,
+not independent domain gold or HTTP acceptance. New assertions await exact-head Actions.
+
+Corrected measured-outcome head `294746a612ffeef80f0ca0d4cfbdda7cc7f5dc79` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462759934) and
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462759619), including
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462759934/job/128675443277),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42462759934/job/128675443213),
+queue PostgreSQL, migration cycles and dev-stack. Web-build was path-skipped. That
+verifies prior outcome storage, not this new assembly or final milestone acceptance.
+
 ## Remaining end-to-end cases and consumers
 
 All cases below are **pending**, not skipped/xfail passes. Each must gain executable

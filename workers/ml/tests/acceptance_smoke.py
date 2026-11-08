@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
+from qualification_context_smoke import exercise_context_assembly
 from qualification_fixture import qualification_context, synthetic_final
 from qualification_policy_smoke import exercise_policy, fixture_policy
 
@@ -70,6 +71,7 @@ def exercise_acceptance(
     with engine.begin() as connection:
         fixture_policy(connection, context, actor)
     policy_evidence = exercise_policy(engine, context, actor, final.run_id)
+    assembly_evidence = exercise_context_assembly(engine, release, final, context, actor)
     with engine.begin() as connection:
         before = load_acceptance(connection, **scope)
         assert before.revision == 0
@@ -385,6 +387,7 @@ def exercise_acceptance(
     return {
         "scope": "synthetic scoped drift persistence, not domain quality or HTTP authorization",
         "current_policy_journal": policy_evidence,
+        "persisted_context_assembly": assembly_evidence,
         "registry_reloaded_final_after_adaptation_and_quarantine": True,
         "stale_final_preserved_complete_head_and_event_count": True,
         "paused_and_resumed_across_connections": True,
