@@ -128,14 +128,18 @@ def prepared_evaluation_stage(
         paths.extend([weights, root])
         assert weights.read_bytes() == b"synthetic weights"
         assert class_ids == ("package",)
-        assert list(root.rglob("*.png"))
+        expected_images = {root / sample["image_path"] for sample in samples}
+        assert expected_images and set(root.rglob("*.jpg")) == expected_images
+        assert {path for path in root.rglob("*") if path.is_file()} == expected_images
         assert not (root / "images/train").exists()
         assert not (root / "images/test").exists()
         assert not (root / "labels").exists()
         derived = []
         for sample in samples:
             assert sample["split"] == "val"
-            assert Image.open(root / sample["image_path"]).size == (policy.imgsz,) * 2
+            with Image.open(root / sample["image_path"]) as image:
+                assert image.format == "JPEG"
+                assert image.size == (policy.imgsz,) * 2
             transform = sample["transform"].copy()
             transform.pop("valid_content_rectangle")
             transform["crop"] = Crop(**transform["crop"])
