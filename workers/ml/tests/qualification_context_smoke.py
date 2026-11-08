@@ -950,6 +950,9 @@ def _exercise_selected_promotion(connection, candidate, report, variant, argumen
                     promote_candidate(connection, **arguments)
                 assert snapshot() == captured
                 duplicate.rollback()
+        from promotion_http_smoke import exercise_http_promotion
+
+        exercise_http_promotion(connection, candidate, before, arguments)
         captured = snapshot()
         serialize = model_store.json_record
 

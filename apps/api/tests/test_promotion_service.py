@@ -77,6 +77,37 @@ def test_derives_every_gate_and_report_before_atomic_registry_write(monkeypatch,
     connection.commit.assert_not_called()
 
 
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("fixture_only", [False, True])
+def test_http_restriction_rejects_real_policy_before_registry_write(
+    monkeypatch, side, fixture_only
+):
+    connection, args, context, _, readers, writer = setup(monkeypatch, side)
+    targets = replace(context.evidence.targets, fixture_only=fixture_only)
+    readers["load_qualification_context"].return_value = replace(
+        context, evidence=replace(context.evidence, targets=targets)
+    )
+    if fixture_only:
+        assert (
+            service.promote_candidate(connection, **args, require_fixture_policy=True) == "promoted"
+        )
+        writer.assert_called_once()
+    else:
+        with pytest.raises(ValueError, match="explicit fixture-only policy"):
+            service.promote_candidate(connection, **args, require_fixture_policy=True)
+        readers["select_final_report"].assert_not_called()
+        writer.assert_not_called()
+
+
+@pytest.mark.parametrize("restriction", [None, 0, "true"])
+def test_invalid_fixture_restriction_rejects_before_database_access(monkeypatch, restriction):
+    connection, args, _, _, readers, writer = setup(monkeypatch)
+    with pytest.raises(ValueError, match="restriction must be boolean"):
+        service.promote_candidate(connection, **args, require_fixture_policy=restriction)
+    readers["lock_project"].assert_not_called()
+    writer.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "field",
     [

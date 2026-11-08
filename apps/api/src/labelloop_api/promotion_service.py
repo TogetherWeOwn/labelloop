@@ -26,6 +26,7 @@ def promote_candidate(
     canary_release_key: str,
     actor_id: str,
     expected_revision: int,
+    require_fixture_policy: bool = False,
 ) -> RegistryState:
     """Assemble current evidence and consume it in the same project-locked transaction.
 
@@ -35,7 +36,11 @@ def promote_candidate(
     assertion are accepted. Missing or competing evidence fails closed. The caller
     must retain the outer transaction through commit; no model/provider I/O belongs
     inside it. The registry rechecks current gates, durable vetoes and non-regression.
+    The HTTP adapter requires fixture policy until authoritative execution and
+    measurement producers are connected; that restriction is not a request field.
     """
+    if type(require_fixture_policy) is not bool:
+        raise ValueError("fixture policy restriction must be boolean")
     for value in (
         project_key,
         recipe_key,
@@ -68,6 +73,8 @@ def promote_candidate(
     )
     report = model_store.decode_report(json.loads(assessment.report_json))
     targets = context.evidence.targets
+    if require_fixture_policy and not targets.fixture_only:
+        raise ValueError("HTTP promotion requires explicit fixture-only policy")
     targets.require_configured()
     policy = PromotionPolicy(
         targets.min_class_support, targets.min_map50_95, targets.max_regression

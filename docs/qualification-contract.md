@@ -169,15 +169,19 @@ No record stores provider secrets, images or weights. Source/policy IDs and the
 historical final report are audit data; adapters must apply project permissions.
 Durable schemas must migrate deliberately rather than guessing a future version.
 
-## Authenticated registry recovery
+## Authenticated registry recovery and fixture promotion
 
-`POST /projects/{project_key}/promotions` currently accepts only
-`{"action":"rollback","recipe_key":"full-letterbox-320-v1","expected_revision":2}`.
+`POST /projects/{project_key}/promotions` accepts a strict discriminated action:
+
+- `{"action":"rollback","recipe_key":"full-letterbox-320-v1","expected_revision":2}`
+- `{"action":"promote","recipe_key":"full-letterbox-320-v1","model_key":"candidate","annotation_release_key":"ordinary-population","canary_release_key":"fresh-population","expected_revision":2}`
+
 The same contract applies independently to the 640 recipe. The normal session
 boundary requires same-origin CSRF proof and a human admin; reviewers and every
 service principal are denied. The authenticated principal, not a request field,
-supplies the event actor. Extra fields, promotion requests and client-supplied
-candidate/policy/qualification claims are rejected.
+supplies the event actor. An admin may select candidate/population identities,
+not scores, report/outcome keys, lineage, scope, targets or qualification claims.
+Extra fields and mixing promotion fields into rollback are rejected.
 
 Recovery uses only the persisted rollback pointer through `change_registry` in
 one outer transaction, preserving complete release metadata, expected-revision
@@ -188,11 +192,24 @@ store and transaction rollback controls; their simulated registry port is not
 end-to-end PostgreSQL acceptance. Persisted store mechanics remain covered by the
 separate both-recipe ML smoke. Full persisted HTTP acceptance is still required.
 
-This mounts only the independently ready recovery operation. Promotion remains
-closed to HTTP until trusted outcome selection and execution/measurement
-provenance are connected; the endpoint cannot accept a serialized success.
+The promotion branch consumes `promote_candidate`: it derives the sole linked
+final report, current policy, exact ordinary/candidate-bound outcomes and the
+same-population incumbent comparison under the project lock. It then reuses all
+existing registry gates and the atomic head/event write. The HTTP adapter enforces
+`require_fixture_policy=True` in code, not in the request. Only an explicitly
+`fixture_only` current policy may pass; real policy remains closed even if targets
+are configured until trusted execution/measurement provenance is connected. Real
+null targets remain fail-closed. The fixture restriction does not weaken any other
+gate or turn synthetic measurements into domain quality. This is a bounded fixture
+mechanics demonstration, not completed real promotion or full M5 acceptance.
 
-## Trusted promotion integration port (not yet an HTTP feature)
+New HTTP adapters and both-recipe PostgreSQL controls are pending Actions. The
+latter borrow the sole-final fixture connection with nested request transactions:
+real authentication, stores and gates run, but the fixture rolls back afterwards.
+They do not establish a fresh-connection promotion commit/recovery claim. Existing
+rollback HTTP commit/reconnect controls remain separate.
+
+## Trusted promotion integration port
 
 The internal `model_store.change_registry` accepts the typed context and writes
 its versioned JSON into the same immutable promotion event as before/after state.

@@ -6,7 +6,46 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Trusted promotion orchestration — pending Actions
+## Authenticated fixture promotion — pending Actions
+
+The existing promotions endpoint now discriminates `rollback` and `promote` without
+adding a second route. Only a human admin session with same-origin CSRF can select
+the candidate and ordinary/canary population identities. The service derives final,
+measured outcomes, current policy, lineage and incumbent comparison. No request may
+supply actor, gate results, report/outcome IDs, scope, targets, qualification or the
+fixture restriction. Rollback remains limited to the persisted pointer.
+
+Real promotion remains closed at this boundary: the adapter passes a fixed
+`require_fixture_policy=True`, requiring the current persisted policy's explicit
+`fixture_only` flag even when real targets are configured. Original execution and
+measurement provenance is still incomplete. This permits the accepted synthetic
+mechanics demonstration, not a domain-quality claim or a real-policy grant. Null
+real targets and every existing quality/current-context/veto gate remain fail-closed.
+
+New adapters cover both recipes, strict action/identity/revision fields, every
+non-admin principal, CSRF/origin, forbidden authority fields and redacted outer
+transaction rollback. Service controls require real-policy rejection before the
+registry writer. Both-recipe PostgreSQL controls use real login/session/CSRF and
+production stores/service through nested request transactions on the sole-final
+fixture connection. They require denied/stale/missing-evidence no-ops, injected
+event-append rollback, complete success metadata and authenticated actor, other-recipe
+isolation, unchanged qualification journals and stale/already-champion replay
+rejection. The enclosing fixture is rolled back: no new committed promotion or
+fresh-connection recovery claim is made. These new assertions await exact-head
+Actions; no local tests/builds ran. No new schema, migration, dependency or engine.
+REA angle: reuse the delivered human-admin boundary and trusted promotion service.
+
+## Trusted promotion orchestration — verified baseline
+
+Exact `cdb33f9a88c432e3b2efe5b382423d43cb11affe`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42530428838),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42530428587) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42530428668)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42530428838/job/128883238146),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42530428838/job/128883238097),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the earlier service/ambiguity/atomic-write controls,
+not the new HTTP adapter or full M5 acceptance. Totals were not extracted.
 
 The internal `promote_candidate` service takes a trusted candidate, two population
 release identities, authenticated actor identity and expected registry revision.
@@ -32,9 +71,9 @@ inject a failure after the head update and require exact head/event rollback; th
 promote, verify complete candidate/rollback metadata, actor, selected report IDs and
 stored qualification, and reject stale/repeated decisions without changes. Additional
 ordinary/canary outcome competitors must also veto service orchestration. These new
-assertions are unverified pending exact-head Actions. No local tests/builds ran.
+assertions passed exact-head Actions at `cdb33f9`. No local tests/builds ran.
 
-This is not a new HTTP promotion route or independent measurement evidence. The
+That baseline is not the new HTTP fixture adapter or independent measurement evidence. The
 trusted caller still owns candidate/population selection, original execution and
 measurement provenance; those authenticated producers/consumers remain incomplete.
 No schema, migration, dependency or second qualification/registry engine is added.

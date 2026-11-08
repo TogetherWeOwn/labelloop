@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
 
@@ -12,6 +12,7 @@ from labelloop_api import (
     drift_service,
     final_test_store,
     model_store,
+    promotion_service,
 )
 from labelloop_api.auth import auth_store, require_admin, require_reviewer
 from labelloop_api.auth_store import Principal
@@ -100,6 +101,17 @@ class RollbackRequest(BaseModel):
 
     action: Literal["rollback"]
     recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    expected_revision: int = Field(ge=0)
+
+
+class PromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["promote"]
+    recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    model_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    annotation_release_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    canary_release_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
     expected_revision: int = Field(ge=0)
 
 
@@ -255,26 +267,36 @@ def inspect_registry(
 
 
 @router.post("/projects/{project_key}/promotions")
-def rollback(
+def change_registry(
     project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
-    payload: RollbackRequest,
+    payload: Annotated[RollbackRequest | PromotionRequest, Body(discriminator="action")],
     actor: Annotated[Principal, Depends(require_admin)],
 ) -> dict:
-    # A rollback selects only the persisted pointer, never a caller's release or gates.
-    # The store keeps project-first locking, adverse-audit vetoes and the atomic event.
+    # Only an authenticated human admin chooses candidate/population identities.
+    # Reports, outcomes, lineage, policy and qualification come from persisted evidence.
+    # Rollback still selects only the stored pointer, never a caller's candidate.
     try:
         with auth_store().engine.begin() as connection:
-            changed = model_store.change_registry(
-                connection,
-                project_key=project_key,
-                recipe_key=payload.recipe_key,
-                actor_id=actor.id,
-                expected_revision=payload.expected_revision,
-            )
+            if isinstance(payload, PromotionRequest):
+                changed = promotion_service.promote_candidate(
+                    connection,
+                    project_key=project_key,
+                    actor_id=actor.id,
+                    require_fixture_policy=True,
+                    **payload.model_dump(exclude={"action"}),
+                )
+            else:
+                changed = model_store.change_registry(
+                    connection,
+                    project_key=project_key,
+                    recipe_key=payload.recipe_key,
+                    actor_id=actor.id,
+                    expected_revision=payload.expected_revision,
+                )
             record = model_store.json_record(changed)
     except NoResultFound:
         raise HTTPException(404, detail="registry_scope_not_found") from None
-    except ValueError:
+    except (ValueError, KeyError, TypeError):
         raise HTTPException(409, detail="registry_change_rejected") from None
     except SQLAlchemyError:
         raise HTTPException(503, detail="registry_unavailable") from None
