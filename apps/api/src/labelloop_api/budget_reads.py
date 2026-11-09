@@ -1,11 +1,12 @@
 """Authenticated bounded ledger inspection, never a paid-operation grant."""
 
 from dataclasses import asdict
+from datetime import date
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 from sqlalchemy.exc import NoResultFound, SQLAlchemyError
 
 from labelloop_api import budget_schema as db
@@ -59,16 +60,114 @@ class BudgetPage(BaseModel):
     next_after: str | None
 
 
-def load_budget_page(connection, *, project_key, after, limit):
-    # All budget writers take this same head lock before changing policy/entries.
-    # Hold it through projection and outer commit for one consistent page only.
-    head = (
+class CostTotals(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    operation_count: Amount
+    actual: Amount
+    confirmed_estimate: Amount
+    # Pending buckets retain core exposure, including known child charges.
+    reserved: Amount
+    unconfirmed: Amount
+    exposure: Amount
+    delta: int
+
+
+class BudgetSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    project_id: str
+    currency: Literal["USD"] = "USD"
+    unit: Literal["micro_usd"] = "micro_usd"
+    policy_revision: Annotated[int, Field(ge=1)]
+    policy: BudgetLimits
+    pause_reason: Literal["insufficient_credits", "estimate_overrun"] | None
+    month: str
+    iteration_id: str
+    monthly: CostTotals
+    iteration: CostTotals
+
+
+SUMMARY_MAX_OPERATIONS = 10_000
+
+
+def _month(value: str) -> str:
+    date.fromisoformat(value + "-01")
+    return value
+
+
+def _locked_head(connection, project_key):
+    # All budget writers take this same head lock. Each response is one read,
+    # never a snapshot shared with a separate page/summary request.
+    return (
         connection.execute(
             sa.select(db.head).where(db.head.c.project_id == project_key).with_for_update()
         )
         .mappings()
         .one()
     )
+
+
+def _scoped_entry(row, project_key):
+    entry = decode_entry(row["entry"])
+    if entry.request.project_id != project_key or entry.request.operation_id != row["operation_id"]:
+        raise ValueError("ledger identity mismatch")
+    return entry
+
+
+def _totals(entries):
+    actual = confirmed_estimate = reserved = unconfirmed = exposure = count = 0
+    for entry in entries:
+        count += 1
+        exposure += entry.exposure
+        if entry.actual is not None:
+            actual += entry.actual
+            confirmed_estimate += entry.request.estimate
+        elif entry.state == "unconfirmed":
+            unconfirmed += entry.exposure
+        elif entry.state != "cancelled":
+            reserved += entry.exposure
+    return CostTotals(
+        operation_count=count,
+        actual=actual,
+        confirmed_estimate=confirmed_estimate,
+        reserved=reserved,
+        unconfirmed=unconfirmed,
+        exposure=exposure,
+        delta=actual - confirmed_estimate,
+    )
+
+
+def load_budget_summary(connection, *, project_key, month, iteration_id):
+    head = _locked_head(connection, project_key)
+    rows = (
+        connection.execute(
+            sa.select(db.operation.c.operation_id, db.operation.c.entry)
+            .where(db.operation.c.project_id == project_key)
+            .order_by(db.operation.c.operation_id)
+            .limit(SUMMARY_MAX_OPERATIONS + 1)
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) > SUMMARY_MAX_OPERATIONS:
+        raise ValueError("complete ledger summary exceeds read bound")
+    entries = [_scoped_entry(row, project_key) for row in rows]
+    policy = BudgetPolicy(**head["policy"]["limits"])
+    return BudgetSummary(
+        project_id=project_key,
+        policy_revision=head["revision"],
+        policy=BudgetLimits(**asdict(policy)),
+        pause_reason=head["pause_reason"],
+        month=month,
+        iteration_id=iteration_id,
+        monthly=_totals(entry for entry in entries if entry.request.month == month),
+        iteration=_totals(entry for entry in entries if entry.request.iteration_id == iteration_id),
+    )
+
+
+def load_budget_page(connection, *, project_key, after, limit):
+    head = _locked_head(connection, project_key)
     policy = BudgetPolicy(**head["policy"]["limits"])
     query = sa.select(db.operation.c.operation_id, db.operation.c.entry).where(
         db.operation.c.project_id == project_key
@@ -82,10 +181,8 @@ def load_budget_page(connection, *, project_key, after, limit):
     )
     operations = []
     for row in rows[:limit]:
-        entry = decode_entry(row["entry"])
+        entry = _scoped_entry(row, project_key)
         request = entry.request
-        if request.project_id != project_key or request.operation_id != row["operation_id"]:
-            raise ValueError("ledger identity mismatch")
         operations.append(
             CostOperation(
                 operation_id=request.operation_id,
@@ -108,6 +205,30 @@ def load_budget_page(connection, *, project_key, after, limit):
         operations=operations,
         next_after=rows[limit - 1]["operation_id"] if len(rows) > limit else None,
     )
+
+
+@router.get("/projects/{project_key}/costs/summary", response_model=BudgetSummary)
+def inspect_cost_summary(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    month: Annotated[str, Query(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$"), AfterValidator(_month)],
+    iteration_id: Annotated[str, Query(min_length=1, max_length=256, pattern=r"\S")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> BudgetSummary:
+    try:
+        with auth_store().engine.begin() as connection:
+            connection.execute(
+                sa.select(project.c.id).where(project.c.project_key == project_key)
+            ).scalar_one()
+            summary = load_budget_summary(
+                connection, project_key=project_key, month=month, iteration_id=iteration_id
+            )
+    except NoResultFound:
+        raise HTTPException(404, detail="cost_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="cost_state_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="costs_unavailable") from None
+    return summary
 
 
 @router.get("/projects/{project_key}/costs", response_model=BudgetPage)

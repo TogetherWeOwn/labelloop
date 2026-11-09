@@ -121,6 +121,23 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
         }
     ]
     assert "must-not-leak" not in response.text
+    summary = http.get(SUMMARY, params=SUMMARY_QUERY)
+    assert summary.status_code == 200
+    totals = summary.json()["monthly"]
+    assert (
+        totals
+        == summary.json()["iteration"]
+        == {
+            "operation_count": 1,
+            "actual": actual if actual is not None else 0,
+            "confirmed_estimate": 40 if actual is not None else 0,
+            "reserved": exposure if actual is None and state != "unconfirmed" else 0,
+            "unconfirmed": exposure if state == "unconfirmed" else 0,
+            "exposure": exposure,
+            "delta": actual - 40 if actual is not None else 0,
+        }
+    )
+    assert summary.json()["pause_reason"] == page["pause_reason"]
 
 
 def test_autonomous_reservation_does_not_invent_human_approval(http, store):
@@ -257,6 +274,163 @@ def test_projection_failure_rolls_back_and_redacts(http, store, monkeypatch, err
         )
 
 
+SUMMARY = PATH + "/summary"
+SUMMARY_QUERY = {"month": "2026-11", "iteration_id": "iteration"}
+
+
+def test_summary_is_complete_across_pages_and_retains_child_exposure(http, store):
+    values = [
+        entry("a", state="settled", actual=0),
+        entry("b", state="settled", actual=30),
+        entry("c", state="unconfirmed", exposure_floor=75),
+        entry("d", state="dispatched", exposure_floor=60),
+        entry("e", state="cancelled"),
+    ]
+    # Iteration totals span months; month totals span iterations. Neither is a page sum.
+    older = replace(request("f"), month="2026-10")
+    other = replace(request("g"), iteration_id="other", estimate=65)
+    values.extend(LedgerEntry(req, SpendApproval(ADMIN.id, req.digest)) for req in (older, other))
+    with store.engine.begin() as connection:
+        for value in values:
+            persist(connection, value)
+    login(http, "admin")
+    assert len(http.get(PATH, params={"limit": 1}).json()["operations"]) == 1
+    response = http.get(SUMMARY, params=SUMMARY_QUERY)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert data["month"] == "2026-11" and data["iteration_id"] == "iteration"
+    assert data["iteration"] == {
+        "operation_count": 6,
+        "actual": 30,
+        "confirmed_estimate": 80,
+        "reserved": 100,
+        "unconfirmed": 75,
+        "exposure": 205,
+        "delta": -50,
+    }
+    assert data["monthly"] == data["iteration"] | {"reserved": 125, "exposure": 230}
+    assert data["policy_revision"] == 1
+    assert data["policy"] == asdict(BudgetPolicy(100, 100, 100))
+    assert "must-not-leak" not in response.text
+    assert "prices" not in data and "operations" not in data
+    unmatched = http.get(SUMMARY, params={"month": "2026-12", "iteration_id": "missing"}).json()
+    assert unmatched["monthly"] == unmatched["iteration"] == {key: 0 for key in data["monthly"]}
+
+
+@pytest.mark.parametrize(
+    "name", [None, "reviewer", "worker-core", "worker-ml", "worker-llm", "worker-platform"]
+)
+def test_summary_denial_precedes_any_ledger_read(http, store, monkeypatch, name):
+    def forbidden():
+        raise AssertionError("unauthorized summary read")
+
+    monkeypatch.setattr(budget_reads, "auth_store", forbidden)
+    headers = {}
+    if name and name.startswith("worker-"):
+        headers["authorization"] = "Bearer " + worker_token(store, name)
+    elif name:
+        login(http, name)
+    response = http.get(SUMMARY, params=SUMMARY_QUERY, headers=headers)
+    assert response.status_code == (401 if name is None else 403)
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"month": "2026-11"},
+        {"iteration_id": "iteration"},
+        SUMMARY_QUERY | {"month": "0000-01"},
+        SUMMARY_QUERY | {"month": "2026-13"},
+        SUMMARY_QUERY | {"month": "2026-1"},
+        SUMMARY_QUERY | {"iteration_id": " "},
+        SUMMARY_QUERY | {"iteration_id": "x" * 257},
+    ],
+)
+def test_summary_query_requires_exact_scopes(http, query):
+    login(http, "admin")
+    response = http.get(SUMMARY, params=query)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+
+
+@pytest.mark.parametrize("key", ["missing", "unconfigured"])
+def test_summary_does_not_manufacture_missing_budget(http, key):
+    login(http, "admin")
+    response = http.get(f"/projects/{key}/costs/summary", params=SUMMARY_QUERY)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "cost_scope_not_found"}
+
+
+def test_summary_is_project_scoped_and_rejects_off_month_substitution(http, store):
+    foreign = replace(request("foreign-operation"), project_id="foreign")
+    with store.engine.begin() as connection:
+        connection.execute(
+            sa.insert(db.operation).values(
+                project_id="foreign",
+                operation_id=foreign.operation_id,
+                dry_run_digest="a" * 64,
+                policy_revision=1,
+                entry=asdict(LedgerEntry(foreign, reserved_autonomously=True)),
+                intent={},
+            )
+        )
+    login(http, "admin")
+    response = http.get(SUMMARY, params=SUMMARY_QUERY)
+    assert response.status_code == 200
+    assert response.json()["monthly"]["operation_count"] == 0
+    with store.engine.begin() as connection:
+        persist(connection, entry(), key="substituted")
+    # A cursor/month/iteration must not hide malformed ledger members.
+    response = http.get(SUMMARY, params={"month": "2026-12", "iteration_id": "missing"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+
+
+def test_summary_exhaustion_refuses_instead_of_returning_partial_totals(http, store, monkeypatch):
+    monkeypatch.setattr(budget_reads, "SUMMARY_MAX_OPERATIONS", 1)
+    with store.engine.begin() as connection:
+        persist(connection, entry("a"))
+        persist(connection, entry("b"))
+    login(http, "admin")
+    response = http.get(SUMMARY, params=SUMMARY_QUERY)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+
+
+@pytest.mark.parametrize("error", [ValueError("private"), SQLAlchemyError("private")])
+def test_summary_failure_rolls_back_and_redacts(http, store, monkeypatch, error):
+    def fail(connection, **kwargs):
+        persist(connection, entry("must-roll-back"))
+        raise error
+
+    monkeypatch.setattr(budget_reads, "load_budget_summary", fail)
+    login(http, "admin")
+    response = http.get(SUMMARY, params=SUMMARY_QUERY)
+    assert response.status_code == (409 if isinstance(error, ValueError) else 503)
+    assert "private" not in response.text
+    with store.engine.connect() as connection:
+        assert (
+            connection.execute(sa.select(sa.func.count()).select_from(db.operation)).scalar_one()
+            == 0
+        )
+
+
+def test_summary_openapi_has_typed_scopes_and_totals():
+    contract = app.openapi()
+    route = contract["paths"]["/projects/{project_key}/costs/summary"]["get"]
+    assert route["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BudgetSummary"
+    }
+    assert {item["name"] for item in route["parameters"] if item["required"]} == {
+        "project_key",
+        "month",
+        "iteration_id",
+    }
+
+
 def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_budget):
     # Real auth sessions and real disposable PostgreSQL ledger; neither is bypassed.
     reserve(postgres_budget)
@@ -271,10 +445,53 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         assert page.status_code == 200
         assert page.json()["operations"][0]["actual"] is None
         assert page.json()["operations"][0]["exposure"] == 40
+        summary = client.get(SUMMARY, params=SUMMARY_QUERY)
+        assert summary.status_code == 200
+        assert (
+            summary.json()["monthly"]
+            == summary.json()["iteration"]
+            == {
+                "operation_count": 1,
+                "actual": 0,
+                "confirmed_estimate": 0,
+                "reserved": 0,
+                "unconfirmed": 40,
+                "exposure": 40,
+                "delta": 0,
+            }
+        )
     before = postgres_budget.snapshot("budget-fixture")
     with TestClient(app, base_url=ORIGIN) as client:
         login(client, "admin")
         recovered = client.get(PATH)
         assert recovered.json() == page.json()
+        recovered_summary = client.get(SUMMARY, params=SUMMARY_QUERY)
+        assert recovered_summary.json() == summary.json()
     assert postgres_budget.snapshot("budget-fixture") == before
     assert before.entry("one").state == "unconfirmed"
+
+
+def test_postgres_summary_retains_writer_lock_until_outer_commit(postgres_budget):
+    reserve(postgres_budget)
+    with postgres_budget.engine.begin() as connection:
+        summary = budget_reads.load_budget_summary(
+            connection, project_key="budget-fixture", **SUMMARY_QUERY
+        )
+        assert summary.monthly.exposure == 40
+        # A separate writer connection cannot take the head before this read commits.
+        with postgres_budget.engine.begin() as writer:
+            writer.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+            with pytest.raises(sa.exc.OperationalError) as blocked:
+                writer.execute(
+                    sa.select(db.head)
+                    .where(db.head.c.project_id == "budget-fixture")
+                    .with_for_update()
+                )
+            assert blocked.value.orig.sqlstate == "55P03"
+            writer.rollback()
+    with postgres_budget.engine.begin() as writer:
+        assert writer.execute(
+            sa.select(db.head)
+            .where(db.head.c.project_id == "budget-fixture")
+            .with_for_update(nowait=True)
+        ).one()

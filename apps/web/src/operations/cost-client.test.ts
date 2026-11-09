@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { costClient, type CostOperation, type CostReadQuery } from './cost-client.ts';
+import { costClient, type CostOperation, type CostReadQuery, type CostSummaryQuery } from './cost-client.ts';
 
 const entry: CostOperation = {
   operation_id: 'operation-1', iteration_id: 'iteration-1', month: '2026-11', price_version: 'prices-1',
@@ -18,6 +18,102 @@ const stub = (response: Response) => {
   return request;
 };
 afterEach(() => vi.unstubAllGlobals());
+
+const summaryQuery = { month: '2026-11', iteration_id: 'iteration-1' };
+const total = { operation_count: 6, actual: 30, confirmed_estimate: 80, reserved: 100, unconfirmed: 75, exposure: 205, delta: -50 };
+const summary = (extra = {}) => ({
+  project_id: 'project-a', currency: 'USD', unit: 'micro_usd', policy_revision: 1,
+  policy: page().policy, pause_reason: null, ...summaryQuery,
+  monthly: total, iteration: { ...total, reserved: 125, exposure: 230 }, ...extra,
+});
+
+describe('complete session-backed cost summaries', () => {
+  it('reads exact server-owned scopes without fetching or summing ledger pages', async () => {
+    const value = summary({ pause_reason: 'estimate_overrun' });
+    const request = stub(json(value));
+    const abort = signal();
+    await expect(costClient('project-a').summary(summaryQuery, abort)).resolves.toEqual(value);
+    expect(request).toHaveBeenCalledExactlyOnceWith('/api/projects/project-a/costs/summary?month=2026-11&iteration_id=iteration-1', {
+      method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: abort, headers: { Accept: 'application/json' },
+    });
+  });
+
+  it('encodes opaque project and iteration identities without changing the endpoint', async () => {
+    const project = 'project/?日本語';
+    const query = { ...summaryQuery, iteration_id: 'iteration/?&=日本語' };
+    const value = summary({ project_id: project, ...query });
+    const request = stub(json(value));
+    await expect(costClient(project).summary(query, signal())).resolves.toEqual(value);
+    const url = new URL(request.mock.calls[0]?.[0] as string, 'https://example.test');
+    expect(url.pathname).toBe(`/api/projects/${encodeURIComponent(project)}/costs/summary`);
+    expect(url.searchParams.get('iteration_id')).toBe(query.iteration_id);
+  });
+
+  it('retains zero totals and null limits without manufacturing a price version or snapshot', async () => {
+    const zero = { operation_count: 0, actual: 0, confirmed_estimate: 0, reserved: 0, unconfirmed: 0, exposure: 0, delta: 0 };
+    const value = summary({ monthly: zero, iteration: zero });
+    stub(json(value));
+    await expect(costClient('project-a').summary(summaryQuery, signal())).resolves.toEqual(value);
+  });
+
+  it.each([null, [], {}, { month: '2026-11' }, { iteration_id: 'iteration-1' },
+    ...[{ month: '2026-13' }, { month: '0000-01' }, { iteration_id: '' }, { iteration_id: ' ' }, { iteration_id: 'x'.repeat(257) }, { limit: 1 }, { endpoint: 'https://example.test' }, { role: 'admin' }].map((change) => ({ ...summaryQuery, ...change })),
+  ])('rejects invalid summary scopes before fetch: %j', async (query) => {
+    const request = stub(json(summary()));
+    await expect(costClient('project-a').summary(query as CostSummaryQuery, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each(['', '.', '..', 'two scopes', 'x'.repeat(129)])('rejects invalid project %s before fetching totals', async (project) => {
+    const request = stub(json(summary()));
+    await expect(costClient(project).summary(summaryQuery, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    summary({ project_id: 'foreign' }), summary({ month: '2026-12' }), summary({ iteration_id: 'other' }),
+    summary({ currency: 'EUR' }), summary({ unit: 'USD' }), summary({ policy_revision: 0 }),
+    summary({ pause_reason: 'unknown' }), summary({ policy: null }), summary({ private: 'excluded' }),
+    ...[null, [], {}, { ...total, private: 'excluded' }, { ...total, actual: -1 }, { ...total, operation_count: 0 },
+      { ...total, operation_count: 10_001 }, { ...total, reserved: Number.MAX_SAFE_INTEGER + 1 },
+      { ...total, unconfirmed: 1.5 }, { ...total, exposure: 1 }, { ...total, delta: 50 },
+      { ...total, delta: Number.MIN_SAFE_INTEGER - 1 }, { ...total, delta: null },
+    ].flatMap((change) => [summary({ monthly: change }), summary({ iteration: change })]),
+  ])('rejects substituted, partial or inconsistent summary data: %j', async (value) => {
+    stub(json(value));
+    await expect(costClient('project-a').summary(summaryQuery, signal())).rejects.toThrow(/^Cost records unavailable$/);
+  });
+
+  it.each([401, 403, 404, 409, 503])('redacts summary HTTP %s and does not retry', async (status) => {
+    const response = new Response('private diagnostic', { status });
+    const cancel = vi.spyOn(response.body!, 'cancel');
+    const request = stub(response);
+    await expect(costClient('project-a').summary(summaryQuery, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    () => new Response('{private', { headers: { 'Content-Type': 'application/json' } }),
+    () => new Response(JSON.stringify(summary()), { headers: { 'Content-Type': 'text/html' } }),
+    () => new Response(new Uint8Array([0xc3, 0x28]), { headers: { 'Content-Type': 'application/json' } }),
+    () => new Response('x'.repeat(64 * 1024 + 1), { headers: { 'Content-Type': 'application/json' } }),
+  ])('rejects invalid or oversized summary bodies', async (response) => {
+    stub(response());
+    await expect(costClient('project-a').summary(summaryQuery, signal())).rejects.toThrow(/^Cost records unavailable$/);
+  });
+
+  it('does not fetch a cancelled summary or return a response cancelled during the read', async () => {
+    const controller = new AbortController();
+    const request = stub(json(summary()));
+    controller.abort();
+    await expect(costClient('project-a').summary(summaryQuery, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request).not.toHaveBeenCalled();
+    const later = new AbortController();
+    request.mockImplementation(() => { later.abort(); return Promise.resolve(json(summary())); });
+    await expect(costClient('project-a').summary(summaryQuery, later.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
 
 describe('session-backed cost transport', () => {
   it('preserves actual null versus confirmed zero, child exposure, policy zero/null and pause metadata', async () => {

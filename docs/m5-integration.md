@@ -6,17 +6,44 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Session transports — verified baseline; mounted browser controls pending
+## Complete scoped cost summary — implementation, verification pending
 
-Exact `cc45f782e71510bf2d0bac4df84010873284925f`
-[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909),
-[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107091) and
-[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107297)
-passed. [Web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909/job/129076236901)
-verified cost transport and shared audit-reader regressions, superseding their
-pending labels. Unit, both-recipe PostgreSQL ML smoke, queue/migration cycles/all
-four parents and dev-stack also passed. Totals not extracted; required Devin,
-fresh-context and native QA/Security review remain gates.
+The admin-session read `/projects/{project_key}/costs/summary` projects the complete
+requested reservation month and iteration independently under the existing budget
+writer-head lock. Month totals span iterations; iteration totals span months.
+Pending buckets consume `LedgerEntry.exposure`, including retained child exposure,
+not a sum of displayed estimates or separately read pages. Confirmed actual zero,
+cancelled reservations, confirmed-only estimate deltas, policy null/zero and pauses
+remain distinct. The response has no invented price version, operation kind,
+timestamp or shared ledger/page snapshot. Above 10,000 project operations it rejects
+rather than returning partial totals; this bounded implementation is not an
+unlimited-ledger claim. No spend command, migration, dependency or new ledger.
+
+New session/OpenAPI controls cover all states, complete totals beyond a page,
+month/iteration boundaries, foreign project exclusion, substituted off-scope rows,
+read-bound refusal, strict queries and redacted atomic failures. Disposable
+PostgreSQL controls require real HTTP/client-close recovery and the existing head
+lock held until the read's outer transaction commits. The web transport validates
+scope, safe integer totals, exact arithmetic, zero totals, cancellation and bounded
+redacted reads; it never fetches pages to reconstruct a total. **New assertions
+await exact-head Actions**, not local execution or accepted CostsView mounting.
+
+REA: reuse the delivered core exposure calculation, durable ledger and writer lock,
+not another accounting engine. Rich operation labels/timestamps/object identities,
+policy/resume commands and authenticated CostsView/shell wiring remain incomplete.
+
+## Session transports — verified baseline; mounted browser controls verified
+
+Exact `76163f62b623ede2ebc009ea5ae0a0b9b4abd37c`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42594900628),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42594900078) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42594900081)
+passed. [Web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42594900628/job/129085316147)
+verified the mounted audit transport browser controls, cost transport and shared
+reader regressions, superseding their pending labels. Unit, both-recipe PostgreSQL
+ML smoke, queue/migration cycles/all four parents and dev-stack also passed. Totals
+not extracted; required Devin, fresh-context and native QA/Security review remain
+gates. This baseline does not verify the new complete cost summary.
 
 New browser controls mount the existing AuditLog with `sessionAuditPort` in the
 isolated operational fixture entry. Playwright intercepts every requested API
@@ -36,12 +63,12 @@ those assertions are removed. Cookie inspection uses Playwright's complete
 `headerValue` accessor rather than its security-filtered synchronous header map.
 CodeQL/gitleaks and unit/queue/lint/types/import-contract passed that head, not
 these new browser controls. Missing fixture artifacts follow the earlier lint stop.
-Corrected assertions remain unverified until exact-head Actions; no gate is waived.
+Corrected assertions passed at the exact baseline above; no gate was waived.
 
-These new assertions await exact-head Actions. The normal application entry,
-accepted design/components, backend, schema/migrations and dependency set are
-unchanged. No local suite/build, paid call or deployment. Authenticated shell/full
-CostsView mounting, missing cost projection fields/totals/commands, connection and
+The normal application entry, accepted design/components, backend, schema/migrations
+and dependency set were unchanged by these browser controls. No local suite/build,
+paid call or deployment. Authenticated shell/full CostsView mounting, missing cost
+projection fields/commands (new summary unverified), connection and
 complete refused-attempt history/navigation, provenance producers and expanded
 restore remain incomplete. Real-policy promotion/annotation stay closed. REA:
 reuse the supplied view and production transport under intercepted network evidence,
