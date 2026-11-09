@@ -213,9 +213,10 @@ retried. New network-free controls cover these boundaries and pagination,
 including policy changes between pages. First head `74e254f` failed web lint at
 `cost-client.ts:83`: a redundant assertion remained after the predicate had already
 narrowed the array. The assertion is removed without changing validation; web
-types/tests did not run on that head. Controls await corrected-head Actions;
-existing audit controls must also pass after the shared-reader extraction. No
-local tests/builds, dependencies, mutation or paid operation are introduced.
+types/tests did not run on that head. Corrected-head controls and audit shared-reader
+regressions passed [web-build at cc45f78](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909/job/129076236901).
+Overall CI, CodeQL and gitleaks passed that exact head. No local tests/builds,
+dependencies, mutation or paid operation are introduced.
 
 The wire page is deliberately not coerced into `CostsRecord`: operation kinds,
 object identities, timestamps and scoped complete totals are not delivered by
@@ -265,6 +266,14 @@ Query options: `view=costs|audit|models`,
 credential or persistent configuration writes. Every page says it is a fixture.
 Fictional people, records, hashes and sample counts are licence-clean invented
 values adapted from the accepted mockups, not evidence of real qualification.
+Audit `state=session` mounts the supplied AuditLog using the production session
+transport on a fixed invented `audit-demo` scope. Browser tests intercept all API
+responses; an invented cookie marker tests transport, not login or authorization.
+Desktop/mobile cases cover server pages/counts, unknown actor provenance, escaped
+names, refusal styling, full original-metadata export and read/export filter parity.
+Failure cases cover 401, foreign project payloads and malformed exports without
+retry/private error disclosure/download. New controls await exact-head Actions.
+This is not a product route or real-backend acceptance; do not deploy the fixture.
 Audit `state=scope-swap|freshness-refresh|deferred-page` supplies deterministic deferred
 ports for mounted lifecycle and long-table pagination regressions, not new product
 controls. Costs `background-refresh` completes an unchanged-revision read without

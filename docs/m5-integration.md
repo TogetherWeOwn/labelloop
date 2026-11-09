@@ -6,7 +6,38 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Session-backed audit transport — new controls pending
+## Session transports — verified baseline; mounted browser controls pending
+
+Exact `cc45f782e71510bf2d0bac4df84010873284925f`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107091) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107297)
+passed. [Web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909/job/129076236901)
+verified cost transport and shared audit-reader regressions, superseding their
+pending labels. Unit, both-recipe PostgreSQL ML smoke, queue/migration cycles/all
+four parents and dev-stack also passed. Totals not extracted; required Devin,
+fresh-context and native QA/Security review remain gates.
+
+New browser controls mount the existing AuditLog with `sessionAuditPort` in the
+isolated operational fixture entry. Playwright intercepts every requested API
+response: these are HTTP-transport/view integration controls, **not a real backend,
+login or authenticated product-shell mount**. At desktop/mobile widths they check
+same-origin invented-cookie transport, server-owned pagination/counts, unknown
+provenance/escaped current names, explicit refusal styling and complete original
+metadata export beyond viewed pages. Filters/date bounds must match between read
+and export. Expired-session responses, foreign project data and malformed exports
+must fail closed, without private diagnostic output, automatic retry or download.
+
+These new assertions await exact-head Actions. The normal application entry,
+accepted design/components, backend, schema/migrations and dependency set are
+unchanged. No local suite/build, paid call or deployment. Authenticated shell/full
+CostsView mounting, missing cost projection fields/totals/commands, connection and
+complete refused-attempt history/navigation, provenance producers and expanded
+restore remain incomplete. Real-policy promotion/annotation stay closed. REA:
+reuse the supplied view and production transport under intercepted network evidence,
+not a second UI, authentication system or journal.
+
+## Session-backed audit transport — historical pending report
 
 The web audit transport reads only the existing same-origin session-authorized
 metadata and complete-export endpoints. Filters, counts and cursor positions stay
