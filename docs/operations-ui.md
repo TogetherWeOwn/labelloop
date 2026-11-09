@@ -210,7 +210,10 @@ only same-origin, with no-store, redirects refused and cancellation supported.
 Audit and cost clients reuse one bounded fatal-UTF-8 session reader. Cost pages
 are limited to 256 KiB; transport/HTTP/parser failures are redacted and never
 retried. New network-free controls cover these boundaries and pagination,
-including policy changes between pages. They await Actions at the new head;
+including policy changes between pages. First head `74e254f` failed web lint at
+`cost-client.ts:83`: a redundant assertion remained after the predicate had already
+narrowed the array. The assertion is removed without changing validation; web
+types/tests did not run on that head. Controls await corrected-head Actions;
 existing audit controls must also pass after the shared-reader extraction. No
 local tests/builds, dependencies, mutation or paid operation are introduced.
 

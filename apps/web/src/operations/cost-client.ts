@@ -80,7 +80,7 @@ export function costClient(project: string) {
         || new Set(value.operations.map((entry: CostOperation) => entry.operation_id)).size !== value.operations.length
         || value.operations.some((entry: CostOperation) => entry.operation_id === query.after)
         || !(value.next_after === null || identity(value.next_after))) throw unavailable();
-      if (value.next_after !== null && (value.operations.length !== (query.limit ?? 50) || value.next_after !== (value.operations.at(-1) as CostOperation | undefined)?.operation_id)) throw unavailable();
+      if (value.next_after !== null && (value.operations.length !== (query.limit ?? 50) || value.next_after !== value.operations.at(-1)?.operation_id)) throw unavailable();
       return value as unknown as BudgetPage;
     },
   };
