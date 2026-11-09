@@ -12,7 +12,8 @@ from sqlalchemy.exc import NoResultFound, SQLAlchemyError
 from labelloop_api import budget_schema as db
 from labelloop_api.auth import auth_store, require_admin
 from labelloop_api.auth_store import Principal, utc
-from labelloop_api.budget_store import decode_entry
+from labelloop_api.budget_store import DispatchIntent, decode_entry, digest
+from labelloop_api.review_budget import ReviewBatch
 from labelloop_api.schema import project
 from labelloop_core.budget import BudgetPolicy
 
@@ -46,6 +47,9 @@ class CostOperation(BaseModel):
     reserved_autonomously: bool
     # Original reservation event only; missing historical evidence stays unknown.
     reserved_at: datetime | None
+    # Platform intent does not distinguish training, annotation and prediction.
+    kind: Literal["LLM review"] | None
+    annotation_job_id: str | None
 
 
 class BudgetPage(BaseModel):
@@ -206,9 +210,13 @@ def _reservation_times(connection, project_key, entries):
 def load_budget_page(connection, *, project_key, after, limit):
     head = _locked_head(connection, project_key)
     policy = BudgetPolicy(**head["policy"]["limits"])
-    query = sa.select(db.operation.c.operation_id, db.operation.c.entry).where(
-        db.operation.c.project_id == project_key
-    )
+    query = sa.select(
+        db.operation.c.operation_id,
+        db.operation.c.entry,
+        db.operation.c.intent,
+        db.operation.c.policy_revision,
+        db.operation.c.dry_run_digest,
+    ).where(db.operation.c.project_id == project_key)
     if after is not None:
         query = query.where(db.operation.c.operation_id > after)
     rows = (
@@ -219,8 +227,20 @@ def load_budget_page(connection, *, project_key, after, limit):
     entries = {row["operation_id"]: _scoped_entry(row, project_key) for row in rows[:limit]}
     reserved_at = _reservation_times(connection, project_key, entries)
     operations = []
-    for entry in entries.values():
+    for row in rows[:limit]:
+        entry = entries[row["operation_id"]]
         request = entry.request
+        intent = DispatchIntent(**row["intent"])
+        if intent.review_batch is not None and not isinstance(intent.review_batch, ReviewBatch):
+            raise ValueError("invalid review batch")
+        if row["dry_run_digest"] != digest(
+            {
+                "request": asdict(request),
+                "intent": asdict(intent),
+                "policy_revision": row["policy_revision"],
+            }
+        ):
+            raise ValueError("reservation intent mismatch")
         operations.append(
             CostOperation(
                 operation_id=request.operation_id,
@@ -234,6 +254,10 @@ def load_budget_page(connection, *, project_key, after, limit):
                 approved_by=entry.approval.actor_id if entry.approval else None,
                 reserved_autonomously=entry.reserved_autonomously,
                 reserved_at=reserved_at.get(request.operation_id),
+                kind="LLM review" if intent.stage == "llm" else None,
+                annotation_job_id=(
+                    intent.review_batch.annotation_job_id if intent.review_batch else None
+                ),
             )
         )
     return BudgetPage(

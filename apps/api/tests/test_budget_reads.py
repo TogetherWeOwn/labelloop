@@ -16,6 +16,7 @@ from test_budget_store import ADMIN, LLM, claim, request, reserve
 
 from labelloop_api import budget_reads
 from labelloop_api import budget_schema as db
+from labelloop_api.budget_store import DispatchIntent, digest
 from labelloop_api.main import app
 from labelloop_api.schema import project
 from labelloop_core.budget import BudgetPolicy, LedgerEntry, SpendApproval
@@ -29,15 +30,17 @@ def entry(key="one", **kwargs):
     return LedgerEntry(req, SpendApproval(ADMIN.id, req.digest), **kwargs)
 
 
-def persist(connection, value, *, key=None):
+def persist(connection, value, *, key=None, intent=budget_tests.INTENT):
     connection.execute(
         sa.insert(db.operation).values(
             project_id="budget-fixture",
             operation_id=key or value.request.operation_id,
-            dry_run_digest="a" * 64,
+            dry_run_digest=digest(
+                {"request": asdict(value.request), "intent": asdict(intent), "policy_revision": 1}
+            ),
             policy_revision=1,
             entry=asdict(value),
-            intent={"private": "must-not-leak"},
+            intent=asdict(intent),
             evidence={"private": "must-not-leak"},
         )
     )
@@ -120,6 +123,8 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
             "approved_by": ADMIN.id,
             "reserved_autonomously": False,
             "reserved_at": None,
+            "kind": "LLM review",
+            "annotation_job_id": None,
         }
     ]
     assert "must-not-leak" not in response.text
@@ -223,6 +228,65 @@ def test_reservation_lookup_is_bounded_to_returned_page(http, store):
     assert http.get(PATH, params={"limit": 1, "after": "a"}).status_code == 409
 
 
+@pytest.mark.parametrize(
+    ("intent", "kind", "job"),
+    [
+        (budget_tests.INTENT, "LLM review", None),
+        (budget_tests.BATCH_INTENT, "LLM review", "annotation-job"),
+        (DispatchIntent("platform", "fixture"), None, None),
+    ],
+)
+def test_operation_metadata_uses_only_bound_dispatch_intent(http, store, intent, kind, job):
+    with store.engine.begin() as connection:
+        persist(connection, entry(), intent=intent)
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 200
+    row = response.json()["operations"][0]
+    assert row["kind"] == kind
+    assert row["annotation_job_id"] == job
+    for private in ("provider_id", "model_id", "release_id", "image_ids", "max_input_tokens"):
+        assert private not in response.text
+    assert "recipe_id" not in row
+
+
+@pytest.mark.parametrize(
+    "change", ["intent", "job", "digest", "policy", "request", "root", "batch_root"]
+)
+def test_operation_metadata_rejects_substituted_binding(http, store, change):
+    intent = budget_tests.BATCH_INTENT
+    with store.engine.begin() as connection:
+        persist(connection, entry(), intent=intent)
+        changes = {
+            "intent": {"intent": asdict(replace(intent, stage="platform", review_batch=None))},
+            "job": {
+                "intent": asdict(
+                    replace(
+                        intent,
+                        review_batch=replace(budget_tests.BATCH, annotation_job_id="substituted"),
+                    )
+                )
+            },
+            "digest": {"dry_run_digest": "b" * 64},
+            "policy": {"policy_revision": 2},
+            "request": {
+                "entry": asdict(
+                    LedgerEntry(
+                        req := replace(request(), iteration_id="substituted"),
+                        SpendApproval(ADMIN.id, req.digest),
+                    )
+                )
+            },
+            "root": {"intent": {"private": "excluded"}},
+            "batch_root": {"intent": asdict(intent) | {"review_batch": 1}},
+        }
+        connection.execute(sa.update(db.operation).values(**changes[change]))
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+
+
 def test_autonomous_reservation_does_not_invent_human_approval(http, store):
     value = LedgerEntry(request(), reserved_autonomously=True)
     with store.engine.begin() as connection:
@@ -243,7 +307,11 @@ def test_openapi_publishes_typed_read_contract():
     }
     assert "policy_revision" in contract["components"]["schemas"]["BudgetPage"]["required"]
     operation = contract["components"]["schemas"]["CostOperation"]
-    assert "reserved_at" in operation["required"]
+    assert {"reserved_at", "kind", "annotation_job_id"} <= set(operation["required"])
+    assert operation["properties"]["kind"]["anyOf"] == [
+        {"type": "string", "const": "LLM review"},
+        {"type": "null"},
+    ]
     assert operation["properties"]["reserved_at"]["anyOf"] == [
         {"type": "string", "format": "date-time"},
         {"type": "null"},
@@ -534,6 +602,8 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         assert page.status_code == 200
         assert page.json()["operations"][0]["actual"] is None
         assert page.json()["operations"][0]["exposure"] == 40
+        assert page.json()["operations"][0]["kind"] == "LLM review"
+        assert page.json()["operations"][0]["annotation_job_id"] is None
         with postgres_budget.engine.connect() as connection:
             reserved_at = connection.execute(
                 sa.select(db.event.c.occurred_at).where(
@@ -569,6 +639,57 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         assert recovered_summary.json() == summary.json()
     assert postgres_budget.snapshot("budget-fixture") == before
     assert before.entry("one").state == "unconfirmed"
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_postgres_bound_operation_metadata_recovers_after_policy_change(
+    monkeypatch, store, postgres_budget, batch
+):
+    if batch:
+        budget_tests.configure_review(postgres_budget)
+        dry = budget_tests.reserve_review(postgres_budget)
+    else:
+        req = request()
+        dry = postgres_budget.prepare(req, DispatchIntent("platform", "fixture"), actor=ADMIN)
+        postgres_budget.reserve("budget-fixture", "one", dry.digest, actor=ADMIN)
+    # The operation retains its reservation revision, never today's policy digest.
+    postgres_budget.set_policy(
+        "budget-fixture",
+        actor=ADMIN,
+        expected_revision=dry.policy_revision,
+        policy=BudgetPolicy(100, 100, 100),
+        pixel_providers=("fixture",),
+    )
+    monkeypatch.setattr(
+        budget_reads, "auth_store", lambda: SimpleNamespace(engine=postgres_budget.engine)
+    )
+    with postgres_budget.engine.connect() as connection:
+        before = connection.execute(sa.select(db.operation)).mappings().all()
+        events = connection.execute(sa.select(db.event).order_by(db.event.c.id)).mappings().all()
+    first = None
+    for _ in range(2):
+        with TestClient(app, base_url=ORIGIN) as client:
+            login(client, "admin")
+            response = client.get(PATH)
+            assert response.status_code == 200
+            value = response.json()
+            row = value["operations"][0]
+            assert row["kind"] == ("LLM review" if batch else None)
+            assert row["annotation_job_id"] == ("annotation-job" if batch else None)
+            assert row["actual"] is None
+            assert row["exposure"] == 40
+            assert value["policy_revision"] == dry.policy_revision + 1
+            assert "provider_id" not in response.text
+            assert "image_ids" not in response.text
+            if first is not None:
+                assert value == first
+            first = value
+    with postgres_budget.engine.connect() as connection:
+        assert connection.execute(sa.select(db.operation)).mappings().all() == before
+        assert (
+            connection.execute(sa.select(db.event).order_by(db.event.c.id)).mappings().all()
+            == events
+        )
 
 
 def test_postgres_summary_retains_writer_lock_until_outer_commit(postgres_budget):

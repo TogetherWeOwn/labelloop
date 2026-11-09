@@ -4,6 +4,7 @@ import { costClient, type CostOperation, type CostReadQuery, type CostSummaryQue
 const entry: CostOperation = {
   operation_id: 'operation-1', iteration_id: 'iteration-1', month: '2026-11', price_version: 'prices-1',
   estimate: 100, actual: null, exposure: 150, state: 'unconfirmed', approved_by: null, reserved_autonomously: true, reserved_at: null,
+  kind: null, annotation_job_id: null,
 };
 const page = (operations: unknown[] = [entry], extra = {}) => ({
   project_id: 'project-a', currency: 'USD', unit: 'micro_usd', policy_revision: 1,
@@ -134,6 +135,28 @@ describe('session-backed cost transport', () => {
 
   it.each(['', '2026-11', '2026-11-09T10:00:00', '2026-11-09T11:00:00+01:00', '2026-02-29T10:00:00Z', '2026-11-31T10:00:00Z', '2026-11-09T24:00:00Z', '0000-01-01T00:00:00Z', '2026-11-09T10:00:00.1234567Z', 1, {}, undefined])('rejects absent or invalid reservation timestamp: %j', async (reserved_at) => {
     const request = stub(json(page([{ ...entry, reserved_at }])));
+    await expect(costClient('project-a').query({}, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { kind: null, annotation_job_id: null },
+    { kind: 'LLM review', annotation_job_id: null },
+    { kind: 'LLM review', annotation_job_id: 'annotation-job/?日本語' },
+  ])('retains recorded review identity without inventing platform or recipe metadata: %j', async (metadata) => {
+    const value = page([{ ...entry, ...metadata }]);
+    stub(json(value));
+    await expect(costClient('project-a').query({}, signal())).resolves.toEqual(value);
+  });
+
+  it.each([
+    { kind: 'Training' }, { kind: 'Predict' }, { kind: 'Auto-annotation' }, { kind: undefined },
+    { annotation_job_id: 'job-without-kind' }, { kind: 'LLM review', annotation_job_id: '' },
+    { kind: 'LLM review', annotation_job_id: ' ' }, { kind: 'LLM review', annotation_job_id: 1 },
+    { kind: 'LLM review', annotation_job_id: 'x'.repeat(257) }, { annotation_job_id: undefined },
+    { recipe_id: 'invented' },
+  ])('rejects unsupported or malformed operation metadata: %j', async (metadata) => {
+    const request = stub(json(page([{ ...entry, ...metadata }])));
     await expect(costClient('project-a').query({}, signal())).rejects.toThrow(/^Cost records unavailable$/);
     expect(request).toHaveBeenCalledOnce();
   });
