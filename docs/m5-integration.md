@@ -6,6 +6,26 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Inherited completeness row identity correction — pending Actions
+
+Exact `43db447ec15a7c60ae222f5c5f5aec04d6dd53cb`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42556349748).
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42556349748/job/128962859873)
+reported **2 failed, 17 passed**, both at the new completeness whole-row assertion.
+The assessment table has a generated UUID primary key; the writer copies evidence
+and the original timestamp into a new row, omitting that key. Comparing the new
+row to the old row with only its revision replaced incorrectly requires UUID reuse.
+Unit, queue/migration cycles/all four parent upgrades, web-build/dev-stack,
+lint/types/import-contract, CodeQL and gitleaks passed; CI remains failed.
+
+The corrected both-recipe assertion requires a distinct row UUID and compares all
+remaining fields exactly, including the original assessor and timestamp. Existing
+historical-row, count, session-attribution and recovery controls remain. No
+production writer, gate, migration, dependency or endpoint changes. Corrected
+persisted assertions are unverified until exact-head Actions; no local tests ran.
+REA: reuse the schema's generated row identity and the writer's explicit copied
+columns, rather than confuse evidence inheritance with record-identity reuse.
+
 ## Inherited completeness attribution fixture repair — pending Actions
 
 Exact `efa1c6b123865e47ed30e810b1ba5b0508af8d60`

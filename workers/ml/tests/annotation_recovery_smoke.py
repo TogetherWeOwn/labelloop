@@ -445,7 +445,8 @@ def exercise_annotation_recovery(engine, release, final, context, canary, actor,
                     for row in before[table]
                     if row["asset_id"] == item["asset_id"] and row["revision"] == 1
                 )
-                assert added == original | {"revision": 2}
+                assert added["id"] != original["id"]
+                assert added == original | {"id": added["id"], "revision": 2}
                 assert added["actor_id"] == arguments["actor_id"]
             else:
                 assert added["actor_id"] == item["http_actor_id"]
