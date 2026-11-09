@@ -62,7 +62,8 @@ describe('session cost display contract', () => {
     expect(record).toMatchObject({ price_version: null, entries: [{ at: null, kind: null, object_id: null, recipe_id: null }] });
     const rendered = html(record);
     for (const label of ['Operation kind unavailable', 'Object unavailable', 'Reservation time unavailable', 'Policy (autonomous)']) expect(rendered).toContain(label);
-    expect(rendered).not.toContain('<time');
+    expect(rendered).toContain('dateTime="2026-11-09T12:00:00Z"');
+    expect(rendered.split('<tbody>')[1].split('</tbody>')[0]).not.toContain('<time');
     const cells = ledgerCsv(record.entries).split('\r\n')[1].split(',');
     expect(cells.slice(0, 5)).toEqual(['""', '"operation-a"', '""', '""', '""']);
     expect(scopedEntries(record, { kind: 'run', id: 'operation-a' })).toEqual([]);
@@ -74,6 +75,7 @@ describe('session cost display contract', () => {
     const record = await read();
     expect(record.entries[0]).toMatchObject({ state: 'unconfirmed', object_id: '<batch>', kind: 'LLM review', at: '2026-11-08T12:00:00.123456Z' });
     expect(scopedEntries(record, { kind: 'review_batch', id: '<batch>' })).toHaveLength(1);
+    expect(scopedEntries(record, { kind: 'run', id: '<batch>' })).toEqual([]);
     expect(html(record)).toContain('&lt;batch&gt;');
     expect(html(record)).toContain('review paused: approval exhausted');
     expect(html(record)).not.toContain('>Refused<');
