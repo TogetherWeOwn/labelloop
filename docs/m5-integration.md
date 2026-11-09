@@ -6,7 +6,44 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Audit multi-select filters — pending Actions
+## Pinned tool downloads — bounded retry spacing; new controls pending
+
+Completed exact `030fa5ccdd43df6de1d5dfa3c50adb4efb1eed20`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456) failed only
+in [lint](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456/job/129041204844):
+Ruff check/format passed, but actionlint's three pinned download attempts returned
+HTTP 504, so actionlint, zizmor and the subsequent immutable-lockfile check did not
+run. [CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537117)
+also failed: Python analysis never started because its CLI download exhausted
+HTTP 504 responses; Actions and JavaScript analysis passed. These are established
+download failures, not lint findings or an accepted security scan.
+
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456/job/129041204823),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456/job/129041204733),
+[dev-stack readiness](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456/job/129041204639),
+queue/migration round trip/all four parent upgrades, web-build and types/import-contract
+passed. MinIO's seven bounded-download/backoff controls are now verified, including
+the readiness gate; this is not proof that upstream downloads are reliable.
+Multi-select session/OpenAPI/PostgreSQL controls also passed at the earlier exact
+`d6ad59d2b8ee10075a8f0e05e743a631725424c7`
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42579491089/job/129034627793)
+and [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42579491089/job/129034627819).
+That run's sole CI failure was the MinIO download returning three HTTP 504s.
+These results supersede the historical pending labels below, not full M5 acceptance.
+
+The existing actionlint curl now requests five-second intervals instead of its
+one/two-second default backoff. Three attempts, connect/per-transfer/retry timing
+bounds, exact release URL, SHA-256, checksum-before-extraction/execution, linter
+failure propagation and temporary-directory cleanup remain unchanged. Five new
+network-free controls execute the actual workflow shell with a curl stand-in:
+success, exhausted/partial download, corrupt payload, missing archive member and
+nonzero linter result. They assert the native curl options, unchanged artifact pin,
+no execution before verification and cleanup on every path; they do not simulate
+curl's internal retry scheduler or claim a live outage repair. New assertions await
+Actions. No mirror, replacement artifact, new dependency, check waiver, local suite
+or deployment. REA: reuse native curl retry controls and the existing checksum gate.
+
+## Audit multi-select filters — historical pending report
 
 The audit query/export accepts repeated `kind` and `actor_kind` parameters as
 bounded sets: OR within a field, AND across fields and search/date filters. A
