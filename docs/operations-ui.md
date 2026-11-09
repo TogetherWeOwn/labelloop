@@ -81,7 +81,13 @@ a foreign, hidden or filtered-out event rejects without disclosing its metadata.
 Each page is a fresh read, not a frozen cross-page history. Refresh from page one
 for newly appended events. Optional `kind`, `since`, inclusive `through`,
 `actor_kind` and `search` filters apply identically to `/audit-log/export`.
-`actor_kind` selects the recorded `human`, `model`, `system` or `unknown` category;
+`kind` and `actor_kind` can repeat to select a set (OR within a field, AND
+between fields). Single values remain compatible and omitted fields mean all
+authorized values. The query validates every member and bounds input to three
+kinds/five actor kinds; duplicates do not duplicate records. Page totals, cursor
+lookup and export all consume that same filtered population, never browser-side
+filtering after paging. New multi-selection controls await exact-head Actions.
+`actor_kind` selects recorded `human`, `model`, `system` or `unknown` categories;
 a shared actor identifier never changes that provenance. Search accepts 1–128
 characters and matches a case-insensitive literal actor-ID/current-name substring
 or an exact event/record UUID (hyphenated or hex). `%`, `_` and `/` have no wildcard
@@ -101,10 +107,15 @@ ledger freshness token or operation revision. The static sentence discloses no
 action, private record, operation/claim ID, policy/pricing or provider payload.
 Native and text UUID journals share normalized hex ordering/cursor/search keys,
 while public IDs remain UUIDs. Reviewer restrictions apply before every operation,
-including budget-name search, counts and export. New budget controls await Actions.
+including budget-name search, counts and export. Nullable `refused` is `true` only
+for the writer's explicit `approval_exhausted` event; other events remain unknown,
+not successful. Budget/refusal controls passed
+[CI at 0f5d8ce](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331537),
+including unit and both-recipe PostgreSQL smoke. The synthetic refusal row proves
+projection/recovery, not actual paid-attempt emission or complete refused history.
 
 This port is **not yet mounted in AuditLog** and does not supply connection
-history, classified refused attempts, record links or the complete accepted UI projection.
+history, complete refused attempts, record links or the complete accepted UI projection.
 Search/filter and UUID fixture controls passed
 [CI at a3fcca5](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
 including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944)

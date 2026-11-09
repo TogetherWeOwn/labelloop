@@ -209,6 +209,28 @@ def exercise_audit_reads(engine, project_key):
         # Filter complete committed history before counts/cursors, and preserve
         # exact page/export equality on the real PostgreSQL UUID representation.
         for params, matching in (
+            (
+                {
+                    "kind": ["Review", "Budget"],
+                    "actor_kind": ["human", "model", "system", "service"],
+                },
+                [event for event in events if event["kind"] in ("Review", "Budget")],
+            ),
+            (
+                {
+                    "kind": ["Budget", "Review"],
+                    "actor_kind": ["service", "system", "model", "human"],
+                },
+                [event for event in events if event["kind"] in ("Review", "Budget")],
+            ),
+            (
+                {"kind": ["Budget", "Budget"], "actor_kind": ["human", "human"]},
+                [
+                    event
+                    for event in events
+                    if event["kind"] == "Budget" and event["actor_kind"] == "human"
+                ],
+            ),
             ({"search": events[0]["id"]}, [events[0]]),
             (
                 {"search": events[0]["record_id"]},
@@ -256,6 +278,24 @@ def exercise_audit_reads(engine, project_key):
                 ).json()
                 assert next_page["total"] == len(matching)
                 assert next_page["events"] == matching[1:2]
+        excluded = next(event for event in events if event["kind"] == "Promotion")
+        assert (
+            client.get(
+                path,
+                params={"kind": ["Review", "Budget"], "after": f"Promotion/{excluded['id']}"},
+            ).status_code
+            == 409
+        )
+        for suffix in ("", "/export"):
+            for invalid in (
+                {"kind": ["Review", "Connection", "Budget"]},
+                {"kind": ["Review"] * 4},
+                {"actor_kind": ["human", "person", "service"]},
+                {"actor_kind": ["human"] * 6},
+            ):
+                response = client.get(path + suffix, params=invalid)
+                assert response.status_code == 422
+                assert response.json() == {"detail": "invalid_request"}
         assert client.get("/projects/missing-audit-project/audit-log").status_code == 404
 
         # A new authenticated principal gets a new authorized query, not the
@@ -265,6 +305,18 @@ def exercise_audit_reads(engine, project_key):
         visible = client.get(path).json()
         assert visible["total"] == len(before[0])
         assert all(event["kind"] == "Review" for event in visible["events"])
+        combined = {
+            "kind": ["Review", "Promotion", "Budget"],
+            "actor_kind": ["human", "model", "system", "service", "unknown"],
+        }
+        selected = client.get(path, params=combined)
+        assert selected.status_code == 200
+        assert selected.json() == visible
+        exported = client.get(path + "/export", params=combined)
+        assert exported.status_code == 200
+        assert [json.loads(line) for line in exported.text.splitlines()] == [
+            event for event in events if event["kind"] == "Review"
+        ]
         for hidden_kind in ("Promotion", "Budget"):
             assert client.get(path, params={"kind": hidden_kind}).json()["total"] == 0
             assert client.get(path + "/export", params={"kind": hidden_kind}).text == ""

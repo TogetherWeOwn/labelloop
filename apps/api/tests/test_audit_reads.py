@@ -418,6 +418,94 @@ def test_cursor_must_resolve_inside_authorized_filtered_query(http, after):
     assert response.json() == {"detail": "audit_state_rejected"}
 
 
+@pytest.mark.parametrize("account", ["admin", "reviewer"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_set_filters_share_authorized_counts_pages_and_export(http, store, account, reverse):
+    with store.engine.begin() as connection:
+        budget(connection, 60)
+        review(connection, 70, actor_kind="human")
+    login(http, account)
+    kinds = ["Review", "Budget"]
+    actors = ["system", "human"]
+    if reverse:
+        kinds.reverse()
+        actors.reverse()
+    params = {"kind": kinds, "actor_kind": actors}
+    expected = [70, 20, 10, 60] if account == "admin" else [70, 20, 10]
+    events = []
+    after = None
+    for number in expected:
+        response = http.get(
+            PATH, params=params | {"limit": 1} | ({"after": after} if after else {})
+        )
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        page = response.json()
+        assert page["total"] == len(expected)
+        assert [event["id"] for event in page["events"]] == [str(UUID(int=number))]
+        events.extend(page["events"])
+        after = page["next_after"]
+    assert after is None
+    exported = http.get(PATH + "/export", params=params)
+    assert exported.status_code == 200
+    assert [json.loads(line) for line in exported.text.splitlines()] == events
+    assert "must-not-leak" not in exported.text
+    assert "private" not in exported.text
+    for excluded in (f"Promotion/{UUID(int=30)}", f"Review/{UUID(int=40)}"):
+        assert http.get(PATH, params=params | {"after": excluded}).status_code == 409
+    if account == "reviewer":
+        assert (
+            http.get(PATH, params=params | {"after": f"Budget/{UUID(int=60)}"}).status_code == 409
+        )
+    narrowed = http.get(
+        PATH,
+        params={
+            "kind": ["Review", "Budget"],
+            "actor_kind": ["human"],
+            "after": f"Review/{UUID(int=20)}",
+        },
+    )
+    assert narrowed.status_code == 409
+    with store.engine.connect() as connection:
+        assert (
+            connection.execute(sa.select(sa.func.count()).select_from(db.review_event)).scalar_one()
+            == 4
+        )
+        assert (
+            connection.execute(sa.select(sa.func.count()).select_from(budgets.event)).scalar_one()
+            == 1
+        )
+
+
+@pytest.mark.parametrize("suffix", ["", "/export"])
+def test_duplicate_set_members_do_not_duplicate_events(http, suffix):
+    login(http, "admin")
+    expected = http.get(PATH + suffix, params={"kind": "Review", "actor_kind": "system"})
+    response = http.get(
+        PATH + suffix,
+        params={"kind": ["Review", "Review"], "actor_kind": ["system", "system"]},
+    )
+    assert response.status_code == expected.status_code == 200
+    assert response.content == expected.content
+
+
+@pytest.mark.parametrize("suffix", ["", "/export"])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"kind": ["Review", "Connection", "Budget"]},
+        {"kind": ["Review"] * 4},
+        {"actor_kind": ["human", "person", "service"]},
+        {"actor_kind": ["human"] * 6},
+    ],
+)
+def test_every_set_member_and_collection_bound_is_validated(http, suffix, params):
+    login(http, "admin")
+    response = http.get(PATH + suffix, params=params)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+
+
 def test_cursor_filtered_out_is_not_reused(http):
     login(http, "admin")
     response = http.get(PATH, params={"kind": "Review", "after": f"Promotion/{UUID(int=30)}"})
@@ -719,3 +807,15 @@ def test_openapi_has_typed_metadata_only_contract():
         "refused",
     }
     assert properties["refused"]["anyOf"] == [{"type": "boolean"}, {"type": "null"}]
+    for suffix in ("", "/export"):
+        operation = contract["paths"]["/projects/{project_key}/audit-log" + suffix]["get"]
+        assert "requestBody" not in operation
+        parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+        for key, maximum in (("kind", 3), ("actor_kind", 5)):
+            parameter = parameters[key]
+            assert parameter["in"] == "query" and parameter["required"] is False
+            array = next(
+                value for value in parameter["schema"]["anyOf"] if value["type"] == "array"
+            )
+            assert array["minItems"] == 1 and array["maxItems"] == maximum
+            assert array["items"]["type"] == "string"

@@ -130,13 +130,15 @@ def visible_events(project_id, project_key, actor, kind, since, through, actor_k
     )
     query = sa.select(events)
     if kind is not None:
-        query = query.where(events.c.kind == kind)
+        query = query.where(events.c.kind.in_(kind if isinstance(kind, list) else [kind]))
     if since is not None:
         query = query.where(events.c.at >= since)
     if through is not None:
         query = query.where(events.c.at <= through)
     if actor_kind is not None:
-        query = query.where(events.c.actor_kind == actor_kind)
+        query = query.where(
+            events.c.actor_kind.in_(actor_kind if isinstance(actor_kind, list) else [actor_kind])
+        )
     if search is not None:
         # Search only public metadata. Escaped LIKE treats % and _ literally;
         # exact UUID comparisons work with both native and text-backed storage.
@@ -273,12 +275,12 @@ ProjectKey = Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")
 def inspect_audit(
     project_key: ProjectKey,
     actor: Annotated[Principal, Depends(require_reviewer)],
-    kind: AuditKind | None = None,
+    kind: Annotated[list[AuditKind] | None, Query(min_length=1, max_length=3)] = None,
     since: datetime | None = None,
     through: datetime | None = None,
     after: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    actor_kind: ActorKind | None = None,
+    actor_kind: Annotated[list[ActorKind] | None, Query(min_length=1, max_length=5)] = None,
     search: AuditSearch = None,
 ) -> AuditMetadataPage:
     return read_audit(project_key, actor, kind, since, through, after, limit, actor_kind, search)
@@ -288,10 +290,10 @@ def inspect_audit(
 def export_audit(
     project_key: ProjectKey,
     actor: Annotated[Principal, Depends(require_reviewer)],
-    kind: AuditKind | None = None,
+    kind: Annotated[list[AuditKind] | None, Query(min_length=1, max_length=3)] = None,
     since: datetime | None = None,
     through: datetime | None = None,
-    actor_kind: ActorKind | None = None,
+    actor_kind: Annotated[list[ActorKind] | None, Query(min_length=1, max_length=5)] = None,
     search: AuditSearch = None,
 ) -> Response:
     # Buffer a bounded complete result before responding: never silently truncate

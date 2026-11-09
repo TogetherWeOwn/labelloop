@@ -6,7 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Explicit refusal metadata — pending Actions
+## Audit multi-select filters — pending Actions
+
+The audit query/export accepts repeated `kind` and `actor_kind` parameters as
+bounded sets: OR within a field, AND across fields and search/date filters. A
+single parameter remains compatible; omitting a field selects all authorized
+values. Duplicate members do not duplicate events. Every value is validated,
+including invalid middle values; at most three event kinds and five recorded
+actor kinds are accepted. Unknown connection history is not fabricated. Source
+authorization still precedes selection, counts, cursor lookup and export. No
+client-side page filtering, new schema, migration, dependency or spend command.
+
+New session cases cover both roles, parameter order, complete pagination/export
+equality, duplicates, hidden/filtered cursors, collection bounds and every member's
+validation; OpenAPI must publish bounded query arrays, not a request body. Both-recipe
+PostgreSQL smoke adds committed-history multi-selection/export/cursor/reviewer and
+non-mutation controls. New assertions await exact-head Actions. Full operational
+mounting/navigation, missing connection/refusal producers and expanded restore
+remain incomplete. REA: reuse the single authorized event population, not parallel
+queries or browser-side filtering that would misstate counts and page boundaries.
+
+## Explicit refusal metadata — verified baseline
+
+Exact `0f5d8ce1befbcd52af7f3b6812c61e1691010ca5`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331537),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331537/job/129027931858),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331537/job/129027931972),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331200) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331109) succeeded.
+Queue/migration cycles/all four parent upgrades, dev-stack/web-build and
+lint/types/import-contract passed. Refusal metadata/session/recovery controls below
+are verified, superseding their historical pending labels. Totals not extracted;
+this is not verification of the new multi-selection slice or milestone acceptance.
+
+## Explicit refusal metadata — historical pending report
 
 Audit metadata now reports nullable `refused`: only the budget writer's exact
 `approval_exhausted` action yields `true` and a fixed redacted refusal sentence.
