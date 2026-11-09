@@ -154,8 +154,12 @@ project/session lifetime and replace it when either scope changes.
 [CI at f55fe5d](https://github.com/TogetherWeOwn/labelloop/actions/runs/42586297134)
 passed web-build (including transport lint/types/tests), unit, both-recipe ML smoke,
 queue/migration cycles/all four parents and dev-stack. CodeQL and gitleaks also
-passed that exact transport head. The new adapter/unknown-state tests await
-new-head Actions; no local tests or builds ran. No new layout, component, token,
+passed that exact transport head. First adapter head `463fa17` failed web lint:
+structured Actions annotation identified an unsafe `any` argument after array
+narrowing. The boundary now validates each kind as `unknown` before string use,
+with null/numeric-member controls; adapter tests were not reached on that head.
+The corrected adapter/unknown-state tests await new-head Actions; no local tests
+or builds ran. No new layout, component, token,
 event store, dependency, provider or spend operation. REA: reuse the supplied
 AuditLog port, session transport and existing neutral tag, not another audit journal.
 

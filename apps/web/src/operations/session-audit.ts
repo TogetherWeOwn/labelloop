@@ -13,7 +13,7 @@ function day(value: string, end: boolean): string | undefined {
 
 function filters(query: AuditQuery): AuditFilters {
   if (!Array.isArray(query.kinds) || query.kinds.length < 1 || query.kinds.length > 4
-    || query.kinds.some((kind) => !['Review', 'Promotion', 'Connection', 'Budget'].includes(kind))
+    || query.kinds.some((kind: unknown) => typeof kind !== 'string' || !['Review', 'Promotion', 'Connection', 'Budget'].includes(kind))
     || !Array.isArray(query.principals) || query.principals.length < 1 || query.principals.length > 2
     || query.principals.some((kind) => kind !== 'person' && kind !== 'service')) throw unavailable();
   // No connection journal exists in this reader. Do not manufacture empty history.

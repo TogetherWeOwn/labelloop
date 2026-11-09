@@ -73,13 +73,13 @@ describe('session-backed AuditLog projection', () => {
   });
 
   it.each([
-    { kinds: [] }, { kinds: ['Connection'] }, { kinds: ['Other'] }, { principals: [] }, { principals: ['unknown'] },
+    { kinds: [] }, { kinds: ['Connection'] }, { kinds: ['Other'] }, { kinds: ['Review', null] }, { kinds: [1] }, { principals: [] }, { principals: ['unknown'] },
     { from: '2025-02-29' }, { from: '2026-04-31' }, { through: '2026-13-01' }, { from: '2026-1-01' },
     { from: '2026-11-10', through: '2026-11-09' }, { search: 'x'.repeat(129) },
   ])('fails closed before network access for unsupported filters: %j', async (change) => {
     const request = stub([]);
     const port = sessionAuditPort('project-a');
-    const invalid = { ...query, ...change } as AuditQuery;
+    const invalid = { ...query, ...change } as unknown as AuditQuery;
     await expect(port.query(invalid, null, signal())).rejects.toThrow('Audit records unavailable');
     await expect(port.exportJsonLines(invalid, signal())).rejects.toThrow('Audit records unavailable');
     expect(request).not.toHaveBeenCalled();
