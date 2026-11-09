@@ -1,3 +1,5 @@
+import { readSessionText } from './session-read.ts';
+
 // Session-backed transport for audit_reads.py. Keep wire provenance intact;
 // the display adapter must not infer people, successful outcomes or record URLs.
 export type RecordedAuditKind = 'Review' | 'Promotion' | 'Budget';
@@ -99,50 +101,7 @@ async function read(project: string, query: AuditReadQuery, signal: AbortSignal,
   if (!text(project, 128) || /\s/.test(project) || project === '.' || project === '..') throw unavailable();
   const params = parameters(query, exporting);
   const path = `/api/projects/${encodeURIComponent(project)}/audit-log${exporting ? '/export' : ''}`;
-  signal.throwIfAborted();
-  let response: Response;
-  try {
-    response = await fetch(`${path}?${params}`, {
-      method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
-      headers: { Accept: exporting ? 'application/x-ndjson' : 'application/json' },
-    });
-  } catch {
-    signal.throwIfAborted();
-    throw unavailable();
-  }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw unavailable();
-  }
-  const mediaType = response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase();
-  if (mediaType !== (exporting ? 'application/x-ndjson' : 'application/json') || response.body === null) {
-    await response.body?.cancel().catch(() => undefined);
-    throw unavailable();
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const max = exporting ? 2 * 1024 * 1024 : 256 * 1024;
-  let bytes = 0;
-  let body = '';
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > max) throw unavailable();
-      body += decoder.decode(value, { stream: true });
-    }
-    body += decoder.decode();
-    signal.throwIfAborted();
-    return body;
-  } catch {
-    await reader.cancel().catch(() => undefined);
-    signal.throwIfAborted();
-    throw unavailable();
-  } finally {
-    reader.releaseLock();
-  }
+  return readSessionText(`${path}?${params}`, signal, exporting ? 'application/x-ndjson' : 'application/json', exporting ? 2 * 1024 * 1024 : 256 * 1024, unavailable);
 }
 
 export function auditClient(project: string) {

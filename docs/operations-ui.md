@@ -163,8 +163,10 @@ validation threw synchronously before the promised export rejection. The export
 adapter is now async so the existing view's rejection handler receives every
 validation failure without a synchronous event-handler exception. Existing negative
 controls retain the no-network requirement. Corrected adapter/unknown-state tests
-await new-head Actions; no local tests or builds ran. No new layout, component, token,
-event store, dependency, provider or spend operation. REA: reuse the supplied
+passed [exact-head web-build at 00f157f](https://github.com/TogetherWeOwn/labelloop/actions/runs/42589224587/job/129066646885),
+including lint/types/tests and the existing fixture-browser checks. Overall CI,
+CodeQL and gitleaks passed that head; no local tests or builds ran. No new layout,
+component, token, event store, dependency, provider or spend operation. REA: reuse the supplied
 AuditLog port, session transport and existing neutral tag, not another audit journal.
 
 ## Authenticated ledger read port — integration pending
@@ -193,6 +195,33 @@ paging, redaction, rollback and disposable PostgreSQL recovery controls passed
 [exact-head Actions at a90a230](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534);
 no local tests ran. REA: reuse the durable ledger codec and core
 exposure property, not another budget engine.
+
+### Session-backed ledger transport
+
+`costClient(project).query({ after, limit }, signal)` reads exactly one authorized
+page through the fixed same-origin costs route. Strict wire validation rejects
+foreign project scope, unknown fields/states/units, unsafe numeric amounts,
+inconsistent actual/state/exposure, duplicate rows and malformed cursors. It
+preserves nullable actuals, confirmed zero, explicit policy zero/null limits and
+server-computed retained-child exposure; it does not calculate browser-side
+budget grants or hide insufficient-credit pauses. Session credentials are sent
+only same-origin, with no-store, redirects refused and cancellation supported.
+
+Audit and cost clients reuse one bounded fatal-UTF-8 session reader. Cost pages
+are limited to 256 KiB; transport/HTTP/parser failures are redacted and never
+retried. New network-free controls cover these boundaries and pagination,
+including policy changes between pages. They await Actions at the new head;
+existing audit controls must also pass after the shared-reader extraction. No
+local tests/builds, dependencies, mutation or paid operation are introduced.
+
+The wire page is deliberately not coerced into `CostsRecord`: operation kinds,
+object identities, timestamps and scoped complete totals are not delivered by
+this endpoint. No fabricated labels, policy commands, resume command or record
+links are supplied. Policy revisions are not ledger snapshots; consumers refresh
+from page one, not merge pages into a claimed atomic total. The authenticated
+shell and full CostsView mounting remain required and separately owned shell work
+is not replaced. REA: reuse the delivered durable ledger projection and audit
+transport safeguards, not another ledger or authorization engine.
 
 ## Not delivered: complete authenticated integration
 
