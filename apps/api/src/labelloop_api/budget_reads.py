@@ -50,6 +50,8 @@ class CostOperation(BaseModel):
     # Platform intent does not distinguish training, annotation and prediction.
     kind: Literal["LLM review"] | None
     annotation_job_id: str | None
+    # Batch exhaustion is separate from ledger state and the project-wide pause.
+    review_pause: Literal["approval_exhausted"] | None
 
 
 class BudgetPage(BaseModel):
@@ -216,6 +218,7 @@ def load_budget_page(connection, *, project_key, after, limit):
         db.operation.c.intent,
         db.operation.c.policy_revision,
         db.operation.c.dry_run_digest,
+        db.operation.c.review_pause,
     ).where(db.operation.c.project_id == project_key)
     if after is not None:
         query = query.where(db.operation.c.operation_id > after)
@@ -233,6 +236,8 @@ def load_budget_page(connection, *, project_key, after, limit):
         intent = DispatchIntent(**row["intent"])
         if intent.review_batch is not None and not isinstance(intent.review_batch, ReviewBatch):
             raise ValueError("invalid review batch")
+        if row["review_pause"] is not None and intent.review_batch is None:
+            raise ValueError("review pause without a review batch")
         if row["dry_run_digest"] != digest(
             {
                 "request": asdict(request),
@@ -258,6 +263,7 @@ def load_budget_page(connection, *, project_key, after, limit):
                 annotation_job_id=(
                     intent.review_batch.annotation_job_id if intent.review_batch else None
                 ),
+                review_pause=row["review_pause"],
             )
         )
     return BudgetPage(

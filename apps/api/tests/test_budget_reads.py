@@ -30,7 +30,7 @@ def entry(key="one", **kwargs):
     return LedgerEntry(req, SpendApproval(ADMIN.id, req.digest), **kwargs)
 
 
-def persist(connection, value, *, key=None, intent=budget_tests.INTENT):
+def persist(connection, value, *, key=None, intent=budget_tests.INTENT, review_pause=None):
     connection.execute(
         sa.insert(db.operation).values(
             project_id="budget-fixture",
@@ -42,6 +42,7 @@ def persist(connection, value, *, key=None, intent=budget_tests.INTENT):
             entry=asdict(value),
             intent=asdict(intent),
             evidence={"private": "must-not-leak"},
+            review_pause=review_pause,
         )
     )
 
@@ -125,6 +126,7 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
             "reserved_at": None,
             "kind": "LLM review",
             "annotation_job_id": None,
+            "review_pause": None,
         }
     ]
     assert "must-not-leak" not in response.text
@@ -250,6 +252,39 @@ def test_operation_metadata_uses_only_bound_dispatch_intent(http, store, intent,
     assert "recipe_id" not in row
 
 
+@pytest.mark.parametrize("pause", [None, "approval_exhausted"])
+@pytest.mark.parametrize("state", ["reserved", "dispatched", "unconfirmed", "settled"])
+def test_review_pause_is_separate_from_ledger_state_project_pause_and_totals(
+    http, store, pause, state
+):
+    value = entry(state=state, actual=0 if state == "settled" else None)
+    with store.engine.begin() as connection:
+        persist(connection, value, intent=budget_tests.BATCH_INTENT, review_pause=pause)
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 200
+    row = response.json()["operations"][0]
+    assert row["review_pause"] == pause
+    assert row["kind"] == "LLM review" and row["annotation_job_id"] == "annotation-job"
+    assert row["state"] == state
+    assert row["actual"] == value.actual and row["exposure"] == value.exposure
+    assert response.json()["pause_reason"] is None
+    summary = http.get(SUMMARY, params=SUMMARY_QUERY).json()
+    assert summary["pause_reason"] is None
+    assert summary["monthly"]["exposure"] == value.exposure
+    assert summary["monthly"]["operation_count"] == 1
+
+
+@pytest.mark.parametrize("intent", [budget_tests.INTENT, DispatchIntent("platform", "fixture")])
+def test_review_pause_without_bound_batch_fails_closed(http, store, intent):
+    with store.engine.begin() as connection:
+        persist(connection, entry(), intent=intent, review_pause="approval_exhausted")
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+
+
 @pytest.mark.parametrize(
     "change", ["intent", "job", "digest", "policy", "request", "root", "batch_root"]
 )
@@ -307,7 +342,13 @@ def test_openapi_publishes_typed_read_contract():
     }
     assert "policy_revision" in contract["components"]["schemas"]["BudgetPage"]["required"]
     operation = contract["components"]["schemas"]["CostOperation"]
-    assert {"reserved_at", "kind", "annotation_job_id"} <= set(operation["required"])
+    assert {"reserved_at", "kind", "annotation_job_id", "review_pause"} <= set(
+        operation["required"]
+    )
+    assert operation["properties"]["review_pause"]["anyOf"] == [
+        {"type": "string", "const": "approval_exhausted"},
+        {"type": "null"},
+    ]
     assert operation["properties"]["kind"]["anyOf"] == [
         {"type": "string", "const": "LLM review"},
         {"type": "null"},

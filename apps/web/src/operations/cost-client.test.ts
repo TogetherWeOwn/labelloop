@@ -4,7 +4,7 @@ import { costClient, type CostOperation, type CostReadQuery, type CostSummaryQue
 const entry: CostOperation = {
   operation_id: 'operation-1', iteration_id: 'iteration-1', month: '2026-11', price_version: 'prices-1',
   estimate: 100, actual: null, exposure: 150, state: 'unconfirmed', approved_by: null, reserved_autonomously: true, reserved_at: null,
-  kind: null, annotation_job_id: null,
+  kind: null, annotation_job_id: null, review_pause: null,
 };
 const page = (operations: unknown[] = [entry], extra = {}) => ({
   project_id: 'project-a', currency: 'USD', unit: 'micro_usd', policy_revision: 1,
@@ -156,6 +156,22 @@ describe('session-backed cost transport', () => {
     { kind: 'LLM review', annotation_job_id: 'x'.repeat(257) }, { annotation_job_id: undefined },
     { recipe_id: 'invented' },
   ])('rejects unsupported or malformed operation metadata: %j', async (metadata) => {
+    const request = stub(json(page([{ ...entry, ...metadata }])));
+    await expect(costClient('project-a').query({}, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each(['reserved', 'dispatched', 'unconfirmed', 'settled'] as const)('retains a batch pause separately from %s ledger state and project pause', async (state) => {
+    const paused = { ...entry, state, kind: 'LLM review', annotation_job_id: 'job', review_pause: 'approval_exhausted', ...(state === 'settled' ? { actual: 0, exposure: 0 } : {}) };
+    const value = page([paused]);
+    stub(json(value));
+    await expect(costClient('project-a').query({}, signal())).resolves.toEqual(value);
+  });
+
+  it.each([
+    { review_pause: undefined }, { review_pause: false }, { review_pause: '' }, { review_pause: 'insufficient_credits' },
+    { review_pause: 'approval_exhausted' }, { kind: 'LLM review', review_pause: 'approval_exhausted' },
+  ])('rejects missing, unknown or unbound batch pause: %j', async (metadata) => {
     const request = stub(json(page([{ ...entry, ...metadata }])));
     await expect(costClient('project-a').query({}, signal())).rejects.toThrow(/^Cost records unavailable$/);
     expect(request).toHaveBeenCalledOnce();

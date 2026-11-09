@@ -167,6 +167,26 @@ def exercise_emitted_refusal(engine, project_key, ledger, admin, revision):
     return refusal
 
 
+def read_cost_operation(client, project_key, operation_id, operation_count):
+    after = None
+    for _ in range(operation_count + 1):
+        response = client.get(
+            f"/projects/{project_key}/costs",
+            params={"limit": 1} | ({"after": after} if after else {}),
+        )
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        page = response.json()
+        assert page["pause_reason"] is None
+        for row in page["operations"]:
+            if row["operation_id"] == operation_id:
+                return row
+        after = page["next_after"]
+        if after is None:
+            break
+    raise AssertionError("committed review batch not found in cost pages")
+
+
 def exercise_audit_reads(engine, project_key):
     # Persist a real policy event before reconnecting through the audit read. A
     # zero-limit fixture policy authorizes no paid operation or provider call.
@@ -262,6 +282,20 @@ def exercise_audit_reads(engine, project_key):
                     == 403
                 )
         login(client, identities["admin"][1])
+        cost = read_cost_operation(
+            client,
+            project_key,
+            refusal_record["operation_id"],
+            len(accounting_before[budgets.operation.name]),
+        )
+        retained = budget_before.entry(refusal_record["operation_id"])
+        assert cost["kind"] == "LLM review"
+        assert cost["annotation_job_id"] == refusal_record["operation_id"]
+        assert cost["review_pause"] == "approval_exhausted"
+        assert cost["state"] == retained.state == "dispatched"
+        assert cost["actual"] is retained.actual is None
+        assert cost["estimate"] == retained.request.estimate == 40
+        assert cost["exposure"] == retained.exposure == 40
         events = []
         after = None
         for _ in range(len(expected) + 1):
@@ -495,6 +529,15 @@ def exercise_audit_reads(engine, project_key):
             assert hidden_cursor.json() == {"detail": "audit_state_rejected"}
     with authenticated_client(engine) as (client, identities, _):
         login(client, identities["admin"][1])
+        assert (
+            read_cost_operation(
+                client,
+                project_key,
+                refusal_record["operation_id"],
+                len(accounting_before[budgets.operation.name]),
+            )
+            == cost
+        )
         params = {"kind": "Budget", "actor_kind": "service", "search": refusal_id}
         recovered = client.get(path, params=params)
         assert recovered.status_code == 200

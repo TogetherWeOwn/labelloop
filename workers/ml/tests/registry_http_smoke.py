@@ -11,7 +11,14 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from labelloop_api import audit_reads, auth, model_schema, qualification_schema, registry_api
+from labelloop_api import (
+    audit_reads,
+    auth,
+    budget_reads,
+    model_schema,
+    qualification_schema,
+    registry_api,
+)
 from labelloop_api.acceptance_store import load_acceptance
 from labelloop_api.auth_schema import principal, service_token
 from labelloop_api.auth_store import PASSWORDS, AuthStore, digest
@@ -77,6 +84,7 @@ def authenticated_client(engine):
         patch.setattr(auth, "auth_store", lambda: store)
         patch.setattr(registry_api, "auth_store", lambda: store)
         patch.setattr(audit_reads, "auth_store", lambda: store)
+        patch.setattr(budget_reads, "auth_store", lambda: store)
         patch.setenv("AUTH_ORIGIN", ORIGIN)
         with TestClient(app, base_url=ORIGIN) as client:
             yield client, identities, workers

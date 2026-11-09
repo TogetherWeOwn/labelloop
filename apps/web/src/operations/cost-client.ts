@@ -17,6 +17,7 @@ export interface CostOperation {
   reserved_at: string | null;
   kind: 'LLM review' | null;
   annotation_job_id: string | null;
+  review_pause: 'approval_exhausted' | null;
 }
 export interface BudgetPage {
   project_id: string;
@@ -54,7 +55,7 @@ const unavailable = () => new Error('Cost records unavailable');
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const identity = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && [...value].length <= 256;
 const month = (value: unknown): value is string => typeof value === 'string' && /^(?!0000)\d{4}-(?:0[1-9]|1[0-2])$/.test(value);
-const operationKeys = ['operation_id', 'iteration_id', 'month', 'price_version', 'estimate', 'actual', 'exposure', 'state', 'approved_by', 'reserved_autonomously', 'reserved_at', 'kind', 'annotation_job_id'];
+const operationKeys = ['operation_id', 'iteration_id', 'month', 'price_version', 'estimate', 'actual', 'exposure', 'state', 'approved_by', 'reserved_autonomously', 'reserved_at', 'kind', 'annotation_job_id', 'review_pause'];
 const pageKeys = ['project_id', 'currency', 'unit', 'policy_revision', 'policy', 'pause_reason', 'operations', 'next_after'];
 const policyKeys = ['monthly_limit', 'iteration_limit', 'operation_limit', 'autonomous_spend'];
 const summaryKeys = ['project_id', 'currency', 'unit', 'policy_revision', 'policy', 'pause_reason', 'month', 'iteration_id', 'monthly', 'iteration'];
@@ -80,6 +81,7 @@ function reservationTime(value: unknown): boolean {
 function operation(value: unknown): value is CostOperation {
   if (!object(value, operationKeys) || (value.kind !== null && value.kind !== 'LLM review')
     || !(value.annotation_job_id === null || (value.kind === 'LLM review' && identity(value.annotation_job_id)))
+    || !(value.review_pause === null || (value.review_pause === 'approval_exhausted' && value.kind === 'LLM review' && identity(value.annotation_job_id)))
     || !reservationTime(value.reserved_at) || !identity(value.operation_id) || !identity(value.iteration_id)
     || !month(value.month) || !identity(value.price_version) || !integer(value.estimate) || !integer(value.exposure)
     || !(value.actual === null || integer(value.actual)) || !(value.approved_by === null || identity(value.approved_by))
