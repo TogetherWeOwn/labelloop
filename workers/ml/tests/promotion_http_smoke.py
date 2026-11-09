@@ -794,8 +794,10 @@ def exercise_http_promotion_group_changes(engine, candidate, qualified, actor, p
 
 
 def exercise_durable_http_promotion(engine, release, final, context, actor):
+    import pytest
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
+    from labelloop_api.acceptance_store import load_acceptance
     from labelloop_api.model_store import load_registry, save_evaluation
     from labelloop_api.qualification_context_store import (
         AnnotationOutcomeRef,
@@ -825,7 +827,21 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
             connection, model_key=incumbent.release_id, variant_id=variant, report=comparison
         )
         annotation = _outcome(connection, candidate, context, actor, canary=False)
-        canary = _outcome(connection, candidate, context, actor, canary=True, alternatives=False)
+        acceptance = load_acceptance(connection, **scope)
+        incidents = tuple(
+            acceptance.incident_reference(item.pause_id) for item in acceptance.pauses
+        )
+        assert incidents and not any(acceptance.is_paused(cell) for cell in context.evidence.scope)
+        # Retain earlier resumed incidents: a later promotion alone is not remediation.
+        canary = _outcome(
+            connection,
+            candidate,
+            context,
+            actor,
+            canary=True,
+            alternatives=False,
+            remediation_for=incidents,
+        )
     # No borrowed connection or outer savepoint: setup, requests and verification
     # commit independently. Retain the original model's complete report history.
     original = snapshot(engine, release.project_id)
@@ -854,6 +870,21 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
             canary=AnnotationOutcomeRef(canary.release_key),
         )
         qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
+        assert qualified.evidence.remediation_for == incidents
+        assert qualified.evidence.canary_audit.remediation_for == incidents
+        acceptance = load_acceptance(connection, **scope)
+        for cell in qualified.evidence.scope:
+            acceptance.require_acceptance(candidate, report, qualified, cell)
+            unbound = replace(
+                qualified,
+                evidence=replace(
+                    qualified.evidence,
+                    remediation_for=(),
+                    canary_audit=replace(qualified.evidence.canary_audit, remediation_for=()),
+                ),
+            )
+            with pytest.raises(ValueError, match="post-incident qualification and canary evidence"):
+                acceptance.require_acceptance(candidate, report, unbound, cell)
     canary_vetoes = exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload)
     policy_vetoes = exercise_http_promotion_policy_changes(
         engine, candidate, qualified, actor, payload

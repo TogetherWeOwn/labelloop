@@ -60,6 +60,7 @@ def _outcome(
     suffix="",
     alternatives=True,
     complete=True,
+    remediation_for=(),
 ):
     """Seed synthetic sources, optionally on an already-used group; never edit CPU inputs."""
     prefix = release.release_id + ("-assembly-canary" if canary else "-assembly-audit") + suffix
@@ -175,6 +176,7 @@ def _outcome(
         ),
         "constructive_synthetic",
         tuple(AnnotationMeasurement(cell, (group,), 1, 1, 1, 1, 0.0) for cell in cells),
+        remediation_for=remediation_for,
     )
     record_annotation_evidence(
         connection,
