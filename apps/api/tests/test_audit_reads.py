@@ -15,6 +15,7 @@ from test_auth import store as store
 from labelloop_api import audit_reads
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
+from labelloop_api.auth_schema import principal
 from labelloop_api.main import app
 
 PATH = "/projects/audit-fixture/audit-log"
@@ -153,6 +154,7 @@ def test_admin_metadata_projection_is_redacted_and_does_not_infer_promotion_acto
         "kind": "Review",
         "actor_id": "recorded-actor",
         "actor_kind": "system",
+        "actor_name": None,
         "record_id": str(ASSET),
         "revision": 1,
         "sentence": "Recorded a review decision.",
@@ -175,6 +177,98 @@ def test_reviewer_restriction_applies_before_filters_counts_paging_and_export(ht
     assert [json.loads(line)["kind"] for line in exported.text.splitlines()] == ["Review", "Review"]
     assert http.get(PATH + "/export", params={"kind": "Promotion"}).text == ""
     assert "must-not-leak" not in exported.text
+
+
+@pytest.mark.parametrize(
+    ("recorded_kind", "account", "resolved"),
+    [
+        ("human", "reviewer", True),
+        ("human", "worker-core", False),
+        ("model", "worker-core", True),
+        ("system", "worker-core", True),
+        ("model", "reviewer", False),
+        ("system", "reviewer", False),
+    ],
+)
+def test_current_principal_name_requires_exact_id_and_compatible_kind(
+    http, store, recorded_kind, account, resolved
+):
+    with store.engine.begin() as connection:
+        identity = connection.execute(
+            sa.select(principal.c.id).where(principal.c.name == account)
+        ).scalar_one()
+        review(connection, 60, actor_kind=recorded_kind, actor_id=identity)
+        # A legacy actor string equal to a current name is not an identity link.
+        review(connection, 70, actor_kind=recorded_kind, actor_id=account)
+    login(http, "admin")
+    events = {event["id"]: event for event in http.get(PATH).json()["events"]}
+    linked = events[str(UUID(int=60))]
+    assert linked["actor_id"] == identity and linked["actor_kind"] == recorded_kind
+    assert linked["actor_name"] == (account if resolved else None)
+    assert events[str(UUID(int=70))]["actor_name"] is None
+
+
+def test_current_name_search_pages_and_exports_only_visible_event_identities(http, store):
+    with store.engine.begin() as connection:
+        identity = connection.execute(
+            sa.select(principal.c.id).where(principal.c.name == "worker-core")
+        ).scalar_one()
+        connection.execute(
+            sa.update(principal).where(principal.c.id == identity).values(name="named%_/worker")
+        )
+        for number in (60, 70):
+            review(connection, number, actor_id=identity)
+        review(connection, 80, actor_kind="human", actor_id=identity)
+        # Names from hidden sources and accounts without visible events stay hidden.
+        review(connection, 90, asset=OTHER_ASSET, actor_id=identity)
+    login(http)
+    params = {"search": "NAMED%_/WORKER", "actor_kind": "system"}
+    first = http.get(PATH, params=params | {"limit": 1}).json()
+    assert first["total"] == 2
+    assert first["events"][0]["id"] == str(UUID(int=70))
+    second = http.get(PATH, params=params | {"limit": 1, "after": first["next_after"]}).json()
+    assert second["total"] == 2 and second["next_after"] is None
+    assert second["events"][0]["id"] == str(UUID(int=60))
+    exported = http.get(PATH + "/export", params=params)
+    assert [json.loads(line) for line in exported.text.splitlines()] == first["events"] + second[
+        "events"
+    ]
+    for search in ("named%_/not-worker", "worker-ml", "admin"):
+        page = http.get(PATH, params={"search": search}).json()
+        assert page["total"] == 0 and page["events"] == []
+        assert http.get(PATH + "/export", params={"search": search}).text == ""
+    assert http.get(PATH, params=params | {"after": f"Review/{UUID(int=80)}"}).status_code == 409
+
+
+def test_promotion_name_is_current_metadata_not_inferred_actor_kind(http, store):
+    with store.engine.begin() as connection:
+        identity = connection.execute(
+            sa.select(principal.c.id).where(principal.c.name == "worker-core")
+        ).scalar_one()
+        connection.execute(
+            sa.update(models.promotion_event)
+            .where(models.promotion_event.c.id == UUID(int=30))
+            .values(actor_id=identity)
+        )
+    login(http, "admin")
+    original = http.get(PATH, params={"kind": "Promotion"}).json()["events"][0]
+    assert original["actor_name"] == "worker-core" and original["actor_kind"] == "unknown"
+    with store.engine.begin() as connection:
+        connection.execute(
+            sa.update(principal)
+            .where(principal.c.id == identity)
+            .values(name="renamed-worker", enabled=False)
+        )
+    current = http.get(PATH, params={"search": "renamed-worker"}).json()["events"][0]
+    assert current == original | {"actor_name": "renamed-worker"}
+    assert http.get(PATH, params={"search": "worker-core"}).json()["total"] == 0
+    client_events = http.get(PATH + "/export", params={"search": "renamed-worker"})
+    assert [json.loads(line) for line in client_events.text.splitlines()] == [current]
+    http.cookies.clear()
+    login(http)
+    assert http.get(PATH, params={"search": "renamed-worker"}).json()["total"] == 0
+    assert http.get(PATH + "/export", params={"search": "renamed-worker"}).text == ""
+    assert http.get(PATH, params={"after": f"Promotion/{UUID(int=30)}"}).status_code == 409
 
 
 def test_stable_keyset_ordering_and_filtered_export_equality(http, store):
@@ -411,6 +505,7 @@ def test_openapi_has_typed_metadata_only_contract():
         "kind",
         "actor_id",
         "actor_kind",
+        "actor_name",
         "record_id",
         "revision",
         "sentence",

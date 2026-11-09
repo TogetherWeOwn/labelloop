@@ -6,7 +6,46 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Audit metadata search and actor filters — pending Actions
+## Current principal-name audit projection — pending Actions
+
+The existing audit read/export resolves nullable current directory names by exact
+recorded principal ID. Legacy actor strings matching usernames never acquire an
+identity link. Human reviews resolve only human accounts; model/system reviews
+resolve only service accounts. Historical promotion kind remains `unknown` even
+when its ID has a current directory name. Names are current display metadata, not
+historical snapshots or attribution/qualification grants; disabled accounts retain
+their links. Missing/incompatible identities keep the recorded ID and null name.
+
+Literal case-insensitive search now includes those resolved names on already
+visible events. Counts, keyset cursors and bounded exports share that population;
+hidden/foreign event names and accounts without visible events cannot be enumerated.
+New session adapter controls cover exact-ID/kind compatibility, username collisions,
+name changes/disabled accounts, literal patterns, paging/export equality and hidden
+promotion rejection. Both-recipe PostgreSQL HTTP controls require current-name
+recovery and matching search/export after reconnect, retain unknown provenance,
+and preserve registry/qualification/review evidence. New assertions are unverified
+until exact-head Actions. No schema, migration, dependency, provider call or gate
+change. Full AuditLog mounting, remaining event kinds/refusals and real navigation
+remain unfinished. REA: reuse authorized events and the existing auth directory,
+not another identity store or inferred historical actor category.
+
+## Audit search/filter and UUID fixture — verified baseline
+
+Exact `a3fcca5abb0ab4d86d4166167d33984f8bc49def`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106973),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568772734) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568772814)
+succeeded. Queue/migration cycles/all four parents, web-build/dev-stack and
+lint/types/import-contract passed. This verifies the earlier search/filter and
+SQLite UUID correction assertions, superseding their historical pending labels
+below, not the new name projection or complete milestone. Totals not extracted;
+no local tests ran. Required Devin/fresh-context/native QA/Security remain gates.
+Real-policy promotion and automatic annotation remain closed. The fixed
+2026-11-09T12:00:00Z checkpoint and exact-gap/owned-fallback obligation are unchanged.
+
+## Audit metadata search and actor filters — historical pending report
 
 The existing read/export port now accepts bounded metadata-only search and exact
 recorded actor-kind filters. Actor IDs match literal case-insensitive substrings;

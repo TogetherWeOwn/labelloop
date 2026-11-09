@@ -61,8 +61,16 @@ boundary.
 only. Human admins can read both kinds; reviewers can read reviews only. The server
 selects permitted sources before filters, counts, paging and export; service tokens
 cannot use either read. It never returns raw decisions, reasons, corrections,
-promotion/qualification payloads or principal names. Sentences are fixed code-owned
-labels. Recorded review actor kind is retained; historical promotion actor kind is
+promotion/qualification payloads. Nullable `actor_name` resolves the current auth
+directory name only by exact principal ID, never a legacy actor string equal to a
+username. Human reviews require a human directory entry; model/system reviews
+require a service entry. Unknown promotion provenance may resolve an exact ID's
+current name but remains `unknown`. Missing/incompatible identities retain the
+original actor ID and null name. Disabled accounts keep their historical display
+link; a renamed account shows its current name, not a claimed historical snapshot.
+Only names attached to visible events can match search: this is not a principal
+directory endpoint. Sentences are fixed code-owned labels. Recorded review actor
+kind is retained; historical promotion actor kind is
 `unknown`, not inferred as human. Review revision means the event's expected
 revision; promotion revision means its registry revision.
 
@@ -75,24 +83,24 @@ for newly appended events. Optional `kind`, `since`, inclusive `through`,
 `actor_kind` and `search` filters apply identically to `/audit-log/export`.
 `actor_kind` selects the recorded `human`, `model`, `system` or `unknown` category;
 a shared actor identifier never changes that provenance. Search accepts 1–128
-characters and matches a case-insensitive literal actor-ID substring or an exact
-event/record UUID (hyphenated or hex). `%`, `_` and `/` have no wildcard meaning.
-It does not search private payloads, decisions, reasons, display names or inferred
-record labels. Authorization still selects sources first; counts and cursors use
+characters and matches a case-insensitive literal actor-ID/current-name substring
+or an exact event/record UUID (hyphenated or hex). `%`, `_` and `/` have no wildcard
+meaning. It does not search private payloads, decisions, reasons or inferred record
+labels. Authorization still selects sources first; counts and cursors use
 the filtered population. Dates require explicit timezones and are normalized to
 UTC; inverted ranges reject. JSON-lines exports are fully buffered
 and capped at 1,000 events; overflow rejects with a narrower-range error, never a
 silently truncated file or a partially streamed failure.
 
 This port is **not yet mounted in AuditLog** and does not supply connection/budget
-history, refused attempts, principal display-name resolution, record links
-or the complete accepted UI projection. Existing PostgreSQL review/promotion
-pagination/export/actor/reviewer/non-mutation controls passed
-[ML smoke at a33dd53](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566877492/job/128995224622).
-That head's unit job stopped at setup-uv HTTP 504 before tests, so the SQLite UUID
-repair remains unverified there. New search/filter adapter and PostgreSQL controls
-await exact-head Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
-immutable canonical review and registry event records, not another audit journal.
+history, refused attempts, record links or the complete accepted UI projection.
+Search/filter and UUID fixture controls passed
+[CI at a3fcca5](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944)
+and both-recipe [PostgreSQL smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106973).
+The new current-name resolution/search controls remain unverified until exact-head
+Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
+immutable canonical events and exact auth identities, not another audit journal.
 
 ## Authenticated ledger read port — integration pending
 

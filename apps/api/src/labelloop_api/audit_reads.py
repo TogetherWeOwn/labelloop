@@ -12,6 +12,7 @@ from sqlalchemy.exc import NoResultFound, SQLAlchemyError
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
 from labelloop_api.auth import auth_store, require_reviewer
+from labelloop_api.auth_schema import principal
 from labelloop_api.auth_store import Principal, utc
 
 router = APIRouter(tags=["audit"])
@@ -29,6 +30,8 @@ class AuditMetadata(BaseModel):
     actor_id: str = Field(min_length=1, max_length=256)
     # Unknown historical promotion actors are not inferred to be human principals.
     actor_kind: ActorKind
+    # Current directory metadata, not a historical name or an attribution grant.
+    actor_name: str | None = Field(min_length=1, max_length=128)
     record_id: UUID
     revision: Annotated[int, Field(ge=0)]
     sentence: str
@@ -71,7 +74,23 @@ def visible_events(project_id, actor, kind, since, through, actor_kind, search):
                 models.promotion_event.c.revision,
             ).where(models.promotion_event.c.project_id == project_id)
         )
-    events = sa.union_all(*queries).subquery()
+    recorded = sa.union_all(*queries).subquery()
+    # Resolve by immutable ID only, never by a legacy actor string equal to a
+    # username. Preserve unknown promotion provenance and incompatible review IDs.
+    compatible = sa.or_(
+        recorded.c.actor_kind == "unknown",
+        sa.and_(recorded.c.actor_kind == "human", principal.c.kind == "human"),
+        sa.and_(recorded.c.actor_kind.in_(("model", "system")), principal.c.kind == "service"),
+    )
+    events = (
+        sa.select(recorded, principal.c.name.label("actor_name"))
+        .select_from(
+            recorded.outerjoin(
+                principal, sa.and_(recorded.c.actor_id == principal.c.id, compatible)
+            )
+        )
+        .subquery()
+    )
     query = sa.select(events)
     if kind is not None:
         query = query.where(events.c.kind == kind)
@@ -84,7 +103,10 @@ def visible_events(project_id, actor, kind, since, through, actor_kind, search):
     if search is not None:
         # Search only public metadata. Escaped LIKE treats % and _ literally;
         # exact UUID comparisons work with both native and text-backed storage.
-        matches = [sa.func.lower(events.c.actor_id).contains(search.lower(), autoescape=True)]
+        matches = [
+            sa.func.lower(column).contains(search.lower(), autoescape=True)
+            for column in (events.c.actor_id, events.c.actor_name)
+        ]
         try:
             identity = UUID(search)
         except ValueError:
@@ -161,6 +183,7 @@ def load_audit_page(
             kind=row["kind"],
             actor_id=row["actor_id"],
             actor_kind=row["actor_kind"],
+            actor_name=row["actor_name"],
             record_id=row["record_id"],
             revision=row["revision"],
             sentence="Recorded a review decision."

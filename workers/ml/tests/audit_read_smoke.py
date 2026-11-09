@@ -7,6 +7,7 @@ from registry_http_smoke import authenticated_client, login, qualification_journ
 
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
+from labelloop_api.auth_schema import principal
 
 
 def exercise_audit_reads(engine, project_key):
@@ -45,6 +46,15 @@ def exercise_audit_reads(engine, project_key):
         for kind, rows in zip(("Review", "Promotion"), before, strict=True)
         for row in rows
     }
+    with engine.connect() as connection:
+        directory = {
+            row["id"]: row
+            for row in connection.execute(
+                sa.select(principal.c.id, principal.c.name, principal.c.kind).where(
+                    principal.c.id.in_({row["actor_id"] for row in expected.values()})
+                )
+            ).mappings()
+        }
     path = f"/projects/{project_key}/audit-log"
     with authenticated_client(engine) as (client, identities, workers):
         for suffix in ("", "/export"):
@@ -79,16 +89,27 @@ def exercise_audit_reads(engine, project_key):
             assert event["actor_kind"] == (
                 saved["actor_kind"] if event["kind"] == "Review" else "unknown"
             )
+            account = directory.get(event["actor_id"])
+            compatible = account is not None and (
+                event["actor_kind"] == "unknown"
+                or (event["actor_kind"] == "human" and account["kind"] == "human")
+                or (event["actor_kind"] in ("model", "system") and account["kind"] == "service")
+            )
+            assert event["actor_name"] == (account["name"] if compatible else None)
             assert set(event) == {
                 "id",
                 "at",
                 "kind",
                 "actor_id",
                 "actor_kind",
+                "actor_name",
                 "record_id",
                 "revision",
                 "sentence",
             }
+        named_promotion = next(
+            event for event in events if event["kind"] == "Promotion" and event["actor_name"]
+        )
         export = client.get(path + "/export")
         assert export.status_code == 200
         assert [json.loads(line) for line in export.text.splitlines()] == events
@@ -116,6 +137,16 @@ def exercise_audit_reads(engine, project_key):
                     and event["actor_kind"] == events[0]["actor_kind"]
                 ],
             ),
+            (
+                {"search": named_promotion["actor_name"].upper(), "actor_kind": "unknown"},
+                [
+                    event
+                    for event in events
+                    if event["actor_kind"] == "unknown"
+                    and event["actor_name"] == named_promotion["actor_name"]
+                ],
+            ),
+            ({"search": identities["admin"][1]}, []),
             ({"search": "%"}, [event for event in events if "%" in event["actor_id"]]),
         ):
             response = client.get(path, params=params | {"limit": 1})
@@ -147,7 +178,12 @@ def exercise_audit_reads(engine, project_key):
         denied_cursor = client.get(path, params={"after": f"Promotion/{promotion['id']}"})
         assert denied_cursor.status_code == 409
         assert denied_cursor.json() == {"detail": "audit_state_rejected"}
-        for search in (promotion["id"], promotion["record_id"], promotion["actor_id"]):
+        for search in (
+            promotion["id"],
+            promotion["record_id"],
+            promotion["actor_id"],
+            named_promotion["actor_name"],
+        ):
             params = {"search": search, "actor_kind": "unknown"}
             response = client.get(path, params=params)
             assert response.status_code == 200
