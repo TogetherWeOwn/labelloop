@@ -209,6 +209,25 @@ real authentication, stores and gates run, but the fixture rolls back afterwards
 They do not establish a fresh-connection promotion commit/recovery claim. Existing
 rollback HTTP commit/reconnect controls remain separate.
 
+## Internal fixture automatic annotation integration port
+
+`automatic_review_service.append_current_review` accepts a project/recipe/source,
+expected annotation and registry revisions, authenticated caller's actor identity,
+trusted expanded scope, proposed objects/completeness and contributing proposal
+runs. It does not accept qualification, report, champion, target or human/gold
+claims. Under the project lock it checks source ownership and derives the final
+report/context from the current champion's recorded promotion. A fixed fixture-only
+restriction rejects real policy. The atomic revision writer then reloads all
+current qualification, drift and annotation invariants and persists original policy
+and every supplied proposal influence with the revision/event.
+
+This is not mounted as HTTP, and does not establish original reviewer execution,
+source/condition truth, completeness of the supplied influence list or independent
+measurement. Authentication and those trusted producers remain required before
+real automatic acceptance. PostgreSQL fixture controls consume a committed HTTP
+promotion but roll back the annotation exercise; they are not durable annotation
+or HTTP acceptance evidence. New controls await Actions.
+
 ## Trusted promotion integration port
 
 The internal `model_store.change_registry` accepts the typed context and writes

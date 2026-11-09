@@ -7,7 +7,11 @@ import pytest
 import sqlalchemy as sa
 
 from labelloop_api import model_schema
-from labelloop_api.acceptance_store import pause_acceptance, require_automatic_acceptance
+from labelloop_api.acceptance_store import (
+    load_acceptance,
+    pause_acceptance,
+    require_automatic_acceptance,
+)
 from labelloop_api.annotation_audit_store import record_annotation_audit
 from labelloop_api.annotation_evidence_store import record_annotation_evidence
 from labelloop_api.audit_sample_store import (
@@ -277,7 +281,9 @@ def _proposal_origin_fixture(connection, release, asset_key, revision, suffix=""
     return run_key
 
 
-def _exercise_annotation_write(connection, release, final, loaded, canary, actor):
+def _exercise_annotation_write(
+    connection, release, final, loaded, canary, actor, *, write_review=append_review
+):
     """Actual revision/event writes, followed by a persisted scoped-pause veto."""
     with connection.begin_nested() as transaction:
         automatic = AutomaticReview(release.recipe_id, final.run_id, loaded.evidence.scope, loaded)
@@ -326,7 +332,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 _proposal_origin_fixture(connection, release, asset_key, 1, "-a"),
                 _proposal_origin_fixture(connection, release, asset_key, 1, "-b"),
             )
-            assert append_review(connection, expected_revision=1, **arguments) == 2
+            assert write_review(connection, expected_revision=1, **arguments) == 2
             original = load_automatic_acceptance(
                 connection, project_key=release.project_id, asset_key=asset_key, revision=2
             )
@@ -452,7 +458,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     == frozen.sample.candidates
                 )
                 with pytest.raises(ValueError):
-                    append_review(connection, expected_revision=2, **arguments)
+                    write_review(connection, expected_revision=2, **arguments)
                 policy_transaction.rollback()
             from labelloop_api.generated_label_store import label_teacher_runs
 
@@ -489,7 +495,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
             )
             # A missing later run must not leave the first teacher or revision behind.
             with pytest.raises(sa.exc.NoResultFound):
-                append_review(
+                write_review(
                     connection,
                     expected_revision=2,
                     **(
@@ -526,7 +532,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 )
             )
             with pytest.raises(sa.exc.DBAPIError, match="injected revision failure"):
-                append_review(connection, expected_revision=2, **arguments)
+                write_review(connection, expected_revision=2, **arguments)
             connection.execute(
                 sa.text("DROP TRIGGER reject_automatic_revision ON annotation_revision")
             )
@@ -553,7 +559,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 )
             )
             with pytest.raises(sa.exc.DBAPIError, match="injected origin failure"):
-                append_review(connection, expected_revision=2, **arguments)
+                write_review(connection, expected_revision=2, **arguments)
             connection.execute(
                 sa.text("DROP TRIGGER reject_origin ON qualification_generated_label_origin")
             )
@@ -582,14 +588,16 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                     project_key=release.project_id,
                     recipe_key=release.recipe_id,
                     actor_id=actor,
-                    expected_revision=0,
+                    expected_revision=load_acceptance(
+                        connection, project_key=release.project_id, recipe_key=release.recipe_id
+                    ).revision,
                     pause_id=asset_key + "-pause",
                     qualification_id=loaded.evidence.qualification_id,
                     scope=(loaded.evidence.scope[0],),
                     reason="synthetic annotation containment",
                 )
                 with pytest.raises(ValueError, match="paused"):
-                    append_review(connection, expected_revision=2, **arguments)
+                    write_review(connection, expected_revision=2, **arguments)
                 assert (
                     connection.execute(
                         sa.select(sa.func.count())
@@ -617,7 +625,7 @@ def _exercise_annotation_write(connection, release, final, loaded, canary, actor
                 )
                 == original
             )
-            assert append_review(connection, expected_revision=2, **arguments) == 3
+            assert write_review(connection, expected_revision=2, **arguments) == 3
             assert (
                 load_automatic_acceptance(
                     connection, project_key=release.project_id, asset_key=asset_key, revision=3

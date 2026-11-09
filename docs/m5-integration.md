@@ -6,7 +6,43 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP promotion canonical-group controls — pending Actions
+## Current-champion automatic annotation orchestration — pending Actions
+
+The internal `automatic_review_service.append_current_review` locks the selected
+project, verifies the asset belongs to it, and reuses the existing current-champion
+promotion reader. It derives the final evaluation and qualification from that
+committed promotion, never a supplied context/report/model/target. Only explicit
+fixture policy is permitted. It fixes machine/system approval fields and delegates
+to the existing revision writer for current policy, canonical groups, final state,
+adverse vetoes, drift, completeness, human-label protection and atomic proposal
+origin/revision/event writes. It adds no HTTP grant, migration or dependency.
+
+Adapter controls cover both recipes/positive and negative writes, stale or missing
+promotion, missing report, foreign source, unsupported scope, non-fixture policy,
+invalid identities/revisions and delegated failures. After actual committed HTTP
+promotion, both-recipe PostgreSQL smoke reuses the full annotation exercise through
+this service: positive/negative writes, original-policy recovery, two contributing
+proposals/teachers, changed-policy and scoped-pause vetoes, and injected revision
+and second-origin failure rollback. These annotation controls use a rolled-back
+fixture savepoint, not committed annotation recovery or HTTP authorization.
+
+Authentication, original reviewer execution, authoritative source/condition scope
+and complete influence selection remain caller obligations. No route constructs
+this port from submitted claims; real automatic annotation remains closed. New
+assertions await Actions; no local tests ran. REA: reuse the recorded promotion
+reader and atomic annotation writer, not another policy or provenance engine.
+
+## Committed HTTP promotion canonical-group controls — verified baseline
+
+Exact `e1053c72cbf562b2d79da3a08c5a28444ec31a45`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42542272852),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42542272371) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42542272477)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42542272852/job/128919659370),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42542272852/job/128919659524),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. Canonical-group HTTP promotion controls below are verified;
+new service and full M5 acceptance are not. Totals not extracted; required reviews remain.
 
 Both-recipe committed promotion smoke now adds a canonical relation from an actual
 CPU training input, actual compiled validation input or canonical development
@@ -20,8 +56,8 @@ Only each generated relation in the disposable Actions fixture is removed afterw
 All pre-existing canonical and historical evidence remains intact. Fresh connections
 must recover the identical original context after each cleanup, before the existing
 same-candidate/request successful promotion and rollback. No production code, gate,
-migration or dependency changed. New assertions await exact-head Actions; no local
-tests or builds ran. REA: reuse canonical group readers and real promotion transactions.
+migration or dependency changed. These assertions passed exact-head Actions at
+`e1053c7`; no local tests or builds ran. REA: reuse canonical group readers and real promotion transactions.
 
 ## Committed HTTP promotion policy-change controls — verified baseline
 

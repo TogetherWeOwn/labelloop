@@ -906,6 +906,40 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     persisted = loads(json.dumps(event["record"]["qualification"]), QualificationContext)
     persisted.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
     assert qualification_journals(engine) == journals
+    from qualification_context_smoke import _exercise_annotation_write
+
+    from labelloop_api.automatic_review_service import append_current_review
+
+    def write_current_review(connection, **arguments):
+        assert arguments.pop("actor_kind") == "system"
+        assert arguments.pop("approval_state") == "auto_accepted"
+        assert arguments.pop("review_tier") == "machine_verified_no_human_review"
+        automatic = arguments.pop("automatic")
+        assert automatic.qualification == persisted
+        return append_current_review(
+            connection,
+            **scope,
+            asset_key=arguments.pop("asset_id"),
+            expected_registry_revision=expected.revision,
+            scope=automatic.scope,
+            **arguments,
+        )
+
+    with engine.begin() as connection:
+        # The service reloads committed authenticated promotion provenance; it is
+        # not given the report/context. Annotation writes stay inside this rolled-
+        # back fixture exercise, not an HTTP or durable annotation acceptance claim.
+        _exercise_annotation_write(
+            connection,
+            candidate,
+            report,
+            persisted,
+            canary,
+            actor,
+            write_review=write_current_review,
+        )
+    assert snapshot(engine, release.project_id) == promoted
+    assert qualification_journals(engine) == journals
     with authenticated_client(engine) as (client, identities, _workers):
         headers = login(client, identities["admin"][1])
         for revision in (before.revision, expected.revision):
@@ -945,6 +979,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_reused_partial_and_ambiguous_canary_veto_cases": canary_vetoes,
         "committed_http_prompt_scope_and_null_target_promotion_veto_cases": policy_vetoes,
         "committed_http_current_canonical_group_promotion_veto_cases": group_vetoes,
+        "internal_fixture_annotation_service_consumed_committed_champion_promotion": True,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,
