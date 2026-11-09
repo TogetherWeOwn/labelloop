@@ -140,6 +140,108 @@ def assert_http_annotation_recovery(engine, release, recovery):
     assert qualification_journals(engine) == journals
 
 
+def exercise_annotation_policy_recovery(engine, release, final, context, actor, recovery):
+    from dataclasses import replace
+
+    from registry_http_smoke import qualification_journals, snapshot
+
+    from labelloop_api.qualification_policy_store import (
+        append_qualification_policy,
+        current_policy_context,
+        load_qualification_policy,
+    )
+    from labelloop_api.qualification_schema import policy_event
+    from labelloop_core.qualification import QualificationTargets
+    from labelloop_core.qualification_data import record_sha256
+
+    scope = dict(project_key=release.project_id, recipe_key=release.recipe_id)
+    heads = snapshot(engine, release.project_id)
+    with engine.begin() as connection:
+        original = load_qualification_policy(connection, **scope)
+        assert current_policy_context(connection, context) == context
+    prompt = "1" * 64 if original.policy.pipeline.prompt_sha256 != "1" * 64 else "2" * 64
+    null_targets = QualificationTargets()
+    changes = (
+        replace(original.policy, pipeline=replace(original.policy.pipeline, prompt_sha256=prompt)),
+        replace(
+            original.policy,
+            scope=tuple(
+                replace(cell, condition=cell.condition + "-changed")
+                for cell in original.policy.scope
+            ),
+        ),
+        replace(
+            original.policy,
+            targets=null_targets,
+            pipeline=replace(
+                original.policy.pipeline, acceptance_policy_sha256=record_sha256(null_targets)
+            ),
+        ),
+    )
+    # Use current annotation and registry revisions, without replaying old proposal
+    # jobs. Prove the identical writes can pass before/after policy restoration;
+    # stale annotations or proposal identities must not explain policy rejection.
+    arguments = tuple(
+        item["arguments"] | {"expected_revision": 2, "proposal_run_keys": ()}
+        for item in recovery["assets"].values()
+    )
+
+    def valid_writes():
+        for values in arguments:
+            with engine.begin() as connection:
+                savepoint = connection.begin_nested()
+                assert append_current_review(connection, **values) == 3
+                savepoint.rollback()
+        assert annotation_rows(engine) == recovery["rows"]
+
+    def configure(policy, expected_revision):
+        before = qualification_journals(engine)
+        with engine.begin() as connection:
+            changed = append_qualification_policy(
+                connection,
+                **scope,
+                actor_id=actor,
+                expected_revision=expected_revision,
+                policy=policy,
+            )
+        after = qualification_journals(engine)
+        for name, rows in before.items():
+            if name == policy_event.name:
+                assert len(after[name]) == len(rows) + 1
+                assert all(row in after[name] for row in rows)
+            else:
+                assert after[name] == rows
+        with engine.begin() as connection:
+            assert load_qualification_policy(connection, **scope) == changed
+        return changed, after
+
+    valid_writes()
+    revision = original.revision
+    for policy in changes:
+        assert policy != original.policy
+        changed, journals = configure(policy, revision)
+        for values in arguments:
+            with engine.begin() as connection:
+                with pytest.raises(ValueError, match="stale or substituted qualification policy"):
+                    append_current_review(connection, **values)
+            assert annotation_rows(engine) == recovery["rows"]
+            assert snapshot(engine, release.project_id) == heads
+            assert qualification_journals(engine) == journals
+        # Real admin sessions must still read the exact original policy, not the
+        # changed current configuration, and reads must preserve every journal row.
+        assert_annotation_recovery(engine, release, final, context, recovery)
+        assert qualification_journals(engine) == journals
+        restored, journals = configure(original.policy, changed.revision)
+        revision = restored.revision
+        with engine.begin() as connection:
+            assert current_policy_context(connection, context) == context
+        valid_writes()
+        assert_annotation_recovery(engine, release, final, context, recovery)
+        assert snapshot(engine, release.project_id) == heads
+        assert qualification_journals(engine) == journals
+    return len(changes)
+
+
 def exercise_annotation_recovery(engine, release, final, context, canary, actor, revision):
     from qualification_context_smoke import _proposal_origin_fixture
 

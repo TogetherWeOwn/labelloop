@@ -6,7 +6,27 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated original-acceptance metadata — pending Actions
+## Committed annotation policy changes and historical reads — pending Actions
+
+Both-recipe disposable PostgreSQL controls change the current reviewer prompt,
+condition scope and targets to null through separate committed policy appends.
+Positive and negative annotation writes use current annotation/registry revisions,
+not stale proposal jobs. The identical writes must succeed in a rolled-back
+savepoint before each change and after append-only restoration, but reject the
+changed policy specifically without appending any annotation/review/completeness/
+teacher row. Every registry head/event and qualification journal must remain
+unchanged except the single intended policy event per configuration append.
+
+During each changed configuration and after restoration, real authenticated admin
+HTTP must still recover the exact original acceptance metadata. Historical reads
+must not substitute the changed policy, grant acceptance or mutate evidence. The
+existing champion rollback/recovery controls follow these new cases. Assertions
+are unverified until exact-head Actions; no local tests ran. No production code,
+route, gate, migration, dependency or original execution producer is changed.
+REA: reuse immutable original events, the existing current-policy guard and real
+session read boundary rather than another policy or provenance engine.
+
+## Authenticated original-acceptance metadata — verified baseline
 
 The admin-session read
 `GET /projects/{project_id}/assets/{asset_id}/annotation-history/{revision}/automatic-acceptance`
@@ -18,15 +38,25 @@ membership, or grants current acceptance. Missing/legacy/malformed provenance is
 unavailable, not backfilled. Reviewers and workers cannot read this admin surface.
 No automatic-annotation write route, new storage, migration or dependency is added.
 
-New adapter controls cover both recipes, authentication/permission denial before
+Adapter controls cover both recipes, authentication/permission denial before
 canonical access, expired sessions, exact scope, invalid revisions, redacted
-failures and outer rollback. Both-recipe PostgreSQL controls must recover committed
+failures and outer rollback. Both-recipe PostgreSQL controls recover committed
 positive/negative historical metadata through real session HTTP before and after
 champion rollback, reject absent/foreign sources and missing original revisions,
 and preserve all annotation, registry and qualification rows after successful and
-injected post-load-failure reads. These assertions await exact-head Actions; no
-local tests ran. This metadata port is not the complete operational UI projection,
-original execution proof, independent measurements or domain gold.
+injected post-load-failure reads.
+
+Exact `e356a9fea6aa34ce0fd9bc9763a351ef79302241`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42551076638),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42551076638/job/128946601596),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42551076638/job/128946601436),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42551076308) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42551076366)
+succeeded, including queue/migration cycles/all four parent upgrades,
+web-build/dev-stack/lint/types/import-contract. These verify the metadata controls,
+not the new committed policy-change cases above or complete M5. Totals not
+extracted; no local tests ran. This metadata port is not the complete operational
+UI projection, original execution proof, independent measurements or domain gold.
 REA: reuse original-event validation and the delivered canonical read/auth boundary.
 
 ## Committed fixture annotation recovery — verified baseline

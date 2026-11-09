@@ -982,6 +982,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     assert qualification_journals(engine) == journals
     from annotation_recovery_smoke import (
         assert_annotation_recovery,
+        exercise_annotation_policy_recovery,
         exercise_annotation_recovery,
     )
 
@@ -996,7 +997,10 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
             assert all(row in after_annotation[table] for row in journals[table])
         else:
             assert after_annotation[table] == journals[table]
-    journals = after_annotation
+    annotation_policy_vetoes = exercise_annotation_policy_recovery(
+        engine, candidate, report, persisted, actor, recovery
+    )
+    journals = qualification_journals(engine)
     with authenticated_client(engine) as (client, identities, _workers):
         headers = login(client, identities["admin"][1])
         for revision in (before.revision, expected.revision):
@@ -1040,6 +1044,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_current_canonical_group_promotion_veto_cases": group_vetoes,
         "internal_fixture_annotation_service_consumed_committed_champion_promotion": True,
         "committed_positive_and_negative_annotations_recovered_after_reconnect": True,
+        "committed_annotation_policy_and_historical_metadata_cases": annotation_policy_vetoes,
         "admin_http_original_acceptance_metadata_survived_champion_rollback": True,
         "historical_metadata_denials_and_read_failures_preserved_all_evidence": True,
         "original_policy_and_proposal_teacher_evidence_survived_champion_rollback": True,
