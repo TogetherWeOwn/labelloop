@@ -47,7 +47,7 @@ export function sessionAuditPort(project: string): AuditPort {
         total: page.total, next_cursor: page.next_after,
       };
     },
-    exportJsonLines(query, signal) {
+    async exportJsonLines(query, signal) {
       return client.exportJsonLines(filters(query), signal);
     },
   };

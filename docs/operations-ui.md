@@ -158,8 +158,12 @@ passed that exact transport head. First adapter head `463fa17` failed web lint:
 structured Actions annotation identified an unsafe `any` argument after array
 narrowing. The boundary now validates each kind as `unknown` before string use,
 with null/numeric-member controls; adapter tests were not reached on that head.
-The corrected adapter/unknown-state tests await new-head Actions; no local tests
-or builds ran. No new layout, component, token,
+Next head `a747de3` passed web lint/types but failed invalid-filter export tests:
+validation threw synchronously before the promised export rejection. The export
+adapter is now async so the existing view's rejection handler receives every
+validation failure without a synchronous event-handler exception. Existing negative
+controls retain the no-network requirement. Corrected adapter/unknown-state tests
+await new-head Actions; no local tests or builds ran. No new layout, component, token,
 event store, dependency, provider or spend operation. REA: reuse the supplied
 AuditLog port, session transport and existing neutral tag, not another audit journal.
 
