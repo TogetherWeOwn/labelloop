@@ -140,6 +140,80 @@ def assert_http_annotation_recovery(engine, release, recovery):
     assert qualification_journals(engine) == journals
 
 
+def fixture_review_request(project_id, item, *, expected_revision=None, proposal_run_keys=None):
+    from dataclasses import asdict
+
+    arguments = item["arguments"]
+    path = f"/projects/{project_id}/assets/{item['asset_id']}/fixture-automatic-reviews"
+    payload = dict(
+        recipe_key=arguments["recipe_key"],
+        expected_revision=(
+            arguments["expected_revision"] if expected_revision is None else expected_revision
+        ),
+        expected_registry_revision=arguments["expected_registry_revision"],
+        scope=[asdict(cell) for cell in arguments["scope"]],
+        proposal_run_keys=list(
+            arguments["proposal_run_keys"] if proposal_run_keys is None else proposal_run_keys
+        ),
+    )
+    return path, payload
+
+
+def assert_http_annotation_policy(engine, release, recovery, *, rejected):
+    from promotion_http_smoke import FixtureEngine
+    from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
+
+    from labelloop_api import annotation_reads
+
+    before = annotation_rows(engine)
+    heads = snapshot(engine, release.project_id)
+    journals = qualification_journals(engine)
+
+    def exercise(request_engine):
+        with authenticated_client(request_engine) as (client, identities, _workers):
+            headers = login(client, identities["admin"][1])
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(annotation_reads, "annotation_engine", lambda: request_engine)
+                for asset_key, item in recovery["assets"].items():
+                    path, payload = fixture_review_request(
+                        recovery["project_id"], item, expected_revision=2, proposal_run_keys=()
+                    )
+                    response = client.post(path, json=payload, headers=headers)
+                    assert response.headers["cache-control"] == "no-store"
+                    if rejected:
+                        assert response.status_code == 409
+                        assert response.json() == {"detail": "fixture_automatic_review_rejected"}
+                        assert annotation_rows(request_engine) == before
+                        assert qualification_journals(request_engine) == journals
+                    else:
+                        assert response.status_code == 201
+                        assert response.json() == {"revision": 3, "fixture_only": True}
+                        with request_engine.begin() as connection:
+                            original = load_automatic_acceptance(
+                                connection,
+                                project_key=release.project_id,
+                                asset_key=asset_key,
+                                revision=3,
+                            )
+                        assert original.policy == item["original"].policy
+                        assert original.qualification_id == item["original"].qualification_id
+                    assert snapshot(request_engine, release.project_id) == heads
+
+    if rejected:
+        # Separate real request transactions consume the committed changed policy.
+        exercise(engine)
+    else:
+        # The identical HTTP requests must succeed, without changing the durable
+        # revision-2 recovery fixture or claiming new committed-write evidence.
+        with engine.begin() as connection:
+            savepoint = connection.begin_nested()
+            exercise(FixtureEngine(connection))
+            savepoint.rollback()
+    assert annotation_rows(engine) == before == recovery["rows"]
+    assert snapshot(engine, release.project_id) == heads
+    assert qualification_journals(engine) == journals
+
+
 def exercise_annotation_policy_recovery(engine, release, final, context, actor, recovery):
     from dataclasses import replace
 
@@ -193,6 +267,7 @@ def exercise_annotation_policy_recovery(engine, release, final, context, actor, 
                 assert append_current_review(connection, **values) == 3
                 savepoint.rollback()
         assert annotation_rows(engine) == recovery["rows"]
+        assert_http_annotation_policy(engine, release, recovery, rejected=False)
 
     def configure(policy, expected_revision):
         before = qualification_journals(engine)
@@ -227,6 +302,7 @@ def exercise_annotation_policy_recovery(engine, release, final, context, actor, 
             assert annotation_rows(engine) == recovery["rows"]
             assert snapshot(engine, release.project_id) == heads
             assert qualification_journals(engine) == journals
+        assert_http_annotation_policy(engine, release, recovery, rejected=True)
         # Real admin sessions must still read the exact original policy, not the
         # changed current configuration, and reads must preserve every journal row.
         assert_annotation_recovery(engine, release, final, context, recovery)
@@ -243,7 +319,6 @@ def exercise_annotation_policy_recovery(engine, release, final, context, actor, 
 
 
 def append_http_fixture_review(engine, project_id, item):
-    from dataclasses import asdict
     from uuid import uuid4
 
     from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
@@ -251,14 +326,7 @@ def append_http_fixture_review(engine, project_id, item):
     from labelloop_api import annotation_reads, automatic_review_service
 
     arguments = item["arguments"]
-    path = f"/projects/{project_id}/assets/{item['asset_id']}/fixture-automatic-reviews"
-    payload = dict(
-        recipe_key=arguments["recipe_key"],
-        expected_revision=arguments["expected_revision"],
-        expected_registry_revision=arguments["expected_registry_revision"],
-        scope=[asdict(cell) for cell in arguments["scope"]],
-        proposal_run_keys=list(arguments["proposal_run_keys"]),
-    )
+    path, payload = fixture_review_request(project_id, item)
     before = annotation_rows(engine)
     heads = snapshot(engine, arguments["project_key"])
     journals = qualification_journals(engine)

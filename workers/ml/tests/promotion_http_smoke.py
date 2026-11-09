@@ -1045,6 +1045,10 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "internal_fixture_annotation_service_consumed_committed_champion_promotion": True,
         "committed_positive_and_negative_annotations_recovered_after_reconnect": True,
         "committed_annotation_policy_and_historical_metadata_cases": annotation_policy_vetoes,
+        "committed_http_annotation_prompt_scope_and_null_target_veto_cases": (
+            annotation_policy_vetoes * len(recovery["assets"])
+        ),
+        "identical_http_annotation_requests_passed_in_rolled_back_controls": True,
         "admin_http_original_acceptance_metadata_survived_champion_rollback": True,
         "historical_metadata_denials_and_read_failures_preserved_all_evidence": True,
         "original_policy_and_proposal_teacher_evidence_survived_champion_rollback": True,

@@ -6,7 +6,42 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Inherited completeness row identity correction — pending Actions
+## HTTP annotation current-policy vetoes — pending Actions
+
+Both recipes now submit otherwise-valid admin-session/CSRF annotation requests for
+positive and negative sources after each separately committed prompt, condition-scope
+or null-target policy change. Requests use current annotation and registry revisions
+and no stale proposal jobs. Each must return redacted 409/no-store and preserve every
+annotation/review/completeness/origin row, both complete registry heads, promotion
+events and qualification journals after client close/reconnect. Existing internal
+specific-policy rejection and exact original-metadata HTTP recovery controls remain.
+
+The identical HTTP requests must succeed before policy changes and after append-only
+restoration. These positive controls use the existing borrowed-connection fixture
+adapter and roll back; they are not new durable annotation or execution evidence.
+One shared payload builder keeps success and rejection inputs identical. No production
+code, gate, endpoint, migration or dependency changed. New controls await exact-head
+Actions; no local tests ran. REA: reuse the delivered HTTP/session and atomic
+annotation service with the existing policy-recovery fixture, not another engine.
+
+## Fixture annotation recovery and completeness inheritance — verified baseline
+
+Exact `1ff3d2f9df2815feac2fd22595183ee2ea454f22`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42557819143),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42557819143/job/128967404126),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42557819143/job/128967404216),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42557818743) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42557818715)
+succeeded. Queue/migration cycles/all four parent upgrades, web-build/dev-stack and
+lint/types/import-contract also passed. This verifies committed positive/negative
+fixture annotation HTTP, session attribution, exact inherited completeness evidence
+with a distinct UUID, original metadata/proposal/teacher recovery, denial/replay and
+post-append rollback controls. It supersedes the pending labels in the three
+historical sections below, not the new HTTP policy vetoes or complete M5 acceptance.
+Totals not extracted; required independent/native reviews remain. Real-policy
+promotion and annotation stay closed; fixture mechanics are not domain gold.
+
+## Inherited completeness row identity correction — historical pending report
 
 Exact `43db447ec15a7c60ae222f5c5f5aec04d6dd53cb`
 [CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42556349748).
