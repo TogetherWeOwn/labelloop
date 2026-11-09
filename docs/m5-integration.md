@@ -6,7 +6,34 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP promotion policy-change controls — pending Actions
+## Committed HTTP promotion canonical-group controls — pending Actions
+
+Both-recipe committed promotion smoke now adds a canonical relation from an actual
+CPU training input, actual compiled validation input or canonical development
+member to the candidate's final population. The relation commits before fresh
+connections check the historical context and reassemble promotion. Both must reject
+the specific current-group conflict; the actual admin HTTP request must return
+redacted 409/no-store. After client close, both complete registry heads, all promotion
+events, qualification journals and the committed relation must be unchanged.
+
+Only each generated relation in the disposable Actions fixture is removed afterwards.
+All pre-existing canonical and historical evidence remains intact. Fresh connections
+must recover the identical original context after each cleanup, before the existing
+same-candidate/request successful promotion and rollback. No production code, gate,
+migration or dependency changed. New assertions await exact-head Actions; no local
+tests or builds ran. REA: reuse canonical group readers and real promotion transactions.
+
+## Committed HTTP promotion policy-change controls — verified baseline
+
+Exact `39bd6acaee4b1111fc53784205aa3e841b2ce623`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42540674168),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42540673498) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42540673495)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42540674168/job/128914681504),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42540674168/job/128914681554),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the policy-change controls below, not the new
+canonical-group controls or full M5 acceptance. Totals not extracted; required reviews remain.
 
 Both-recipe committed promotion smoke now appends three valid configuration changes
 before the same candidate/request is promoted: reviewer prompt, supported condition
@@ -22,8 +49,8 @@ historical row and every other qualification table. Restoring the original polic
 must recover the identical qualified context without any registry mutation. The
 existing subsequent same-candidate HTTP promotion/rollback remains the positive
 control. No production code, gate, migration, dependency or second policy engine
-changed. New assertions await exact-head Actions; no local tests or builds ran.
-REA: reuse current policy, persisted outcome assembly and the real promotion transaction.
+changed. These assertions passed exact-head Actions at `39bd6ac`; no local tests or
+builds ran. REA: reuse current policy, persisted outcome assembly and the real promotion transaction.
 
 ## Committed HTTP canary freshness and completeness vetoes — verified baseline
 

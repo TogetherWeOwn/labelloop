@@ -665,6 +665,134 @@ def exercise_http_promotion_policy_changes(engine, candidate, qualified, actor, 
     return len(changes)
 
 
+def exercise_http_promotion_group_changes(engine, candidate, qualified, actor, payload):
+    from uuid import uuid4
+
+    import pytest
+
+    from labelloop_api import model_schema
+    from labelloop_api.final_test_store import current_qualification_context
+    from labelloop_api.promotion_service import promote_candidate
+    from labelloop_api.qualification_context_store import (
+        AnnotationOutcomeRef,
+        load_qualification_context,
+    )
+    from labelloop_api.schema import similarity_relation, source_asset
+
+    scope = dict(project_key=candidate.project_id, recipe_key=candidate.recipe_id)
+    with engine.begin() as connection:
+        model_id, manifest = connection.execute(
+            sa.select(model_schema.model_release.c.id, model_schema.training_run.c.input_manifest)
+            .join(model_schema.training_run)
+            .where(model_schema.model_release.c.release_key == candidate.release_id)
+        ).one()
+        assert current_qualification_context(connection, qualified, model_id=model_id) == qualified
+    final_asset = qualified.current_final_test.dataset.release_id + "-positive"
+    development_asset = qualified.evidence.lineage.development.release_id + "-positive"
+    # Use the retained CPU manifest, not invented weight-fitting/selection lineage.
+    training_asset = next(
+        item["asset_id"] for item in manifest["samples"] if item["split"] == "train"
+    )
+    validation_asset = next(
+        item["asset_id"] for item in manifest["samples"] if item["split"] == "val"
+    )
+    keys = (training_asset, validation_asset, development_asset, final_asset)
+    with engine.connect() as connection:
+        identities = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                sa.select(source_asset.c.asset_key, source_asset.c.id).where(
+                    source_asset.c.asset_key.in_(keys)
+                )
+            )
+        }
+    assert set(identities) == set(keys)
+
+    def relations():
+        with engine.connect() as connection:
+            return tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(similarity_relation).order_by(similarity_relation.c.id)
+                ).mappings()
+            )
+
+    original_relations = relations()
+    heads = snapshot(engine, candidate.project_id)
+    journals = qualification_journals(engine)
+    path = f"/projects/{candidate.project_id}/promotions"
+    arguments = dict(
+        **scope,
+        model_key=candidate.release_id,
+        annotation_release_key=payload["annotation_release_key"],
+        canary_release_key=payload["canary_release_key"],
+        expected_revision=payload["expected_revision"],
+        actor_id=actor,
+        require_fixture_policy=True,
+    )
+    for asset in (training_asset, validation_asset, development_asset):
+        relation_id = uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                sa.insert(similarity_relation).values(
+                    id=relation_id,
+                    left_asset_id=identities[asset],
+                    right_asset_id=identities[final_asset],
+                    reason="declared_metadata",
+                    evidence="synthetic HTTP promotion grouping conflict",
+                    algorithm_version="synthetic-v1",
+                )
+            )
+        try:
+            committed = relations()
+            assert len(committed) == len(original_relations) + 1
+            assert all(row in committed for row in original_relations)
+            with engine.begin() as connection:
+                with pytest.raises(ValueError, match="merge pinned groups|cross pinned splits"):
+                    current_qualification_context(connection, qualified, model_id=model_id)
+                # Reassembly must reject the actual canonical conflict too, not
+                # merely the stored context or a stale registry revision.
+                with pytest.raises(ValueError, match="merge pinned groups|cross pinned splits"):
+                    promote_candidate(connection, **arguments)
+            with authenticated_client(engine) as (client, identities_by_role, _workers):
+                headers = login(client, identities_by_role["admin"][1])
+                response = client.post(path, headers=headers, json=payload)
+                assert response.status_code == 409
+                assert response.json() == {"detail": "registry_change_rejected"}
+                assert response.headers["cache-control"] == "no-store"
+            assert relations() == committed
+            assert snapshot(engine, candidate.project_id) == heads
+            assert qualification_journals(engine) == journals
+        finally:
+            # Only the generated relation in disposable Actions fixtures is removed;
+            # canonical members and historical qualification evidence are retained.
+            with engine.begin() as connection:
+                deleted = connection.execute(
+                    sa.delete(similarity_relation).where(similarity_relation.c.id == relation_id)
+                )
+                assert deleted.rowcount == 1
+        assert relations() == original_relations
+        assert snapshot(engine, candidate.project_id) == heads
+        assert qualification_journals(engine) == journals
+        with engine.begin() as connection:
+            assert (
+                current_qualification_context(connection, qualified, model_id=model_id) == qualified
+            )
+            assert (
+                load_qualification_context(
+                    connection,
+                    **scope,
+                    model_key=candidate.release_id,
+                    qualification_key="durable-http-preflight",
+                    annotation=AnnotationOutcomeRef(payload["annotation_release_key"]),
+                    canary=AnnotationOutcomeRef(payload["canary_release_key"]),
+                )
+                == qualified
+            )
+    # The caller next promotes this identical candidate/request successfully.
+    return 3
+
+
 def exercise_durable_http_promotion(engine, release, final, context, actor):
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
@@ -728,6 +856,9 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
     canary_vetoes = exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload)
     policy_vetoes = exercise_http_promotion_policy_changes(
+        engine, candidate, qualified, actor, payload
+    )
+    group_vetoes = exercise_http_promotion_group_changes(
         engine, candidate, qualified, actor, payload
     )
     assert snapshot(engine, release.project_id) == original
@@ -813,6 +944,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_adapted_and_quarantined_final_veto_cases": final_test_vetoes,
         "committed_http_reused_partial_and_ambiguous_canary_veto_cases": canary_vetoes,
         "committed_http_prompt_scope_and_null_target_promotion_veto_cases": policy_vetoes,
+        "committed_http_current_canonical_group_promotion_veto_cases": group_vetoes,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,
