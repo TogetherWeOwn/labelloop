@@ -6,7 +6,35 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Authenticated audit metadata and bounded export — pending Actions
+## Audit-read SQLite UUID fixture correction — pending Actions
+
+Exact `5770e2a8be2433903e8619cd67e57647425c5cc0`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42565082777).
+Completed sanitized [unit logs](https://github.com/TogetherWeOwn/labelloop/actions/runs/42565082777/job/128989777476)
+report **9 failed, 2366 passed, 81 skipped**. Eight cases failed while decoding
+numeric-only project UUIDs; the overflow fixture also collided on exponent-shaped
+hex identifiers. SQLite gives a declared `UUID` column numeric affinity, unlike
+PostgreSQL's native UUID type. These failures do not establish a production-reader
+or PostgreSQL storage defect.
+
+The isolated SQLite fixture now creates local metadata copies with text-backed
+`Uuid(native_uuid=False)` columns, preserving deterministic identities and every
+existing assertion without mutating shared production table definitions. An
+additional direct round-trip control requires digit-only and exponent-shaped
+identities to remain distinct and exact. No production reader, schema, migration,
+dependency or workflow changed. Corrected assertions await exact-head Actions;
+pytest is unavailable locally and no test dependencies were installed.
+
+The same head's [ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42565082777/job/128989777516)
+passed, verifying the both-recipe persisted audit HTTP actor/pagination/export/
+reviewer/non-mutation controls. Queue/migration cycles/all four parents,
+web-build/dev-stack, lint/types/import-contract,
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42565082241) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42565082304) passed,
+but do not clear failed CI. REA: reuse SQLAlchemy's portable UUID storage for the
+SQLite test adapter; keep the real PostgreSQL schema and smoke unchanged.
+
+## Authenticated audit metadata and bounded export — partial verification
 
 The new read-only `/projects/{project_key}/audit-log` port projects persisted
 review/promotion metadata, never raw decisions/reasons/corrections or promotion
@@ -18,12 +46,13 @@ more than 1,000 events rather than silently truncate. Historical promotion actor
 kind remains unknown; no human provenance is invented. This is not the complete
 AuditLog projection, connection/budget history, search or UI mounting.
 
-New real-session adapter controls and both-recipe disposable PostgreSQL controls
+Real-session adapter controls and both-recipe disposable PostgreSQL controls
 recover committed review/promotion identities and actors through HTTP, enumerate
 stable keyset pages and matching exports, reject hidden cursors and preserve
-registry/qualification/review history after client close. These assertions remain
-unverified until exact-head Actions. No new store, schema, migration, dependency,
-provider call or spend grant. REA: reuse canonical review and registry events.
+registry/qualification/review history after client close. PostgreSQL controls passed
+the ML smoke linked above; SQLite adapter corrections remain unverified until
+exact-head Actions. No new store, schema, migration, dependency, provider call or
+spend grant. REA: reuse canonical review and registry events.
 
 ## Cost read and corrected fixture — verified baseline
 

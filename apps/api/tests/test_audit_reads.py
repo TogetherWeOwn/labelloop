@@ -65,17 +65,28 @@ def promotion(connection, number, *, project=PROJECT, at=NOW):
 @pytest.fixture
 def http(store, monkeypatch):
     with store.engine.begin() as connection:
-        db.project.create(connection)
-        # SQLite supplies only the source identity columns used by the read. The
-        # production PostgreSQL smoke retains the complete canonical schema.
+        # Keep UUIDs as text in SQLite: its UUID type has numeric affinity and
+        # corrupts digit-only or exponent-shaped hex. Never mutate shared tables.
+        metadata = sa.MetaData()
         sa.Table(
             "source_asset",
-            sa.MetaData(),
-            sa.Column("id", sa.UUID, primary_key=True),
-            sa.Column("project_id", sa.UUID, nullable=False),
-        ).create(connection)
-        db.review_event.create(connection)
-        models.promotion_event.create(connection)
+            metadata,
+            sa.Column("id", sa.Uuid(native_uuid=False), primary_key=True),
+            sa.Column("project_id", sa.Uuid(native_uuid=False), nullable=False),
+        )
+        sa.Table(
+            "preprocessing_recipe",
+            metadata,
+            sa.Column("id", sa.Uuid(native_uuid=False), primary_key=True),
+        )
+        for table in (db.project, db.review_event, models.promotion_event):
+            copied = table.to_metadata(metadata)
+            for column in copied.c:
+                if isinstance(column.type, sa.Uuid):
+                    column.type = sa.Uuid(native_uuid=False)
+        # SQLite supplies only the source identity columns used by the read. The
+        # production PostgreSQL smoke retains the complete canonical schema.
+        metadata.create_all(connection)
         for identity, key in ((PROJECT, "audit-fixture"), (FOREIGN, "foreign")):
             connection.execute(
                 sa.insert(db.project).values(
@@ -104,6 +115,27 @@ def http(store, monkeypatch):
     monkeypatch.setattr(audit_reads, "auth_store", lambda: store)
     with TestClient(app, base_url=ORIGIN) as client:
         yield client
+
+
+def test_sqlite_fixture_preserves_numeric_and_exponent_shaped_uuid_values(http, store):
+    with store.engine.begin() as connection:
+        for number in (0xE0, 0xE1):
+            review(connection, number)
+        assert set(connection.execute(sa.select(db.project.c.id)).scalars()) == {PROJECT, FOREIGN}
+        assert set(
+            connection.execute(sa.select(db.review_event.c.id, db.review_event.c.asset_id)).all()
+        ) == {
+            (UUID(int=number), asset)
+            for number, asset in (
+                (10, ASSET),
+                (20, ASSET),
+                (40, OTHER_ASSET),
+                (0xE0, ASSET),
+                (0xE1, ASSET),
+            )
+        }
+    for table in (db.project, db.review_event, models.promotion_event):
+        assert table.c.id.type.native_uuid
 
 
 def test_admin_metadata_projection_is_redacted_and_does_not_infer_promotion_actor(http):
