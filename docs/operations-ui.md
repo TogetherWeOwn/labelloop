@@ -196,6 +196,22 @@ paging, redaction, rollback and disposable PostgreSQL recovery controls passed
 no local tests ran. REA: reuse the durable ledger codec and core
 exposure property, not another budget engine.
 
+### Original reservation timestamps — integration pending
+
+Cost pages also include nullable `reserved_at`, loaded from the exact immutable
+reservation event under the writer-head lock, not from the month, policy revision
+or later billing activity. The bounded lookup covers only returned operations;
+duplicate or mismatched request/approval/autonomous history rejects the page.
+Missing historical events stay null without backfill or current-time substitution.
+The strict session transport retains UTC microseconds and rejects absent, malformed,
+non-UTC and invalid-calendar values. New adapter and disposable PostgreSQL recovery
+controls await Actions. This field is reservation time, not completion or billing
+time; it does not change operation ordering or establish a cross-page snapshot.
+Operation kind/object/recipe metadata, real navigation, complete refusal history,
+policy/resume commands and authenticated CostsView mounting remain unfinished.
+No new journal, migration, dependency or paid operation. REA: consume the existing
+reservation event, not inferred timestamps or another accounting engine.
+
 ### Session-backed ledger transport
 
 `costClient(project).query({ after, limit }, signal)` reads exactly one authorized

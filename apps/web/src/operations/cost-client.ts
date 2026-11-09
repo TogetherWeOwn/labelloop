@@ -14,6 +14,7 @@ export interface CostOperation {
   state: 'reserved' | 'dispatched' | 'unconfirmed' | 'settled' | 'cancelled' | 'insufficient_credits';
   approved_by: string | null;
   reserved_autonomously: boolean;
+  reserved_at: string | null;
 }
 export interface BudgetPage {
   project_id: string;
@@ -51,7 +52,7 @@ const unavailable = () => new Error('Cost records unavailable');
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const identity = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && [...value].length <= 256;
 const month = (value: unknown): value is string => typeof value === 'string' && /^(?!0000)\d{4}-(?:0[1-9]|1[0-2])$/.test(value);
-const operationKeys = ['operation_id', 'iteration_id', 'month', 'price_version', 'estimate', 'actual', 'exposure', 'state', 'approved_by', 'reserved_autonomously'];
+const operationKeys = ['operation_id', 'iteration_id', 'month', 'price_version', 'estimate', 'actual', 'exposure', 'state', 'approved_by', 'reserved_autonomously', 'reserved_at'];
 const pageKeys = ['project_id', 'currency', 'unit', 'policy_revision', 'policy', 'pause_reason', 'operations', 'next_after'];
 const policyKeys = ['monthly_limit', 'iteration_limit', 'operation_limit', 'autonomous_spend'];
 const summaryKeys = ['project_id', 'currency', 'unit', 'policy_revision', 'policy', 'pause_reason', 'month', 'iteration_id', 'monthly', 'iteration'];
@@ -67,8 +68,15 @@ function policy(value: unknown): value is BudgetPolicy {
     && [value.monthly_limit, value.iteration_limit, value.operation_limit].every((amount) => amount === null || integer(amount));
 }
 
+function reservationTime(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== 'string' || !/^(?!0000)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value)) return false;
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) && new Date(instant).toISOString().slice(0, 19) === value.slice(0, 19);
+}
+
 function operation(value: unknown): value is CostOperation {
-  if (!object(value, operationKeys) || !identity(value.operation_id) || !identity(value.iteration_id)
+  if (!object(value, operationKeys) || !reservationTime(value.reserved_at) || !identity(value.operation_id) || !identity(value.iteration_id)
     || !month(value.month) || !identity(value.price_version) || !integer(value.estimate) || !integer(value.exposure)
     || !(value.actual === null || integer(value.actual)) || !(value.approved_by === null || identity(value.approved_by))
     || typeof value.reserved_autonomously !== 'boolean' || (!value.reserved_autonomously && value.approved_by === null)

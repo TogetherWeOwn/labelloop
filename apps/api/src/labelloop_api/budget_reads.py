@@ -1,7 +1,7 @@
 """Authenticated bounded ledger inspection, never a paid-operation grant."""
 
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
@@ -11,7 +11,7 @@ from sqlalchemy.exc import NoResultFound, SQLAlchemyError
 
 from labelloop_api import budget_schema as db
 from labelloop_api.auth import auth_store, require_admin
-from labelloop_api.auth_store import Principal
+from labelloop_api.auth_store import Principal, utc
 from labelloop_api.budget_store import decode_entry
 from labelloop_api.schema import project
 from labelloop_core.budget import BudgetPolicy
@@ -44,6 +44,8 @@ class CostOperation(BaseModel):
     ]
     approved_by: str | None
     reserved_autonomously: bool
+    # Original reservation event only; missing historical evidence stays unknown.
+    reserved_at: datetime | None
 
 
 class BudgetPage(BaseModel):
@@ -166,6 +168,41 @@ def load_budget_summary(connection, *, project_key, month, iteration_id):
     )
 
 
+def _reservation_times(connection, project_key, entries):
+    if not entries:
+        return {}
+    rows = (
+        connection.execute(
+            sa.select(db.event.c.operation_id, db.event.c.record, db.event.c.occurred_at)
+            .where(
+                db.event.c.project_id == project_key,
+                db.event.c.operation_id.in_(entries),
+                db.event.c.action == "reserve",
+            )
+            .limit(len(entries) + 1)
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) > len(entries):
+        raise ValueError("ambiguous reservation history")
+    result = {}
+    for row in rows:
+        key = row["operation_id"]
+        recorded = decode_entry(row["record"])
+        current = entries[key]
+        if (
+            key in result
+            or recorded.request != current.request
+            or recorded.approval != current.approval
+            or recorded.reserved_autonomously != current.reserved_autonomously
+            or recorded.state != "reserved"
+        ):
+            raise ValueError("reservation history mismatch")
+        result[key] = utc(row["occurred_at"])
+    return result
+
+
 def load_budget_page(connection, *, project_key, after, limit):
     head = _locked_head(connection, project_key)
     policy = BudgetPolicy(**head["policy"]["limits"])
@@ -179,9 +216,10 @@ def load_budget_page(connection, *, project_key, after, limit):
         .mappings()
         .all()
     )
+    entries = {row["operation_id"]: _scoped_entry(row, project_key) for row in rows[:limit]}
+    reserved_at = _reservation_times(connection, project_key, entries)
     operations = []
-    for row in rows[:limit]:
-        entry = _scoped_entry(row, project_key)
+    for entry in entries.values():
         request = entry.request
         operations.append(
             CostOperation(
@@ -195,6 +233,7 @@ def load_budget_page(connection, *, project_key, after, limit):
                 state=entry.state,
                 approved_by=entry.approval.actor_id if entry.approval else None,
                 reserved_autonomously=entry.reserved_autonomously,
+                reserved_at=reserved_at.get(request.operation_id),
             )
         )
     return BudgetPage(

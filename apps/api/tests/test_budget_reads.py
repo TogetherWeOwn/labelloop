@@ -49,6 +49,7 @@ def http(monkeypatch, store):
         project.create(connection)
         db.head.create(connection)
         db.operation.create(connection)
+        db.event.create(connection)
         for key in ("budget-fixture", "foreign", "unconfigured"):
             connection.execute(
                 sa.insert(project).values(
@@ -118,6 +119,7 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
             "state": state,
             "approved_by": ADMIN.id,
             "reserved_autonomously": False,
+            "reserved_at": None,
         }
     ]
     assert "must-not-leak" not in response.text
@@ -140,6 +142,87 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
     assert summary.json()["pause_reason"] == page["pause_reason"]
 
 
+def reservation_event(connection, value, **changes):
+    row = {
+        "id": str(uuid4()),
+        "project_id": "budget-fixture",
+        "operation_id": value.request.operation_id,
+        "principal_id": ADMIN.id,
+        "principal_kind": "human",
+        "principal_role": "admin",
+        "principal_version": "a" * 64,
+        "policy_revision": 1,
+        "action": "reserve",
+        "record": asdict(value),
+        "occurred_at": NOW,
+    }
+    connection.execute(sa.insert(db.event).values(row | changes))
+
+
+def test_reservation_time_uses_exact_original_event_not_later_activity(http, store):
+    original = entry()
+    with store.engine.begin() as connection:
+        persist(connection, replace(original, state="settled", actual=0))
+        reservation_event(connection, original)
+        reservation_event(connection, original, action="settle", record={"private": "excluded"})
+        reservation_event(
+            connection, original, project_id="foreign", record={"private": "excluded"}
+        )
+        reservation_event(
+            connection, original, operation_id="other", record={"private": "excluded"}
+        )
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 200
+    assert response.json()["operations"][0]["reserved_at"] == NOW.isoformat().replace("+00:00", "Z")
+    assert response.json()["operations"][0]["actual"] == 0
+    assert "private" not in response.text
+
+
+@pytest.mark.parametrize(
+    "mismatch", ["duplicate", "request", "approval", "autonomous", "state", "root"]
+)
+def test_reservation_time_rejects_ambiguous_or_substituted_event(http, store, mismatch):
+    original = entry()
+    recorded = original
+    if mismatch == "request":
+        req = replace(original.request, iteration_id="substituted")
+        recorded = LedgerEntry(req, SpendApproval(ADMIN.id, req.digest))
+    elif mismatch == "approval":
+        recorded = replace(original, approval=SpendApproval("other", original.request.digest))
+    elif mismatch == "autonomous":
+        recorded = replace(original, reserved_autonomously=True)
+    elif mismatch == "state":
+        recorded = replace(original, state="dispatched")
+    with store.engine.begin() as connection:
+        persist(connection, original)
+        reservation_event(
+            connection, recorded, record={} if mismatch == "root" else asdict(recorded)
+        )
+        if mismatch == "duplicate":
+            persist(connection, entry("b"))
+            reservation_event(connection, original)
+    login(http, "admin")
+    response = http.get(PATH)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+    assert "substituted" not in response.text
+
+
+def test_reservation_lookup_is_bounded_to_returned_page(http, store):
+    with store.engine.begin() as connection:
+        persist(connection, entry("a"))
+        persist(connection, entry("b"))
+        reservation_event(connection, entry("a"))
+        reservation_event(connection, entry("b"), record={})
+    login(http, "admin")
+    first = http.get(PATH, params={"limit": 1})
+    assert first.status_code == 200
+    assert first.json()["operations"][0]["reserved_at"] is not None
+    assert first.json()["next_after"] == "a"
+    assert http.get(PATH, params={"limit": 1, "after": "a"}).status_code == 409
+
+
 def test_autonomous_reservation_does_not_invent_human_approval(http, store):
     value = LedgerEntry(request(), reserved_autonomously=True)
     with store.engine.begin() as connection:
@@ -159,6 +242,12 @@ def test_openapi_publishes_typed_read_contract():
         "$ref": "#/components/schemas/BudgetPage"
     }
     assert "policy_revision" in contract["components"]["schemas"]["BudgetPage"]["required"]
+    operation = contract["components"]["schemas"]["CostOperation"]
+    assert "reserved_at" in operation["required"]
+    assert operation["properties"]["reserved_at"]["anyOf"] == [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"},
+    ]
 
 
 def test_bounded_keyset_pages_and_project_isolation(http, store):
@@ -445,6 +534,17 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         assert page.status_code == 200
         assert page.json()["operations"][0]["actual"] is None
         assert page.json()["operations"][0]["exposure"] == 40
+        with postgres_budget.engine.connect() as connection:
+            reserved_at = connection.execute(
+                sa.select(db.event.c.occurred_at).where(
+                    db.event.c.project_id == "budget-fixture",
+                    db.event.c.operation_id == "one",
+                    db.event.c.action == "reserve",
+                )
+            ).scalar_one()
+        assert page.json()["operations"][0]["reserved_at"] == reserved_at.isoformat().replace(
+            "+00:00", "Z"
+        )
         summary = client.get(SUMMARY, params=SUMMARY_QUERY)
         assert summary.status_code == 200
         assert (

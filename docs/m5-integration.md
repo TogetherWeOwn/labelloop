@@ -6,7 +6,29 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Complete scoped cost summary — implementation, verification pending
+## Original reservation timestamps — implementation, verification pending
+
+Cost pages now project nullable `reserved_at` from the existing immutable `reserve`
+event, while holding the budget writer-head lock. One bounded lookup covers only
+the returned page. The recorded request, approval and autonomous flag must match
+the current operation, and the recorded state must be the original reservation.
+Ambiguous, malformed or substituted history rejects the page. Missing history
+stays null; later activity, policy revisions and the reservation month cannot
+supply a fabricated timestamp. No journal backfill, new schema/migration, ordering
+change, provider payload, spend command or dependency is introduced.
+
+New session/OpenAPI controls cover original-event binding, settled-zero recovery,
+foreign/other-operation/later-event exclusion, duplicate and substituted records,
+missing history and page bounds. The disposable PostgreSQL HTTP recovery control
+compares the projected timestamp with the committed real BudgetStore reservation
+event across closed clients. Strict web transport preserves null and microsecond
+UTC strings and rejects missing, non-UTC, invalid-calendar and malformed values.
+These new assertions await exact-head Actions; no local tests or builds ran.
+This is not complete cost labels/object identities, full CostsView mounting or
+real model-quality evidence. REA: reuse the existing immutable reservation event
+and UTC normalization rather than infer time or create another ledger.
+
+## Complete scoped cost summary — verified baseline
 
 The admin-session read `/projects/{project_key}/costs/summary` projects the complete
 requested reservation month and iteration independently under the existing budget
@@ -25,8 +47,15 @@ read-bound refusal, strict queries and redacted atomic failures. Disposable
 PostgreSQL controls require real HTTP/client-close recovery and the existing head
 lock held until the read's outer transaction commits. The web transport validates
 scope, safe integer totals, exact arithmetic, zero totals, cancellation and bounded
-redacted reads; it never fetches pages to reconstruct a total. **New assertions
-await exact-head Actions**, not local execution or accepted CostsView mounting.
+redacted reads; it never fetches pages to reconstruct a total. These assertions
+passed [CI at 5748be0](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681463),
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681463/job/129094295235),
+[web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681463/job/129094295171)
+and [PostgreSQL ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681463/job/129094295295).
+Queue/migration cycles/all four parents, dev-stack, lint/types/import-contract,
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681077) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42597681127) passed
+that exact head. Totals not extracted; this is not complete CostsView/M5 acceptance.
 
 REA: reuse the delivered core exposure calculation, durable ledger and writer lock,
 not another accounting engine. Rich operation labels/timestamps/object identities,

@@ -3,7 +3,7 @@ import { costClient, type CostOperation, type CostReadQuery, type CostSummaryQue
 
 const entry: CostOperation = {
   operation_id: 'operation-1', iteration_id: 'iteration-1', month: '2026-11', price_version: 'prices-1',
-  estimate: 100, actual: null, exposure: 150, state: 'unconfirmed', approved_by: null, reserved_autonomously: true,
+  estimate: 100, actual: null, exposure: 150, state: 'unconfirmed', approved_by: null, reserved_autonomously: true, reserved_at: null,
 };
 const page = (operations: unknown[] = [entry], extra = {}) => ({
   project_id: 'project-a', currency: 'USD', unit: 'micro_usd', policy_revision: 1,
@@ -124,6 +124,18 @@ describe('session-backed cost transport', () => {
     expect(request).toHaveBeenCalledWith('/api/projects/project-a/costs?limit=50', {
       method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: abort, headers: { Accept: 'application/json' },
     });
+  });
+
+  it.each([null, '2026-11-09T10:00:00Z', '2026-11-09T10:00:00.123456Z', '2024-02-29T23:59:59Z'])('preserves exact original reservation time without month or current-time substitution: %s', async (reserved_at) => {
+    const value = page([{ ...entry, reserved_at }]);
+    stub(json(value));
+    await expect(costClient('project-a').query({}, signal())).resolves.toEqual(value);
+  });
+
+  it.each(['', '2026-11', '2026-11-09T10:00:00', '2026-11-09T11:00:00+01:00', '2026-02-29T10:00:00Z', '2026-11-31T10:00:00Z', '2026-11-09T24:00:00Z', '0000-01-01T00:00:00Z', '2026-11-09T10:00:00.1234567Z', 1, {}, undefined])('rejects absent or invalid reservation timestamp: %j', async (reserved_at) => {
+    const request = stub(json(page([{ ...entry, reserved_at }])));
+    await expect(costClient('project-a').query({}, signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it('encodes opaque operation cursors and project keys without choosing another endpoint', async () => {
