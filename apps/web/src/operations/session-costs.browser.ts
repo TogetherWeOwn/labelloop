@@ -168,7 +168,8 @@ for (const width of [1280, 390]) {
     await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click();
     await expect(page.getByText('Loading more operations…', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Show 50 more operations', exact: true })).toHaveAttribute('aria-disabled', 'true');
-    await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click();
+    // Exercise the pending-click guard without waiting for the held response.
+    await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click({ force: true });
     await page.getByRole('button', { name: 'All', exact: true }).click();
     await expect(page.locator('tbody tr')).toHaveCount(50);
     release?.();
