@@ -6,6 +6,27 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Cost-read SQLite fixture defaults repaired — pending Actions
+
+Exact `d192c4209209cf09d75dd8de8d99e342572d05c6`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42561484417).
+Completed sanitized logs establish [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42561484417/job/128978693135)
+**2313 passed, 81 skipped, 28 setup errors** and the [ML smoke budget step](https://github.com/TogetherWeOwn/labelloop/actions/runs/42561484417/job/128978693152)
+**26 passed, 28 setup errors**. Every error is the new HTTP fixture inserting
+canonical project rows into SQLite without PostgreSQL-generated defaults;
+`now()` fails before any affected cost-read assertion. CPU training/proposal
+smoke and its qualification exercises did not run. Queue/migration cycles/all
+four parents, web-build/dev-stack, lint/types/import-contract, CodeQL and gitleaks
+passed, but do not clear failed CI.
+
+The fixture now supplies an explicit project UUID and the existing auth fixture's
+clock value. PostgreSQL's real generated defaults and the production cost reader
+are unchanged. The existing 28 affected cases retain all authorization, paging,
+redaction, malformed-state and rollback controls. No migration, dependency or
+workflow change. Corrected assertions remain unverified until exact-head Actions;
+local pytest is unavailable and no dependencies were installed. REA: reuse the
+session fixture clock and canonical schema's actual identity/time fields.
+
 ## Authenticated durable cost read — pending Actions
 
 The admin-only `/projects/{project_key}/costs` read consumes existing policy/pause

@@ -9,7 +9,7 @@ import sqlalchemy as sa
 import test_budget_store as budget_tests
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
-from test_auth import ORIGIN, login, worker_token
+from test_auth import NOW, ORIGIN, login, worker_token
 from test_auth import password_hash as password_hash
 from test_auth import store as store
 from test_budget_store import ADMIN, LLM, claim, request, reserve
@@ -52,11 +52,13 @@ def http(monkeypatch, store):
         for key in ("budget-fixture", "foreign", "unconfigured"):
             connection.execute(
                 sa.insert(project).values(
+                    id=uuid4(),
                     project_key=key,
                     workspace_id=uuid4(),
                     task="detect",
                     scope="fixture",
                     domain="licence-clean",
+                    created_at=NOW,
                 )
             )
         for key in ("budget-fixture", "foreign"):
