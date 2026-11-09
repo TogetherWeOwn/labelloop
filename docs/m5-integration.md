@@ -6,7 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Pinned tool downloads — bounded retry spacing; new controls pending
+## Session-backed audit transport — new controls pending
+
+The web audit transport reads only the existing same-origin session-authorized
+metadata and complete-export endpoints. Filters, counts and cursor positions stay
+server-owned; the client never filters a page or combines pages into an export.
+Wire validation preserves every recorded actor kind (including unknown historical
+promotion provenance), nullable current names and nullable refusal outcomes. No
+current-person inference, invented record URL or unsupported connection event is
+introduced. This is a data seam, **not yet an AuditLog mount or accepted UI**;
+the supplied display contract still needs an explicit unknown-provenance adapter.
+
+New network-free Vitest controls cover repeated/literal filters, scoped response
+identity, kind-distinct UUIDs, cursor validation, strict record fields, bounded
+UTF-8 streaming, complete JSON-lines export, HTTP/transport redaction and request
+cancellation. Empty filter sets reject before fetching rather than silently
+selecting everything. Same-origin credentials, no-store and redirect refusal are
+fixed in code; there is no client role/principal grant, mutation or retry. New
+assertions await exact-head Actions. No local tests/builds, dependency install,
+new API/schema/migration, UI redesign or provider call. REA: consume the delivered
+audit query and export rather than a parallel browser history or authority layer.
+
+Baseline `36901d6b87d654933ca1738a6fdc19f98e9f5e05`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743397),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743117) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743108)
+passed. [Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743397/job/129048470020),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743397/job/129048470177),
+[queue/migration round trip/all four parents](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743397/job/129048470013),
+[dev-stack readiness](https://github.com/TogetherWeOwn/labelloop/actions/runs/42583743397/job/129048470131)
+and web-build/lint/types/import-contract passed. The five actionlint workflow-shell
+controls are verified, superseding their earlier pending status, not proving an
+upstream outage resolved. No overall new-head or milestone acceptance is claimed.
+
+## Pinned tool downloads — verified baseline
 
 Completed exact `030fa5ccdd43df6de1d5dfa3c50adb4efb1eed20`
 [CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42581537456) failed only
