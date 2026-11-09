@@ -6,7 +6,46 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## MinIO download resilience — pending Actions
+## Budget audit metadata — pending Actions
+
+The existing audit query/export now includes admin-visible metadata from the
+immutable budget journal. Authorization still selects sources before search,
+counts, paging and export; reviewers retain review-only visibility. Budget actors
+retain the recorded `human` or `service` kind, without relabeling services as
+models or inferring historical promotion kinds. Current names resolve by exact ID
+and compatible principal kind. Budget record identity is the canonical project
+UUID and revision is the recorded policy revision, not an invented ledger revision
+or an operation link. Sentences are static; private action/operation/policy/pricing
+and provider payloads remain excluded. This does not classify refused attempts,
+add connection history, or complete the AuditLog projection/mount.
+
+Native UUID and text journal UUIDs use a common lowercase hex SQL key for union,
+ordering, search and cursors. Public identities remain typed UUIDs; equal IDs in
+different kinds remain distinct. Added session controls for budget actor/name
+binding, foreign/hidden metadata, exact UUIDs, mixed-storage ordering/paging/export,
+malformed state and non-mutation. Both-recipe PostgreSQL smoke now commits a real
+zero-limit policy event, reconnects through real authenticated HTTP and checks
+budget metadata, reviewer exclusion and unchanged complete event/ledger history.
+New assertions are unverified until exact-head Actions. No new schema, migration,
+dependency, provider call or spend command. REA: reuse the durable budget journal
+and existing authorized audit query, not another audit store.
+
+## MinIO download resilience — verified baseline
+
+Exact `6b0149be452440c8fa8ecc1d15b402d7fe940ef5`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716747),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716747/job/129013554391),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716747/job/129013554542),
+[dev-stack readiness](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716747/job/129013554418),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716310) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42572716308) succeeded.
+Queue/migration cycles/all four parent upgrades, web-build and lint/types/import-contract
+also passed. The six fetch regressions and repaired readiness gate are verified,
+superseding their pending labels below. Totals not extracted; this does not verify
+new budget-audit assertions or full M5 acceptance. Required independent/native
+reviews and remaining operational mounting/expanded restore remain gates.
+
+## MinIO download resilience — historical pending report
 
 Completed exact `fd66017e96407f7705eb047c871c1fbf339cb0d5`
 [CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808):

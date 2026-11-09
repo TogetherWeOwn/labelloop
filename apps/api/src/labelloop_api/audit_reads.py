@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import NoResultFound, SQLAlchemyError
 
+from labelloop_api import budget_schema as budgets
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
 from labelloop_api.auth import auth_store, require_reviewer
@@ -16,8 +17,13 @@ from labelloop_api.auth_schema import principal
 from labelloop_api.auth_store import Principal, utc
 
 router = APIRouter(tags=["audit"])
-AuditKind = Literal["Review", "Promotion"]
-ActorKind = Literal["human", "model", "system", "unknown"]
+AuditKind = Literal["Review", "Promotion", "Budget"]
+ActorKind = Literal["human", "model", "system", "service", "unknown"]
+SENTENCES = {
+    "Review": "Recorded a review decision.",
+    "Promotion": "Recorded a registry transition.",
+    "Budget": "Recorded a budget event.",
+}
 AuditSearch = Annotated[str | None, Query(min_length=1, max_length=128)]
 
 
@@ -46,16 +52,22 @@ class AuditMetadataPage(BaseModel):
     next_after: str | None
 
 
-def visible_events(project_id, actor, kind, since, through, actor_kind, search):
+def uuid_key(column):
+    # Native UUID and journal text IDs need the same SQL union/comparison type.
+    # Fixed-width lowercase hex preserves UUID ordering on PostgreSQL and SQLite.
+    return sa.func.lower(sa.func.replace(sa.cast(column, sa.String), "-", ""))
+
+
+def visible_events(project_id, project_key, actor, kind, since, through, actor_kind, search):
     # Select permitted sources before any filtering, counting, paging or export.
     review = (
         sa.select(
-            db.review_event.c.id,
+            uuid_key(db.review_event.c.id).label("id"),
             db.review_event.c.created_at.label("at"),
             sa.literal("Review").label("kind"),
             db.review_event.c.actor_id,
             db.review_event.c.actor_kind,
-            db.review_event.c.asset_id.label("record_id"),
+            uuid_key(db.review_event.c.asset_id).label("record_id"),
             db.review_event.c.expected_revision.label("revision"),
         )
         .join(db.source_asset)
@@ -65,14 +77,27 @@ def visible_events(project_id, actor, kind, since, through, actor_kind, search):
     if actor.permits("admin"):
         queries.append(
             sa.select(
-                models.promotion_event.c.id,
+                uuid_key(models.promotion_event.c.id).label("id"),
                 models.promotion_event.c.created_at.label("at"),
                 sa.literal("Promotion").label("kind"),
                 models.promotion_event.c.actor_id,
                 sa.literal("unknown").label("actor_kind"),
-                models.promotion_event.c.recipe_id.label("record_id"),
+                uuid_key(models.promotion_event.c.recipe_id).label("record_id"),
                 models.promotion_event.c.revision,
             ).where(models.promotion_event.c.project_id == project_id)
+        )
+        queries.append(
+            sa.select(
+                uuid_key(budgets.event.c.id).label("id"),
+                budgets.event.c.occurred_at.label("at"),
+                sa.literal("Budget").label("kind"),
+                budgets.event.c.principal_id.label("actor_id"),
+                budgets.event.c.principal_kind.label("actor_kind"),
+                uuid_key(db.project.c.id).label("record_id"),
+                budgets.event.c.policy_revision.label("revision"),
+            )
+            .join(db.project, db.project.c.project_key == budgets.event.c.project_id)
+            .where(budgets.event.c.project_id == project_key, db.project.c.id == project_id)
         )
     recorded = sa.union_all(*queries).subquery()
     # Resolve by immutable ID only, never by a legacy actor string equal to a
@@ -80,7 +105,9 @@ def visible_events(project_id, actor, kind, since, through, actor_kind, search):
     compatible = sa.or_(
         recorded.c.actor_kind == "unknown",
         sa.and_(recorded.c.actor_kind == "human", principal.c.kind == "human"),
-        sa.and_(recorded.c.actor_kind.in_(("model", "system")), principal.c.kind == "service"),
+        sa.and_(
+            recorded.c.actor_kind.in_(("model", "system", "service")), principal.c.kind == "service"
+        ),
     )
     events = (
         sa.select(recorded, principal.c.name.label("actor_name"))
@@ -112,7 +139,7 @@ def visible_events(project_id, actor, kind, since, through, actor_kind, search):
         except ValueError:
             pass
         else:
-            matches.extend((events.c.id == identity, events.c.record_id == identity))
+            matches.extend((events.c.id == identity.hex, events.c.record_id == identity.hex))
         query = query.where(sa.or_(*matches))
     return query.subquery()
 
@@ -141,15 +168,17 @@ def load_audit_page(
     project_id = connection.execute(
         sa.select(db.project.c.id).where(db.project.c.project_key == project_key)
     ).scalar_one()
-    events = visible_events(project_id, actor, kind, since, through, actor_kind, search)
+    events = visible_events(
+        project_id, project_key, actor, kind, since, through, actor_kind, search
+    )
     query = sa.select(events)
     if after is not None:
         cursor_kind, separator, cursor_id = after.partition("/")
-        if not separator or cursor_kind not in ("Review", "Promotion"):
+        if not separator or cursor_kind not in SENTENCES:
             raise ValueError("invalid audit cursor")
         cursor = connection.execute(
             sa.select(events.c.at, events.c.kind, events.c.id).where(
-                events.c.kind == cursor_kind, events.c.id == UUID(cursor_id)
+                events.c.kind == cursor_kind, events.c.id == UUID(cursor_id).hex
             )
         ).one_or_none()
         if cursor is None:
@@ -178,17 +207,15 @@ def load_audit_page(
     records = [row for row in rows if row["id"] is not None]
     projected = [
         AuditMetadata(
-            id=row["id"],
+            id=UUID(row["id"]),
             at=utc(row["at"]),
             kind=row["kind"],
             actor_id=row["actor_id"],
             actor_kind=row["actor_kind"],
             actor_name=row["actor_name"],
-            record_id=row["record_id"],
+            record_id=UUID(row["record_id"]),
             revision=row["revision"],
-            sentence="Recorded a review decision."
-            if row["kind"] == "Review"
-            else "Recorded a registry transition.",
+            sentence=SENTENCES[row["kind"]],
         )
         for row in records[:limit]
     ]

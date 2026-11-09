@@ -92,8 +92,19 @@ UTC; inverted ranges reject. JSON-lines exports are fully buffered
 and capped at 1,000 events; overflow rejects with a narrower-range error, never a
 silently truncated file or a partially streamed failure.
 
-This port is **not yet mounted in AuditLog** and does not supply connection/budget
-history, refused attempts, record links or the complete accepted UI projection.
+The port also includes admin-only `Budget` metadata from the existing immutable
+budget journal. Its recorded actor kind is `human` or `service`; `service` is now
+an additional exact `actor_kind` filter, not an inferred model/system category.
+Names still require exact compatible directory identities. Budget `record_id` is
+the canonical project UUID; `revision` is the recorded policy revision, not a
+ledger freshness token or operation revision. The static sentence discloses no
+action, private record, operation/claim ID, policy/pricing or provider payload.
+Native and text UUID journals share normalized hex ordering/cursor/search keys,
+while public IDs remain UUIDs. Reviewer restrictions apply before every operation,
+including budget-name search, counts and export. New budget controls await Actions.
+
+This port is **not yet mounted in AuditLog** and does not supply connection
+history, classified refused attempts, record links or the complete accepted UI projection.
 Search/filter and UUID fixture controls passed
 [CI at a3fcca5](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
 including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944)

@@ -5,12 +5,41 @@ import json
 import sqlalchemy as sa
 from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
 
+from labelloop_api import budget_schema as budgets
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
 from labelloop_api.auth_schema import principal
+from labelloop_api.auth_store import Principal
+from labelloop_api.budget_store import BudgetStore
+from labelloop_core.budget import BudgetPolicy
 
 
 def exercise_audit_reads(engine, project_key):
+    # Persist a real policy event before reconnecting through the audit read. A
+    # zero-limit fixture policy authorizes no paid operation or provider call.
+    ledger = BudgetStore(engine)
+    with engine.connect() as connection:
+        account = (
+            connection.execute(
+                sa.select(principal)
+                .where(principal.c.kind == "human", principal.c.role == "admin")
+                .order_by(principal.c.id)
+                .limit(1)
+            )
+            .mappings()
+            .one()
+        )
+        revision = connection.execute(
+            sa.select(budgets.head.c.revision).where(budgets.head.c.project_id == project_key)
+        ).scalar_one_or_none()
+    ledger.set_policy(
+        project_key,
+        actor=Principal(account["id"], account["name"], account["kind"], account["role"]),
+        expected_revision=revision or 0,
+        policy=BudgetPolicy(0, 0, 0),
+    )
+    budget_before = ledger.snapshot(project_key)
+
     def records():
         with engine.connect() as connection:
             identity = connection.execute(
@@ -35,7 +64,16 @@ def exercise_audit_reads(engine, project_key):
                 .mappings()
                 .all()
             )
-            return reviews, promotions
+            budget_events = (
+                connection.execute(
+                    sa.select(budgets.event)
+                    .where(budgets.event.c.project_id == project_key)
+                    .order_by(budgets.event.c.id)
+                )
+                .mappings()
+                .all()
+            )
+            return reviews, promotions, budget_events
 
     before = records()
     assert before[0] and before[1]
@@ -43,7 +81,7 @@ def exercise_audit_reads(engine, project_key):
     journals = qualification_journals(engine)
     expected = {
         (kind, str(row["id"])): row
-        for kind, rows in zip(("Review", "Promotion"), before, strict=True)
+        for kind, rows in zip(("Review", "Promotion", "Budget"), before, strict=True)
         for row in rows
     }
     with engine.connect() as connection:
@@ -51,7 +89,10 @@ def exercise_audit_reads(engine, project_key):
             row["id"]: row
             for row in connection.execute(
                 sa.select(principal.c.id, principal.c.name, principal.c.kind).where(
-                    principal.c.id.in_({row["actor_id"] for row in expected.values()})
+                    principal.c.id.in_(
+                        {row["actor_id"] for row in (*before[0], *before[1])}
+                        | {row["principal_id"] for row in before[2]}
+                    )
                 )
             ).mappings()
         }
@@ -85,15 +126,33 @@ def exercise_audit_reads(engine, project_key):
         assert {(event["kind"], event["id"]) for event in events} == set(expected)
         for event in events:
             saved = expected[(event["kind"], event["id"])]
-            assert event["actor_id"] == saved["actor_id"]
-            assert event["actor_kind"] == (
-                saved["actor_kind"] if event["kind"] == "Review" else "unknown"
+            assert (
+                event["actor_id"]
+                == saved["principal_id" if event["kind"] == "Budget" else "actor_id"]
             )
+            assert event["actor_kind"] == (
+                saved["principal_kind"]
+                if event["kind"] == "Budget"
+                else saved["actor_kind"]
+                if event["kind"] == "Review"
+                else "unknown"
+            )
+            if event["kind"] == "Budget":
+                with engine.connect() as connection:
+                    project_id = connection.execute(
+                        sa.select(db.project.c.id).where(db.project.c.project_key == project_key)
+                    ).scalar_one()
+                assert event["record_id"] == str(project_id)
+                assert event["revision"] == saved["policy_revision"]
+                assert event["sentence"] == "Recorded a budget event."
             account = directory.get(event["actor_id"])
             compatible = account is not None and (
                 event["actor_kind"] == "unknown"
                 or (event["actor_kind"] == "human" and account["kind"] == "human")
-                or (event["actor_kind"] in ("model", "system") and account["kind"] == "service")
+                or (
+                    event["actor_kind"] in ("model", "system", "service")
+                    and account["kind"] == "service"
+                )
             )
             assert event["actor_name"] == (account["name"] if compatible else None)
             assert set(event) == {
@@ -126,7 +185,7 @@ def exercise_audit_reads(engine, project_key):
                     {"actor_kind": actor_kind},
                     [event for event in events if event["actor_kind"] == actor_kind],
                 )
-                for actor_kind in ("human", "model", "system", "unknown")
+                for actor_kind in ("human", "model", "system", "service", "unknown")
             ),
             (
                 {"search": events[0]["actor_id"].upper(), "actor_kind": events[0]["actor_kind"]},
@@ -172,8 +231,20 @@ def exercise_audit_reads(engine, project_key):
         visible = client.get(path).json()
         assert visible["total"] == len(before[0])
         assert all(event["kind"] == "Review" for event in visible["events"])
-        assert client.get(path, params={"kind": "Promotion"}).json()["total"] == 0
-        assert client.get(path + "/export", params={"kind": "Promotion"}).text == ""
+        for hidden_kind in ("Promotion", "Budget"):
+            assert client.get(path, params={"kind": hidden_kind}).json()["total"] == 0
+            assert client.get(path + "/export", params={"kind": hidden_kind}).text == ""
+            hidden = next(event for event in events if event["kind"] == hidden_kind)
+            assert (
+                client.get(path, params={"after": f"{hidden_kind}/{hidden['id']}"}).status_code
+                == 409
+            )
+            for search in (hidden["id"], hidden["actor_id"], hidden["actor_name"]):
+                if search is None:
+                    continue
+                params = {"kind": hidden_kind, "search": search}
+                assert client.get(path, params=params).json()["total"] == 0
+                assert client.get(path + "/export", params=params).text == ""
         promotion = next(event for event in events if event["kind"] == "Promotion")
         denied_cursor = client.get(path, params={"after": f"Promotion/{promotion['id']}"})
         assert denied_cursor.status_code == 409
@@ -199,6 +270,7 @@ def exercise_audit_reads(engine, project_key):
             )
             assert hidden_cursor.status_code == 409
             assert hidden_cursor.json() == {"detail": "audit_state_rejected"}
+    assert ledger.snapshot(project_key) == budget_before
     assert records() == before
     assert snapshot(engine, project_key) == registry
     assert qualification_journals(engine) == journals

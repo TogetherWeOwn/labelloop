@@ -13,6 +13,7 @@ from test_auth import password_hash as password_hash
 from test_auth import store as store
 
 from labelloop_api import audit_reads
+from labelloop_api import budget_schema as budgets
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
 from labelloop_api.auth_schema import principal
@@ -63,6 +64,35 @@ def promotion(connection, number, *, project=PROJECT, at=NOW):
     return identity
 
 
+def budget(connection, number, *, project="audit-fixture", actor="budget-actor", kind="human"):
+    if (
+        connection.execute(
+            sa.select(budgets.head.c.project_id).where(budgets.head.c.project_id == project)
+        ).first()
+        is None
+    ):
+        connection.execute(
+            sa.insert(budgets.head).values(project_id=project, revision=1, policy={})
+        )
+    identity = str(UUID(int=number))
+    connection.execute(
+        sa.insert(budgets.event).values(
+            id=identity,
+            project_id=project,
+            operation_id="private-operation",
+            principal_id=actor,
+            principal_kind=kind,
+            principal_role="private-role",
+            principal_version="private-version",
+            policy_revision=1,
+            action="private-action",
+            record={"private": "must-not-leak"},
+            occurred_at=NOW,
+        )
+    )
+    return identity
+
+
 @pytest.fixture
 def http(store, monkeypatch):
     with store.engine.begin() as connection:
@@ -87,6 +117,8 @@ def http(store, monkeypatch):
                     column.type = sa.Uuid(native_uuid=False)
         # SQLite supplies only the source identity columns used by the read. The
         # production PostgreSQL smoke retains the complete canonical schema.
+        budgets.head.to_metadata(metadata)
+        budgets.event.to_metadata(metadata)
         metadata.create_all(connection)
         for identity, key in ((PROJECT, "audit-fixture"), (FOREIGN, "foreign")):
             connection.execute(
@@ -490,6 +522,128 @@ def test_export_refuses_overflow_instead_of_silent_truncation(http, store):
     assert response.status_code == 409
     assert response.json() == {"detail": "audit_export_requires_narrower_range"}
     assert "content-disposition" not in response.headers
+
+
+@pytest.mark.parametrize("account,recorded_kind", [("admin", "human"), ("worker-llm", "service")])
+def test_budget_metadata_uses_recorded_principal_kind_and_redacts_payloads(
+    http, store, account, recorded_kind
+):
+    with store.engine.begin() as connection:
+        actor = connection.execute(
+            sa.select(principal.c.id).where(principal.c.name == account)
+        ).scalar_one()
+        identity = budget(connection, 60, actor=actor, kind=recorded_kind)
+        budget(connection, 70, project="foreign", actor=actor, kind=recorded_kind)
+        before = connection.execute(sa.select(budgets.event)).all()
+    login(http, "admin")
+    params = {"kind": "Budget", "actor_kind": recorded_kind, "search": account.upper()}
+    response = http.get(PATH, params=params)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    page = response.json()
+    assert page["total"] == 1 and page["next_after"] is None
+    assert page["events"] == [
+        {
+            "id": identity,
+            "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "kind": "Budget",
+            "actor_id": actor,
+            "actor_kind": recorded_kind,
+            "actor_name": account,
+            "record_id": str(PROJECT),
+            "revision": 1,
+            "sentence": "Recorded a budget event.",
+        }
+    ]
+    for search in (identity, UUID(identity).hex, str(PROJECT)):
+        assert (
+            http.get(PATH, params={"kind": "Budget", "search": search}).json()["events"]
+            == page["events"]
+        )
+    exported = http.get(PATH + "/export", params=params)
+    assert exported.status_code == 200
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"]
+    for private in ("must-not-leak", "private-operation", "private-action", "private-role"):
+        assert private not in response.text and private not in exported.text
+        assert http.get(PATH, params={"search": private}).json()["total"] == 0
+    with store.engine.connect() as connection:
+        assert connection.execute(sa.select(budgets.event)).all() == before
+
+
+@pytest.mark.parametrize("suffix", ["", "/export"])
+def test_reviewer_cannot_enumerate_budget_events_or_principal_names(http, store, suffix):
+    with store.engine.begin() as connection:
+        actor = connection.execute(
+            sa.select(principal.c.id).where(principal.c.name == "admin")
+        ).scalar_one()
+        identity = budget(connection, 60, actor=actor)
+    login(http)
+    for params in ({"kind": "Budget"}, {"search": "admin"}, {"search": identity}):
+        response = http.get(PATH + suffix, params=params)
+        assert response.status_code == 200
+        if suffix:
+            assert response.text == ""
+        else:
+            assert response.json() == {
+                "project_id": "audit-fixture",
+                "events": [],
+                "total": 0,
+                "next_after": None,
+            }
+    assert http.get(PATH, params={"after": f"Budget/{identity}"}).status_code == 409
+    assert http.get(PATH).json()["total"] == 2
+
+
+def test_mixed_storage_uuid_ordering_and_kind_disambiguated_cursors(http, store):
+    with store.engine.begin() as connection:
+        # An equal UUID in different journals must not collapse or skip either row.
+        budget(connection, 20)
+        budget(connection, 0xE0)
+    login(http, "admin")
+    events = []
+    after = None
+    for _ in range(6):
+        response = http.get(PATH, params={"limit": 1} | ({"after": after} if after else {}))
+        assert response.status_code == 200
+        page = response.json()
+        assert page["total"] == 5
+        events.extend(page["events"])
+        after = page["next_after"]
+        if after is None:
+            break
+    else:
+        raise AssertionError("mixed audit cursor did not terminate")
+    assert [(event["kind"], event["id"]) for event in events] == [
+        (kind, str(UUID(int=number)))
+        for kind, number in (
+            ("Review", 20),
+            ("Review", 10),
+            ("Promotion", 30),
+            ("Budget", 0xE0),
+            ("Budget", 20),
+        )
+    ]
+    exported = http.get(PATH + "/export")
+    assert [json.loads(line) for line in exported.text.splitlines()] == events
+    assert (
+        http.get(PATH, params={"kind": "Budget", "after": f"Review/{UUID(int=20)}"}).status_code
+        == 409
+    )
+    assert http.get(PATH, params={"after": f"Budget/{UUID(int=999)}"}).status_code == 409
+
+
+@pytest.mark.parametrize("field,value", [("id", "must-not-leak"), ("principal_kind", "invalid")])
+def test_malformed_budget_metadata_fails_closed(http, store, field, value):
+    with store.engine.begin() as connection:
+        identity = budget(connection, 60)
+        connection.execute(
+            sa.update(budgets.event).where(budgets.event.c.id == identity).values({field: value})
+        )
+    login(http, "admin")
+    for suffix in ("", "/export"):
+        response = http.get(PATH + suffix)
+        assert response.status_code == 409
+        assert response.json() == {"detail": "audit_state_rejected"}
 
 
 def test_openapi_has_typed_metadata_only_contract():
