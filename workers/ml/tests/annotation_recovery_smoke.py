@@ -1,4 +1,4 @@
-"""Committed fixture recovery and admin metadata; no annotation HTTP write grant."""
+"""Committed fixture-only HTTP annotation recovery; no real-policy write grant."""
 
 import pytest
 import sqlalchemy as sa
@@ -242,6 +242,87 @@ def exercise_annotation_policy_recovery(engine, release, final, context, actor, 
     return len(changes)
 
 
+def append_http_fixture_review(engine, project_id, item):
+    from dataclasses import asdict
+    from uuid import uuid4
+
+    from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
+
+    from labelloop_api import annotation_reads, automatic_review_service
+
+    arguments = item["arguments"]
+    path = f"/projects/{project_id}/assets/{item['asset_id']}/fixture-automatic-reviews"
+    payload = dict(
+        recipe_key=arguments["recipe_key"],
+        expected_revision=arguments["expected_revision"],
+        expected_registry_revision=arguments["expected_registry_revision"],
+        scope=[asdict(cell) for cell in arguments["scope"]],
+        proposal_run_keys=list(arguments["proposal_run_keys"]),
+    )
+    before = annotation_rows(engine)
+    heads = snapshot(engine, arguments["project_key"])
+    journals = qualification_journals(engine)
+
+    def unchanged():
+        assert annotation_rows(engine) == before
+        assert snapshot(engine, arguments["project_key"]) == heads
+        assert qualification_journals(engine) == journals
+
+    with authenticated_client(engine) as (client, identities, workers):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(annotation_reads, "annotation_engine", lambda: engine)
+            assert client.post(path, json=payload).status_code == 401
+            for token in workers.values():
+                response = client.post(
+                    path, json=payload, headers={"authorization": "Bearer " + token}
+                )
+                assert response.status_code == 403
+            headers = login(client, identities["reviewer"][1])
+            assert client.post(path, json=payload, headers=headers).status_code == 403
+            headers = login(client, identities["admin"][1])
+            assert client.post(path, json=payload).status_code == 403
+            for extra in ({"objects": []}, {"training_eligible": True}, {"actor_id": "forged"}):
+                assert client.post(path, json=payload | extra, headers=headers).status_code == 422
+            foreign = f"/projects/{uuid4()}/assets/{item['asset_id']}/fixture-automatic-reviews"
+            assert client.post(foreign, json=payload, headers=headers).status_code == 404
+            for extra, status in (
+                ({"expected_registry_revision": payload["expected_registry_revision"] - 1}, 409),
+                ({"proposal_run_keys": [payload["proposal_run_keys"][0], "zz-missing-http"]}, 404),
+            ):
+                response = client.post(path, json=payload | extra, headers=headers)
+                assert response.status_code == status
+                assert response.headers["cache-control"] == "no-store"
+                unchanged()
+            unchanged()
+            writer = automatic_review_service.append_current_review
+            written = []
+
+            def fail_after_append(connection, **values):
+                written.append(writer(connection, **values))
+                raise sa.exc.SQLAlchemyError("private post-append HTTP failure")
+
+            with pytest.MonkeyPatch.context() as failure:
+                failure.setattr(
+                    automatic_review_service, "append_current_review", fail_after_append
+                )
+                response = client.post(path, json=payload, headers=headers)
+            assert written == [2]
+            assert response.status_code == 503
+            assert response.json() == {"detail": "annotations_unavailable"}
+            unchanged()
+            response = client.post(path, json=payload, headers=headers)
+            assert response.status_code == 201
+            assert response.json() == {"revision": 2, "fixture_only": True}
+            assert response.headers["cache-control"] == "no-store"
+            after = annotation_rows(engine)
+            response = client.post(path, json=payload, headers=headers)
+            assert response.status_code == 409
+            assert response.json() == {"detail": "fixture_automatic_review_rejected"}
+            assert annotation_rows(engine) == after
+            assert snapshot(engine, arguments["project_key"]) == heads
+            return identities["admin"][0]
+
+
 def exercise_annotation_recovery(engine, release, final, context, canary, actor, revision):
     from qualification_context_smoke import _proposal_origin_fixture
 
@@ -348,15 +429,14 @@ def exercise_annotation_recovery(engine, release, final, context, canary, actor,
         assert injected == [True]
         assert annotation_rows(engine) == before
 
-        with engine.begin() as connection:
-            assert append_current_review(connection, **arguments) == 2
+        item["http_actor_id"] = append_http_fixture_review(engine, project_id, item)
         after = annotation_rows(engine)
         for table in before:
             assert len(after[table]) == len(before[table]) + 1
             assert all(row in after[table] for row in before[table])
             added = next(row for row in after[table] if row not in before[table])
             assert added["asset_id"] == item["asset_id"]
-            assert added["actor_id"] == actor
+            assert added["actor_id"] == item["http_actor_id"]
             if table == review_event.name:
                 assert added["actor_kind"] == "system"
                 assert added["expected_revision"] == 1
@@ -372,7 +452,7 @@ def exercise_annotation_recovery(engine, release, final, context, canary, actor,
                 assert added["approval_state"] == "auto_accepted"
                 assert added["review_tier"] == "machine_verified_no_human_review"
                 assert added["scope_completeness"] == "exhaustive_for_scope"
-                assert added["training_eligible"] is True
+                assert added["training_eligible"] is False
                 assert added["gold_eligible"] is False
         with engine.begin() as connection:
             item["original"] = load_automatic_acceptance(

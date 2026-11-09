@@ -6,7 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed annotation policy changes and historical reads — pending Actions
+## Admin fixture-only annotation HTTP — pending Actions
+
+`POST /projects/{project_id}/assets/{asset_id}/fixture-automatic-reviews` uses the
+existing human-admin session and same-origin CSRF boundary. It reads the exact
+canonical project/asset pair and current object set; the request cannot provide
+geometry, actor, approval tier, completeness, eligibility or qualification. The
+existing service derives current champion evidence and requires explicit fixture
+policy. The route fixes machine-only approval and leaves training/gold eligibility
+false. Existing completeness, expected-revision, policy/final/group/drift/veto and
+proposal-origin checks still run in the outer request transaction. No real-policy
+machine execution, source/condition truth or complete proposal influence is inferred.
+
+New adapter controls and both-recipe PostgreSQL controls exercise denied roles,
+CSRF, foreign scope, stale registry/annotation revisions, a missing later proposal,
+post-append outer rollback and repeated-request no-ops. Positive and negative
+annotations now commit through real HTTP, retain the session actor as a system
+fixture decision, and recover original policy/proposal/teacher history after client
+close and later champion rollback. New assertions await exact-head Actions; no
+local tests ran. No migration, dependency, provider call or new policy engine.
+REA: reuse the canonical snapshot reader, session boundary and atomic annotation
+service rather than accepting model-supplied geometry or qualification authority.
+
+## Committed annotation policy changes and historical reads — verified baseline
+
+Exact `a246b6c4ec9bcd14cce90b5aaf0cb8f453116267`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42552792668),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42552792668/job/128951882059),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42552792668/job/128951882097),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42552792411) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42552792462)
+succeeded, including queue/migration cycles/all four parent upgrades,
+web-build/dev-stack/lint/types/import-contract. This verifies the following policy
+recovery controls, superseding their earlier pending labels, not the new HTTP
+fixture write boundary or complete M5 acceptance. Totals not extracted.
 
 Both-recipe disposable PostgreSQL controls change the current reviewer prompt,
 condition scope and targets to null through separate committed policy appends.
@@ -21,8 +54,8 @@ During each changed configuration and after restoration, real authenticated admi
 HTTP must still recover the exact original acceptance metadata. Historical reads
 must not substitute the changed policy, grant acceptance or mutate evidence. The
 existing champion rollback/recovery controls follow these new cases. Assertions
-are unverified until exact-head Actions; no local tests ran. No production code,
-route, gate, migration, dependency or original execution producer is changed.
+passed at the exact baseline above; no local tests ran. That policy-only slice
+changed no production code, route, gate, migration, dependency or original execution producer.
 REA: reuse immutable original events, the existing current-policy guard and real
 session read boundary rather than another policy or provenance engine.
 

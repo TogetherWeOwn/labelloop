@@ -30,7 +30,8 @@ def append_current_review(
     Callers own authentication, original reviewer execution, source/condition truth
     and complete proposal influence. None may be inferred from a model response.
     Until those producers are connected, this port permits explicit fixture policy
-    only; it is not mounted as a route. It accepts no report, context, targets,
+    only; the admin fixture route consumes it without granting real execution. It
+    accepts no report, context, targets,
     champion, human-review fields or gold eligibility. The existing writer reloads
     current policy/final/groups/vetoes/drift before appending anything. Retain the
     outer transaction through commit; no provider I/O belongs inside it.
