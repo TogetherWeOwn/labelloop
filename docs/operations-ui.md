@@ -55,6 +55,36 @@ keyboard focus. Page errors retain those rows and offer an explicit retry of the
 same cursor, never an automatic retry. Initial-query errors still use the full error
 boundary.
 
+## Authenticated audit metadata — integration pending
+
+`GET /projects/{project_key}/audit-log` reads recorded review and promotion metadata
+only. Human admins can read both kinds; reviewers can read reviews only. The server
+selects permitted sources before filters, counts, paging and export; service tokens
+cannot use either read. It never returns raw decisions, reasons, corrections,
+promotion/qualification payloads or principal names. Sentences are fixed code-owned
+labels. Recorded review actor kind is retained; historical promotion actor kind is
+`unknown`, not inferred as human. Review revision means the event's expected
+revision; promotion revision means its registry revision.
+
+The typed `AuditMetadataPage` includes a total from the same SQL statement snapshot
+as its page. Pages contain at most 100 events ordered by UTC time, kind and UUID,
+newest first. `after` is a visible event position (`kind/UUID`), not authorization:
+a foreign, hidden or filtered-out event rejects without disclosing its metadata.
+Each page is a fresh read, not a frozen cross-page history. Refresh from page one
+for newly appended events. Optional `kind`, `since` and inclusive `through` filters
+apply identically to `/audit-log/export`. Dates require explicit timezones and are
+normalized to UTC; inverted ranges reject. JSON-lines exports are fully buffered
+and capped at 1,000 events; overflow rejects with a narrower-range error, never a
+silently truncated file or a partially streamed failure.
+
+This port is **not yet mounted in AuditLog** and does not supply connection/budget
+history, refused attempts, principal display-name resolution, search, record links
+or the complete accepted UI projection. New real-session adapter controls and
+both-recipe disposable PostgreSQL committed review/promotion pagination/export,
+actor-recovery, reviewer-restriction and non-mutation controls await exact-head
+Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
+immutable canonical review and registry event records, not another audit journal.
+
 ## Authenticated ledger read port — integration pending
 
 `GET /projects/{project_key}/costs?limit=50&after=<operation_id>` is an admin-session
@@ -76,9 +106,10 @@ Consumers must refresh from page one to recover the current complete collection.
 
 This read port is **not yet mounted in CostsView**. It does not supply refused-attempt
 history, scoped totals, operation display labels/links, policy-write/resume commands,
-or a complete `CostsRecord`. No paid operation is dispatched. New session, bounded
-paging, redaction, rollback and disposable PostgreSQL recovery controls await
-exact-head Actions; no local tests ran. REA: reuse the durable ledger codec and core
+or a complete `CostsRecord`. No paid operation is dispatched. Session, bounded
+paging, redaction, rollback and disposable PostgreSQL recovery controls passed
+[exact-head Actions at a90a230](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534);
+no local tests ran. REA: reuse the durable ledger codec and core
 exposure property, not another budget engine.
 
 ## Not delivered: complete authenticated integration

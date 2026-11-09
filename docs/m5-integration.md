@@ -6,7 +6,39 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Cost-read SQLite fixture defaults repaired — pending Actions
+## Authenticated audit metadata and bounded export — pending Actions
+
+The new read-only `/projects/{project_key}/audit-log` port projects persisted
+review/promotion metadata, never raw decisions/reasons/corrections or promotion
+payloads. Human-admin/reviewer authorization selects permitted sources before
+filters, counts, pages and exports; reviewers cannot see promotion counts or
+resolve promotion cursors. Pages are bounded, newest-first and total/page use one
+statement snapshot. Exports share kind/inclusive UTC date filters and reject
+more than 1,000 events rather than silently truncate. Historical promotion actor
+kind remains unknown; no human provenance is invented. This is not the complete
+AuditLog projection, connection/budget history, search or UI mounting.
+
+New real-session adapter controls and both-recipe disposable PostgreSQL controls
+recover committed review/promotion identities and actors through HTTP, enumerate
+stable keyset pages and matching exports, reject hidden cursors and preserve
+registry/qualification/review history after client close. These assertions remain
+unverified until exact-head Actions. No new store, schema, migration, dependency,
+provider call or spend grant. REA: reuse canonical review and registry events.
+
+## Cost read and corrected fixture — verified baseline
+
+Exact `a90a230fd54811313df5b6bb44d994f5f8930775`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534/job/128983902421),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534/job/128983902454),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179154) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179117)
+succeeded. Queue/migration cycles/all four parents, web-build/dev-stack and
+lint/types/import-contract passed. This verifies the existing cost-read and
+SQLite-default correction controls, superseding their historical pending reports
+below. Totals not extracted; this is not new audit-port or milestone acceptance.
+
+## Cost-read SQLite fixture defaults repaired — historical pending report
 
 Exact `d192c4209209cf09d75dd8de8d99e342572d05c6`
 [CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42561484417).

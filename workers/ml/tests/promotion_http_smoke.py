@@ -1035,7 +1035,11 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     assert qualification_journals(engine) == journals
     # Historical annotation policy/teacher evidence survives a later champion change.
     assert_annotation_recovery(engine, candidate, report, persisted, recovery)
+    from audit_read_smoke import exercise_audit_reads
+
+    audit_read_recovered = exercise_audit_reads(engine, release.project_id)
     return {
+        "committed_audit_http_pages_and_export_recovered": audit_read_recovered,
         "scope": "fixture-only copied metrics, not independent measurements or domain quality",
         "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
         "committed_http_adapted_and_quarantined_final_veto_cases": final_test_vetoes,
