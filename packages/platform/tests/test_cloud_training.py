@@ -1,0 +1,977 @@
+"""Offline normalized-port fixtures; no SDK, socket, key or paid training."""
+
+import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import asdict, replace
+from pathlib import Path
+from threading import Lock
+from types import SimpleNamespace
+
+import pytest
+
+from labelloop_core.budget import BudgetGate, BudgetPolicy, BudgetRefused
+from labelloop_core.training import InferencePolicy, TrainingBackend, TrainingRequest
+from labelloop_platform.cloud_training import (
+    CloudPlan,
+    CloudRun,
+    CloudTrainingRefused,
+    PlatformTrainingBackend,
+)
+from labelloop_platform.training_ports import (
+    Charge,
+    ConnectionGrant,
+    ModelSnapshot,
+    StartReceipt,
+    TransportError,
+)
+
+FIXTURE = json.loads((Path(__file__).parent / "fixtures/cloud_training.json").read_text())
+
+
+def plan(side=320, nms="external"):
+    request = TrainingRequest(
+        "fixture-run",
+        "fixture-project-id",
+        f"full-letterbox-{side}-v1",
+        "release-7",
+        "a" * 64,
+        "b" * 64,
+        "split-1",
+        "c" * 64,
+        InferencePolicy(side, nms=nms),
+    )
+    return CloudPlan(
+        request,
+        "workspace-1",
+        "fixture-owner",
+        "fixture-project",
+        "release-7-full",
+        "fixture-dataset",
+        "ul://fixture-owner/base-models/approved-yolo26n",
+        "base-model-id",
+        "rtx-4090",
+        "iteration-1",
+        "2026-11",
+        "fixture-prices-v1",
+        690_000,
+        900,
+        "d" * 64,
+    )
+
+
+class MemoryRuns:
+    """Test-only durable-store stand-in, retained across backend instances."""
+
+    def __init__(self):
+        self.value = None
+        self.history = []
+        self.lock = Lock()
+
+    @contextmanager
+    def locked(self, project_id, operation_id):
+        with self.lock:
+            yield self
+
+    def load(self):
+        return deepcopy(self.value)
+
+    def save(self, run):
+        self.value = deepcopy(run)
+        self.history.append(deepcopy(run))
+
+
+class Ledger:
+    """Exercise the delivered pure ledger, not a replacement accounting model."""
+
+    def __init__(self):
+        self.gate = BudgetGate(
+            "fixture-project-id", BudgetPolicy(10_000_000, 5_000_000, 2_000_000, True)
+        )
+        self.authorized = True
+        self.dispatches = 0
+        self.fail_pause_once = False
+        self.settlements = {}
+        self.observed_estimates = {}
+        self.pricing_uncertain = False
+        self.current_month = "2026-11"  # Trusted application-clock fixture, not provider input.
+
+    def authorize_start(self, request):
+        if request.month != self.current_month:
+            raise BudgetRefused("dispatch_month_mismatch")
+        return self.reserve_and_authorize(request)
+
+    def reserve_and_authorize(self, request):
+        if not self.authorized or self.gate.pause_reason:
+            raise BudgetRefused("paid_stages_paused")
+        self.gate._check_limits(request, extra=0)
+        self.gate = self.gate.reserve(request)
+        return self.gate.entry(request.operation_id)
+
+    def dispatch(self, request):
+        self.gate = self.gate.dispatch(request.operation_id)
+        self.dispatches += 1
+        return self.gate.entry(request.operation_id)
+
+    def read(self, request):
+        entry = self.gate.entry(request.operation_id)
+        assert entry.request == request
+        return entry
+
+    def release(self, request):
+        self.gate = self.gate.cancel(request.operation_id)
+        return self.read(request)
+
+    def pause_estimate_overrun(self, request, estimate_microusd):
+        self.observed_estimates[request.operation_id] = estimate_microusd
+        self.gate = replace(self.gate, pause_reason=self.gate.pause_reason or "estimate_overrun")
+
+    def pause_pricing_uncertain(self, request):
+        self.pricing_uncertain = True
+        # Reuse the delivered core's conservative pricing pause without fabricating
+        # a higher estimate or an actual; retain uncertainty as separate evidence.
+        self.gate = replace(self.gate, pause_reason=self.gate.pause_reason or "estimate_overrun")
+
+    def settled_charge(self, request):
+        return self.settlements.get(request.operation_id)
+
+    def reconcile(self, request, charge):
+        if charge:
+            self.gate = self.gate.settle(request.operation_id, charge.actual_microusd)
+            # These two writes emulate one atomic production ledger transaction.
+            self.settlements[request.operation_id] = charge
+        elif self.read(request).state != "settled":
+            self.gate = self.gate.unconfirmed(request.operation_id)
+        return self.read(request)
+
+    def pause_insufficient_credits(self, request):
+        if self.fail_pause_once:
+            self.fail_pause_once = False
+            raise RuntimeError("fixture ledger crash")
+        self.gate = self.gate.insufficient_credits(request.operation_id)
+
+
+class Secrets:
+    def __init__(self):
+        self.allowed = True
+        self.changed = False
+
+    def authorize(self, p):
+        if not self.allowed:
+            raise CloudTrainingRefused("credential_scope_denied")
+        return ConnectionGrant(
+            p.request.project_id,
+            "other-workspace" if self.changed else p.workspace_id,
+            p.request.run_id,
+            p.configuration_sha256,
+        )
+
+
+class Artifacts:
+    def __init__(self):
+        self.values = {}
+
+    def store(self, sha256, content):
+        assert hashlib.sha256(content).hexdigest() == sha256
+        self.values[sha256] = content
+        return "sha256/" + sha256
+
+
+class Transport:
+    def __init__(self, p, ledger, runs):
+        self.p = p
+        self.ledger = ledger
+        self.runs = runs
+        self.model = None
+        self.calls = []
+        self.available = True
+        self.create_error = None
+        self.start_error = None
+        self.create_lands = True
+        self.start_lands = True
+        self.drop_control = None
+        self.charge_value = None
+        self.charge_queries = []
+        self.content = [b"licence-clean ", b"fixture checkpoint bytes"]
+        self.start_bodies = []
+        self.after_create = None
+
+    def gpu_available(self, grant, gpu_type):
+        self.calls.append("availability")
+        assert gpu_type == "rtx-4090"
+        return self.available
+
+    def find_model(self, grant, p):
+        self.calls.append("find")
+        return self.model
+
+    def create_model(self, grant, p):
+        self.calls.append("create")
+        assert self.runs.value.phase == "create_intent"
+        assert self.ledger.gate.entry(p.request.run_id).state == "dispatched"
+        if self.create_lands:
+            self.model = ModelSnapshot(**FIXTURE["model"], model_slug=p.model_slug)
+        if self.after_create:
+            self.after_create()
+        if self.create_error:
+            raise self.create_error
+        return self.model
+
+    def start(self, grant, body):
+        self.calls.append("start")
+        assert self.runs.value.phase == "start_intent"
+        assert self.ledger.gate.entry(self.p.request.run_id).state == "dispatched"
+        self.start_bodies.append(deepcopy(body))
+        if self.start_lands:
+            self.progress("starting")
+        if self.start_error:
+            raise self.start_error
+        return StartReceipt(**FIXTURE["receipt"])
+
+    def progress(self, state):
+        arguments = self.p.train_arguments()
+        if self.drop_control:
+            arguments.pop(self.drop_control)
+        self.model = replace(
+            self.model, state=state, resolved_arguments=arguments, **FIXTURE["progress"]
+        )
+
+    def read_model(self, grant, model_id, p):
+        self.calls.append("read")
+        assert self.model.model_id == model_id
+        return self.model
+
+    def charge(self, grant, model_id, provider_run_id):
+        self.calls.append("charge")
+        self.charge_queries.append((model_id, provider_run_id))
+        return self.charge_value
+
+    def download_best(self, grant, model_id, maximum_bytes):
+        self.calls.append("download")
+        yield from self.content
+
+
+def rig(p=None):
+    p = p or plan()
+    ledger, runs, secrets, artifacts = Ledger(), MemoryRuns(), Secrets(), Artifacts()
+    transport = Transport(p, ledger, runs)
+    ports = dict(
+        transport=transport, budget=ledger, secrets=secrets, runs=runs, artifacts=artifacts
+    )
+    return SimpleNamespace(
+        plan=p,
+        ledger=ledger,
+        runs=runs,
+        secrets=secrets,
+        artifacts=artifacts,
+        transport=transport,
+        ports=ports,
+        backend=PlatformTrainingBackend(p, **ports),
+    )
+
+
+def advance(r):
+    return r.backend.train(r.plan.request)
+
+
+@pytest.mark.parametrize("field", ["price_per_hour_microusd", "estimated_cost_microusd"])
+def test_higher_provider_estimate_pauses_further_paid_work_without_inventing_actual(field):
+    r = rig()
+    original_start = r.transport.start
+
+    def higher_receipt(grant, body):
+        return replace(original_start(grant, body), **{field: 1_000_000})
+
+    r.transport.start = higher_receipt
+    result = advance(r)
+    assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual is None
+    assert result.receipt is not None
+    with pytest.raises(BudgetRefused):
+        r.ledger.reserve_and_authorize(replace(r.plan.spend_request(), operation_id="other"))
+    assert advance(r).model_id == result.model_id
+    assert r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("failure", ["response_lost", "receipt_save"])
+def test_lost_start_pricing_pauses_other_paid_work_without_repeating_start(failure):
+    r = rig()
+    original_start = r.transport.start
+    original_save = r.runs.save
+
+    def lose_expensive_receipt(grant, body):
+        receipt = replace(original_start(grant, body), estimated_cost_microusd=1_000_000)
+        if failure == "response_lost":
+            raise TransportError()
+        return receipt
+
+    def fail_receipt_save(run):
+        if run.receipt is not None:
+            raise RuntimeError("fixture receipt save crash")
+        original_save(run)
+
+    r.transport.start = lose_expensive_receipt
+    if failure == "receipt_save":
+        r.runs.save = fail_receipt_save
+        with pytest.raises(RuntimeError, match="fixture receipt save crash"):
+            advance(r)
+        r.runs.save = original_save
+    else:
+        advance(r)
+    assert r.ledger.pricing_uncertain and r.ledger.gate.pause_reason == "estimate_overrun"
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    result = advance(r)
+    assert result.state == "accepted" and result.receipt is None
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual is None
+    with pytest.raises(BudgetRefused):
+        r.ledger.reserve_and_authorize(replace(r.plan.spend_request(), operation_id="other"))
+    assert r.transport.calls.count("start") == 1
+
+
+def test_second_gpu_refusal_remains_recoverable_without_another_create():
+    r = rig()
+    r.transport.after_create = lambda: setattr(r.transport, "available", False)
+    result = advance(r)
+    assert result.phase == "model_created" and result.state == "gpu_unavailable"
+    assert advance(r).phase == "model_created"
+    assert "start" not in r.transport.calls
+    r.transport.available = True
+    assert advance(r).state == "accepted"
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+def test_active_job_billing_recovers_during_model_outage():
+    r = rig()
+    advance(r)
+    r.transport.progress("running")
+    assert advance(r).state == "active"
+    r.transport.charge_queries.clear()
+    # Authoritative FINAL billing, despite stale cached running state/model outage.
+    r.transport.charge_value = replace(Charge(**FIXTURE["charge"]), actual_microusd=1_000_000)
+
+    def unavailable(grant, model_id, p):
+        raise TransportError(503)
+
+    r.transport.read_model = unavailable
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    for _ in range(2):
+        result = advance(r)
+        assert result.state == "active" and result.provider_state == "running"
+        assert result.error_code == "reconcile_unavailable"
+        assert result.charge == r.transport.charge_value
+        assert result.provider_run_id == "fixture-job"
+        assert r.ledger.gate.entry(r.plan.request.run_id).actual == 1_000_000
+        assert r.ledger.gate.monthly_exposure("2026-11") == 1_000_000
+        assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.transport.charge_queries == [("fixture-model", "fixture-job")]
+    assert result.checkpoint is None and "download" not in r.transport.calls
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("scenario", ["active", "restarted", "quarantined", "model_outage"])
+def test_nonfinal_billing_keeps_estimate_until_authoritative_final_total(scenario):
+    r = rig()
+    billing = SimpleNamespace(state="interim", total_microusd=10_000)
+    original_charge = r.transport.charge
+
+    def normalized_charge(grant, model_id, provider_run_id):
+        original_charge(grant, model_id, provider_run_id)
+        # Synthetic billing evidence, not a claim about any real provider schema.
+        if billing.state != "final":
+            return None
+        return replace(Charge(**FIXTURE["charge"]), actual_microusd=billing.total_microusd)
+
+    r.transport.charge = normalized_charge
+    advance(r)
+    r.transport.progress("running")
+    assert advance(r).state == "active"
+    if scenario != "active":
+        r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    if scenario == "quarantined":
+        r.transport.model = replace(r.transport.model, provider_run_id="replacement-job")
+    elif scenario == "model_outage":
+
+        def unavailable(grant, model_id, p):
+            raise TransportError(503)
+
+        r.transport.read_model = unavailable
+    r.transport.charge_queries.clear()
+    for state in ("interim", "partial", "estimated", "unknown"):
+        billing.state = state
+        result = advance(r)
+        assert result.state == ("identity_mismatch" if scenario == "quarantined" else "active")
+        assert result.provider_run_id == "fixture-job" and result.charge is None
+        entry = r.ledger.read(r.plan.spend_request())
+        assert entry.state == "unconfirmed" and entry.actual is None
+        assert entry.exposure == r.ledger.gate.monthly_exposure("2026-11") == 172_500
+        assert r.ledger.settled_charge(r.plan.spend_request()) is None
+        if scenario == "model_outage":
+            assert result.error_code == "reconcile_unavailable"
+    assert len(r.transport.charge_queries) == 4
+
+    billing.state, billing.total_microusd = "final", 120_000
+    final = advance(r)
+    assert final.charge == Charge(**FIXTURE["charge"])
+    assert final.provider_run_id == "fixture-job" and final.provider_state == "running"
+    assert final.state == ("identity_mismatch" if scenario == "quarantined" else "active")
+    assert r.ledger.settled_charge(r.plan.spend_request()) == final.charge
+    entry = r.ledger.read(r.plan.spend_request())
+    assert entry.state == "settled" and entry.actual == entry.exposure == 120_000
+    assert r.ledger.gate.monthly_exposure("2026-11") == 120_000
+    settled_gate = r.ledger.gate
+    # Late partial data cannot replace the immutable final settlement, even on restart.
+    billing.state, billing.total_microusd = "interim", 10_000
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    assert advance(r).charge == final.charge
+    assert r.ledger.gate is settled_gate and len(r.ledger.settlements) == 1
+    assert len(r.transport.charge_queries) == 5
+    assert set(r.transport.charge_queries) == {("fixture-model", "fixture-job")}
+    assert final.checkpoint is None and "download" not in r.transport.calls
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("quarantined", [False, True])
+def test_one_charge_query_per_advance_with_late_original_job_billing(quarantined):
+    r = rig()
+    advance(r)
+    r.transport.progress("completed")
+    assert advance(r).state == "completed"
+    if quarantined:
+        r.transport.model = replace(r.transport.model, provider_run_id="replacement-job")
+    r.transport.charge_queries.clear()
+    for expected_count in (1, 2):
+        result = advance(r)
+        assert result.state == ("identity_mismatch" if quarantined else "completed")
+        assert result.charge is None
+        assert r.ledger.gate.monthly_exposure("2026-11") == 172_500
+        assert len(r.transport.charge_queries) == expected_count
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    assert advance(r).charge == r.transport.charge_value
+    assert len(r.transport.charge_queries) == 3
+    assert advance(r).charge == r.transport.charge_value
+    assert len(r.transport.charge_queries) == 3
+    assert set(r.transport.charge_queries) == {("fixture-model", "fixture-job")}
+    assert r.transport.calls.count("start") == 1
+
+
+def test_original_job_billing_survives_remote_restart_and_late_charge():
+    r = rig()
+    advance(r)
+    advance(r)
+    r.transport.model = replace(r.transport.model, provider_run_id="replacement-job")
+    assert advance(r).state == "identity_mismatch"
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    result = advance(r)
+    assert result.state == "identity_mismatch" and result.provider_run_id == "fixture-job"
+    assert result.charge == Charge(**FIXTURE["charge"])
+    assert set(r.transport.charge_queries) == {("fixture-model", "fixture-job")}
+    assert result.checkpoint is None and "download" not in r.transport.calls
+    assert r.transport.calls.count("start") == 1
+
+
+def test_project_scoped_slug_separates_same_run_id_in_shared_provider_project():
+    first = rig()
+    second_plan = replace(
+        first.plan, request=replace(first.plan.request, project_id="second-project")
+    )
+    second = rig(second_plan)
+    second.ledger.gate = replace(second.ledger.gate, project_id="second-project")
+    resources = {}
+    for r in (first, second):
+        original_create = r.transport.create_model
+
+        def create(grant, p, original=original_create):
+            model = original(grant, p)
+            resources[p.model_slug] = model
+            raise TransportError()
+
+        r.transport.create_model = create
+        r.transport.find_model = lambda grant, p: resources.get(p.model_slug)
+        assert advance(r).state == "uncertain_create"
+    assert first.plan.model_slug != second.plan.model_slug
+    for r in (first, second):
+        assert advance(r).state == "accepted"
+        assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("recovered_create", [False, True])
+def test_month_rollover_refuses_first_start_and_requires_new_operation(recovered_create):
+    r = rig()
+    if recovered_create:
+        r.transport.create_error = TransportError()
+        assert advance(r).state == "uncertain_create"
+    else:
+        r.transport.after_create = lambda: setattr(r.ledger, "current_month", "2026-12")
+    r.ledger.current_month = "2026-12"
+    with pytest.raises(BudgetRefused, match="dispatch_month_mismatch"):
+        advance(r)
+    assert "start" not in r.transport.calls
+    assert r.runs.value.spend.month == "2026-11"
+    assert r.runs.value.phase == "model_created"
+
+
+def test_historical_uncertain_start_reconciles_in_original_month():
+    r = rig()
+    r.transport.start_error = TransportError()
+    advance(r)
+    r.ledger.current_month = "2026-12"
+    r.transport.progress("completed")
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    result = advance(r)
+    assert result.spend.month == "2026-11" and result.charge.actual_microusd == 120_000
+    assert r.ledger.gate.monthly_exposure("2026-12") == 0
+    assert r.transport.calls.count("start") == 1
+
+
+def test_successful_acceptance_clears_transient_preflight_error():
+    r = rig()
+    original_find = r.transport.find_model
+
+    def unavailable(grant, p):
+        raise TransportError(503)
+
+    r.transport.find_model = unavailable
+    assert advance(r).error_code == "preflight_unavailable"
+    r.transport.find_model = original_find
+    result = advance(r)
+    assert result.state == "accepted" and result.error_code is None
+
+
+def test_first_captured_dataset_must_match_synced_content_not_just_id():
+    r = rig()
+    advance(r)
+    r.transport.model = replace(r.transport.model, dataset_content_hash="e" * 64)
+    result = advance(r)
+    assert result.state == "args_mismatch"
+    assert "dataset_identity" in result.mismatched_keys
+
+
+@pytest.mark.parametrize("model_unavailable", [False, True])
+def test_settlement_survives_run_save_failure_and_unavailable_provider_charge(model_unavailable):
+    r = rig()
+    advance(r)
+    r.transport.progress("completed")
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    original_save = r.runs.save
+
+    def fail_after_settlement(run):
+        if r.ledger.gate.entry(run.spend.operation_id).state == "settled":
+            raise RuntimeError("fixture run save crash")
+        original_save(run)
+
+    r.runs.save = fail_after_settlement
+    with pytest.raises(RuntimeError, match="fixture run save crash"):
+        advance(r)
+    r.runs.save = original_save
+    r.transport.charge_value = None
+    if model_unavailable:
+
+        def unavailable(grant, model_id, p):
+            raise TransportError(503)
+
+        r.transport.read_model = unavailable
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    result = advance(r)
+    assert result.charge.actual_microusd == 120_000
+    assert (result.checkpoint is not None) == (not model_unavailable)
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual == 120_000
+    assert r.transport.calls.count("start") == 1
+
+
+def test_refused_dispatch_is_recoverable_without_uncertain_provider_mutation():
+    r = rig()
+    original_dispatch = r.ledger.dispatch
+
+    def refuse_dispatch(request):
+        raise BudgetRefused("approval_required")
+
+    r.ledger.dispatch = refuse_dispatch
+    with pytest.raises(BudgetRefused):
+        advance(r)
+    assert "create" not in r.transport.calls
+    r.ledger.dispatch = original_dispatch
+    assert advance(r).state == "accepted"
+    assert r.transport.calls.count("start") == r.transport.calls.count("create") == 1
+
+
+def test_crash_after_dispatch_commit_recovers_first_create_without_double_dispatch():
+    r = rig()
+    original_dispatch = r.ledger.dispatch
+
+    def commit_then_crash(request):
+        original_dispatch(request)
+        raise RuntimeError("fixture dispatch crash")
+
+    r.ledger.dispatch = commit_then_crash
+    with pytest.raises(RuntimeError, match="fixture dispatch crash"):
+        advance(r)
+    assert r.runs.value.phase == "dispatch_intent" and "create" not in r.transport.calls
+    r.ledger.dispatch = original_dispatch
+    assert advance(r).state == "accepted"
+    assert r.ledger.dispatches == 1
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+
+
+def test_higher_estimate_pause_recovers_from_ledger_failure_without_another_start():
+    r = rig()
+    original_start = r.transport.start
+    original_pause = r.ledger.pause_estimate_overrun
+
+    def higher_receipt(grant, body):
+        return replace(original_start(grant, body), estimated_cost_microusd=1_000_000)
+
+    def failed_pause(request, amount):
+        raise RuntimeError("fixture pause crash")
+
+    r.transport.start = higher_receipt
+    r.ledger.pause_estimate_overrun = failed_pause
+    with pytest.raises(RuntimeError, match="fixture pause crash"):
+        advance(r)
+    assert r.runs.value.receipt.estimated_cost_microusd == 1_000_000
+    r.ledger.pause_estimate_overrun = original_pause
+    advance(r)
+    assert r.ledger.gate.pause_reason == "estimate_overrun"
+    assert r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_definitive_preflight_refusal_releases_undispatched_reservation(existing):
+    r = rig()
+    if existing:
+        r.transport.model = ModelSnapshot(**FIXTURE["model"], model_slug=r.plan.model_slug)
+    else:
+        r.transport.available = False
+    result = advance(r)
+    assert result.state in {"gpu_unavailable", "identity_mismatch"}
+    assert r.ledger.gate.entry(r.plan.request.run_id).state == "cancelled"
+    assert r.ledger.gate.monthly_exposure("2026-11") == 0
+    assert "start" not in r.transport.calls and "create" not in r.transport.calls
+    assert advance(r) == result
+
+
+def test_503_uncertain_create_recovers_identity_read_only_without_start():
+    r = rig()
+    r.transport.create_error = TransportError(503)
+    assert advance(r).state == "unavailable"
+    result = advance(r)
+    assert result.model_id == "fixture-model"
+    assert result.state == "unavailable"
+    assert r.transport.calls.count("create") == 1 and "start" not in r.transport.calls
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("nms", ["external", "end2end"])
+def test_complete_recipe_contract_and_checkpoint_lineage(side, nms):
+    r = rig(plan(side, nms))
+    backend: TrainingBackend[CloudRun] = r.backend
+    accepted = backend.train(r.plan.request)
+    assert accepted.state == "accepted"
+    assert accepted.dataset_version is None  # The start response has no captured version.
+    assert accepted.receipt == StartReceipt(**FIXTURE["receipt"])
+    body = r.transport.start_bodies[0]
+    assert body["gpuType"] == "rtx-4090"
+    assert body["captureDatasetVersion"] is True
+    args = body["trainArgs"]
+    expected_baseline = {
+        "imgsz",
+        "rect",
+        "tile",
+        "nms",
+        "iou",
+        "conf",
+        "max_det",
+        "agnostic_nms",
+        "epochs",
+        "batch",
+        "seed",
+        "deterministic",
+        "multi_scale",
+        "mosaic",
+        "mixup",
+        "cutmix",
+        "close_mosaic",
+        "scale",
+        "translate",
+        "degrees",
+        "shear",
+        "perspective",
+        "fliplr",
+        "flipud",
+        "hsv_h",
+        "hsv_s",
+        "hsv_v",
+        "erasing",
+        "model",
+        "data",
+    }
+    assert set(args) == expected_baseline
+    assert args["imgsz"] == side and args["nms"] == (nms == "external")
+    assert args["data"] == "ul://fixture-owner/datasets/release-7-full"
+    assert args["model"] == r.plan.base_model_uri
+    assert args["tile"] is False and args["rect"] is False
+    for record in r.plan.stage_contracts().values():
+        assert all(record[k] == v for k, v in args.items() if k not in {"model", "data"})
+    assert r.plan.stage_contracts()["export"]["dynamic"] is False
+    r.transport.progress("running")
+    active = advance(r)
+    assert active.state == "active"
+    assert active.dataset_version == 7 and active.dataset_content_hash == "d" * 64
+    r.transport.progress("completed")
+    completed = advance(r)
+    content = b"".join(r.transport.content)
+    assert completed.state == "completed"
+    assert completed.checkpoint.sha256 == hashlib.sha256(content).hexdigest()
+    assert completed.checkpoint.selection == "provider_rect_validation"
+    assert completed.request.initialization_sha256 == "c" * 64
+    assert "initialization_hash_unverified_on_provider" in completed.limitations
+    assert r.artifacts.values[completed.checkpoint.sha256] == content
+    entry = r.ledger.gate.entry(r.plan.request.run_id)
+    assert entry.actual is None and entry.exposure == 172_500
+    # A new process reuses durable identity and never pays for another start.
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    assert advance(r).model_id == completed.model_id
+    assert r.transport.calls.count("start") == r.transport.calls.count("create") == 1
+    assert r.ledger.dispatches == 1
+
+
+@pytest.mark.parametrize("missing", ["transport", "budget", "secrets", "runs", "artifacts"])
+def test_missing_port_disables_all_io(missing):
+    r = rig()
+    r.ports[missing] = None
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    with pytest.raises(CloudTrainingRefused, match="ports_unavailable"):
+        advance(r)
+    assert r.transport.calls == [] and r.runs.value is None
+
+
+@pytest.mark.parametrize("denial", ["secret", "grant", "budget", "limits", "manual"])
+def test_authorization_denials_never_mutate(denial):
+    r = rig()
+    if denial == "secret":
+        r.secrets.allowed = False
+    elif denial == "grant":
+        r.secrets.changed = True
+    elif denial == "budget":
+        r.ledger.authorized = False
+    elif denial == "manual":
+        r.ledger.gate = replace(r.ledger.gate, policy=BudgetPolicy(999999, 999999, 999999))
+    else:
+        r.ledger.gate = replace(r.ledger.gate, policy=BudgetPolicy(1, 1, 1, True))
+    with pytest.raises((BudgetRefused, CloudTrainingRefused)):
+        advance(r)
+    assert "start" not in r.transport.calls and "create" not in r.transport.calls
+
+
+def test_current_authorization_rechecked_between_create_and_start():
+    r = rig()
+    r.transport.after_create = lambda: setattr(r.ledger, "authorized", False)
+    with pytest.raises(BudgetRefused):
+        advance(r)
+    assert r.runs.value.phase == "model_created" and "start" not in r.transport.calls
+    r.ledger.authorized = True
+    assert advance(r).state == "accepted"
+    assert r.transport.calls.count("create") == 1
+
+
+@pytest.mark.parametrize("stage", ["create", "start"])
+@pytest.mark.parametrize("status", [None, 409, 429])
+@pytest.mark.parametrize("lands", [False, True])
+def test_uncertain_mutation_reconciles_never_retries(stage, status, lands):
+    r = rig()
+    setattr(r.transport, stage + "_error", TransportError(status))
+    setattr(r.transport, stage + "_lands", lands)
+    first = advance(r)
+    assert first.state == "uncertain_" + stage
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports)
+    second = advance(r)
+    if lands:
+        assert second.state == "accepted"
+        assert second.model_id == "fixture-model"
+    else:
+        assert second.state == first.state
+    assert r.transport.calls.count(stage) == 1
+    assert len(r.ledger.gate.entries) == 1
+
+
+@pytest.mark.parametrize("stage", ["create", "start"])
+@pytest.mark.parametrize("status", [402, 503])
+def test_terminal_for_now_never_retries_and_402_pauses_paid_stages(stage, status):
+    r = rig()
+    setattr(r.transport, stage + "_error", TransportError(status))
+    setattr(r.transport, stage + "_lands", False)
+    result = advance(r)
+    assert result.state == ("insufficient_credits" if status == 402 else "unavailable")
+    for _ in range(3):
+        assert advance(r).state == result.state
+    assert r.transport.calls.count(stage) == 1
+    assert (r.ledger.gate.pause_reason == "insufficient_credits") == (status == 402)
+    assert r.ledger.gate.entry(r.plan.request.run_id).actual is None
+
+
+def test_402_pause_is_recovered_after_ledger_failure_without_provider_retry():
+    r = rig()
+    r.transport.start_error = TransportError(402)
+    r.transport.start_lands = False
+    r.ledger.fail_pause_once = True
+    with pytest.raises(RuntimeError, match="fixture ledger crash"):
+        advance(r)
+    assert r.runs.value.state == "insufficient_credits"
+    assert advance(r).state == "insufficient_credits"
+    assert r.ledger.gate.pause_reason == "insufficient_credits"
+    assert r.transport.calls.count("start") == 1
+
+
+@pytest.mark.parametrize("key", sorted(plan().train_arguments()))
+def test_every_missing_resolved_key_is_args_mismatch(key):
+    r = rig()
+    r.transport.drop_control = key
+    advance(r)
+    result = advance(r)
+    assert result.state == "args_mismatch" and key in result.mismatched_keys
+    r.transport.progress("completed")
+    assert advance(r).checkpoint is None
+    assert r.transport.calls.count("start") == 1
+
+
+def test_changed_arguments_never_persist_untrusted_secret_values(capsys):
+    r = rig()
+    advance(r)
+    marker = "fixture-sensitive-value-not-a-real-key"
+    r.transport.model = replace(
+        r.transport.model,
+        resolved_arguments={**r.plan.train_arguments(), "model": marker, "unknown": marker},
+    )
+    result = advance(r)
+    assert result.state == "args_mismatch" and "model" in result.mismatched_keys
+    assert marker not in repr(result) + json.dumps(asdict(result))
+    assert marker not in capsys.readouterr().out
+    r.transport.progress("completed")
+    assert advance(r).state == "args_mismatch"  # A later correction cannot erase evidence.
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"dataset_id": "other"},
+        {"dataset_version": None},
+        {"dataset_content_hash": None},
+        {"dataset_version": True},
+        {"dataset_content_hash": "invalid"},
+    ],
+)
+def test_missing_or_wrong_captured_dataset_blocks_candidate(changes):
+    r = rig()
+    advance(r)
+    r.transport.model = replace(r.transport.model, **changes)
+    assert advance(r).state == "args_mismatch"
+    assert "download" not in r.transport.calls
+
+
+def test_version_and_provider_job_cannot_change_under_existing_operation():
+    r = rig()
+    advance(r)
+    assert advance(r).dataset_version == 7
+    r.transport.model = replace(r.transport.model, dataset_version=8)
+    assert "dataset_identity" in advance(r).mismatched_keys
+    r.transport.model = replace(r.transport.model, provider_run_id="different-job")
+    assert advance(r).state == "identity_mismatch"
+    assert r.runs.value.provider_run_id == "fixture-job"
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled", "completed"])
+def test_terminal_provider_states_keep_lineage_and_attributable_actual(state):
+    r = rig()
+    advance(r)
+    r.transport.progress(state)
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    result = advance(r)
+    assert result.state == state and result.provider_run_id == "fixture-job"
+    assert result.model_id == "fixture-model" and result.dataset_version == 7
+    assert result.charge.actual_microusd == 120_000
+    assert r.ledger.gate.entry(r.plan.request.run_id).exposure == 120_000
+    assert (result.checkpoint is not None) == (state == "completed")
+    assert advance(r).charge == result.charge
+    assert r.transport.calls.count("start") == 1
+
+
+def test_unattributable_charge_keeps_estimate_until_confirmed():
+    r = rig()
+    advance(r)
+    r.transport.progress("cancelled")
+    r.transport.charge_value = replace(Charge(**FIXTURE["charge"]), provider_run_id="other-job")
+    assert advance(r).charge is None
+    assert r.ledger.gate.entry(r.plan.request.run_id).exposure == 172_500
+    r.transport.charge_value = Charge(**FIXTURE["charge"])
+    assert advance(r).charge.actual_microusd == 120_000
+    assert r.transport.calls.count("start") == 1
+
+
+def test_changed_plan_and_request_refused_for_existing_operation():
+    r = rig()
+    advance(r)
+    for changed in (
+        replace(r.plan, gpu_type="b300"),
+        replace(r.plan, dataset_slug="other"),
+        replace(r.plan, base_model_id="other"),
+        replace(r.plan, estimated_seconds=1800),
+    ):
+        backend = PlatformTrainingBackend(changed, **r.ports)
+        with pytest.raises(CloudTrainingRefused, match="operation_conflict"):
+            backend.train(changed.request)
+    with pytest.raises(CloudTrainingRefused, match="request_mismatch"):
+        r.backend.train(replace(r.plan.request, recipe_id="different"))
+    assert r.transport.calls.count("start") == 1
+
+
+def test_concurrent_duplicate_attempts_have_one_create_and_paid_start():
+    r = rig()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: advance(r), range(8)))
+    assert all(result.model_id == "fixture-model" for result in results)
+    assert r.transport.calls.count("create") == r.transport.calls.count("start") == 1
+    assert r.ledger.dispatches == 1
+
+
+def test_gpu_availability_and_minimum_reservation():
+    with pytest.raises(ValueError, match="fifteen minutes"):
+        replace(plan(), estimated_seconds=899)
+    r = rig()
+    r.transport.available = False
+    assert advance(r).state == "gpu_unavailable"
+    assert "create" not in r.transport.calls and "start" not in r.transport.calls
+
+
+@pytest.mark.parametrize("content", [[], [b""], [b"too many bytes"], ["not bytes"]])
+def test_empty_oversized_or_malformed_checkpoint_is_not_qualified(content):
+    r = rig()
+    r.backend = PlatformTrainingBackend(r.plan, **r.ports, maximum_checkpoint_bytes=4)
+    advance(r)
+    r.transport.progress("completed")
+    r.transport.content = content
+    result = advance(r)
+    assert result.checkpoint is None and result.error_code == "invalid_checkpoint"
+    assert r.artifacts.values == {}
+
+
+def test_warm_start_is_a_new_operation_with_explicit_parent_and_new_reservation():
+    r = rig()
+    advance(r)
+    r.transport.progress("cancelled")
+    advance(r)
+    child_plan = replace(
+        r.plan,
+        request=replace(r.plan.request, run_id="child-run", initialization_sha256="e" * 64),
+        parent_run_id=r.plan.request.run_id,
+    )
+    child = rig(child_plan)
+    child.ledger = r.ledger
+    child.ports["budget"] = r.ledger
+    child.transport.ledger = r.ledger
+    child.backend = PlatformTrainingBackend(child_plan, **child.ports)
+    assert advance(child).state == "accepted"
+    assert len(r.ledger.gate.entries) == 2
+    assert child_plan.model_slug != r.plan.model_slug
+    assert child_plan.parent_run_id == "fixture-run"
+    assert r.runs.value.provider_state == "cancelled"
