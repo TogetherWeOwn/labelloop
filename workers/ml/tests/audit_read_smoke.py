@@ -4,16 +4,167 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 import sqlalchemy as sa
 from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
+from sqlalchemy.exc import SQLAlchemyError
 
 from labelloop_api import budget_schema as budgets
 from labelloop_api import model_schema as models
 from labelloop_api import schema as db
 from labelloop_api.auth_schema import principal
 from labelloop_api.auth_store import Principal
-from labelloop_api.budget_store import BudgetStore
-from labelloop_core.budget import BudgetPolicy
+from labelloop_api.budget_store import BudgetStore, DispatchIntent
+from labelloop_api.review_budget import ReviewBatch, ReviewPriceTable, ReviewUsage
+from labelloop_core.budget import BudgetPolicy, BudgetRefused, SpendRequest
+
+
+def budget_records(engine, project_key):
+    with engine.connect() as connection:
+        return {
+            table.name: tuple(
+                dict(row)
+                for row in connection.execute(
+                    sa.select(table)
+                    .where(table.c.project_id == project_key)
+                    .order_by(*table.primary_key.columns)
+                ).mappings()
+            )
+            for table in (
+                budgets.head,
+                budgets.dry_run,
+                budgets.operation,
+                budgets.review_request,
+                budgets.event,
+            )
+        }
+
+
+def exercise_emitted_refusal(engine, project_key, ledger, admin, revision):
+    # Synthetic accounting only: no worker/provider adapter or network dispatch.
+    # The real store commits one child claim, then refuses a second over the batch.
+    with engine.connect() as connection:
+        worker = (
+            connection.execute(
+                sa.select(principal)
+                .where(
+                    principal.c.kind == "service",
+                    principal.c.role == "worker-llm",
+                    principal.c.enabled.is_(True),
+                )
+                .order_by(principal.c.id)
+                .limit(1)
+            )
+            .mappings()
+            .one()
+        )
+    actor = Principal(worker["id"], worker["name"], worker["kind"], worker["role"])
+    prices = ReviewPriceTable(
+        "audit-fixture-prices",
+        "fixture",
+        "fixture-model",
+        1_000_000,
+        2_000_000,
+        0,
+        "2026-01-01",
+        "https://example.com/fixture-prices",
+    )
+    revision = ledger.set_policy(
+        project_key,
+        actor=admin,
+        expected_revision=revision,
+        policy=BudgetPolicy(1000, 1000, 100),
+        pixel_providers=("fixture",),
+        review_prices=prices,
+    )
+    operation_id = "audit-fixture-" + uuid4().hex
+    configuration = "a" * 64
+    request = SpendRequest(
+        operation_id,
+        project_key,
+        "audit-fixture",
+        datetime.now(UTC).strftime("%Y-%m"),
+        40,
+        prices.version,
+        configuration,
+    )
+    batch = ReviewBatch(operation_id, ("image-a", "image-b"), prices.model_id, "fixture", 1)
+    dry = ledger.prepare(request, DispatchIntent("llm", "fixture", True, 10, 5, batch), actor=actor)
+    ledger.reserve(project_key, operation_id, dry.digest, actor=admin)
+
+    def claim(request_id, image_id):
+        return ledger.claim_review_request(
+            project_key,
+            operation_id,
+            request_id,
+            actor=actor,
+            configuration_sha256=configuration,
+            image_id=image_id,
+            pass_index=0,
+            estimate=30,
+            forecast=ReviewUsage(10, 5),
+        )
+
+    first = claim("first", "image-a")
+    assert first.operation_id == "first"
+    before = budget_records(engine, project_key)
+    original_event = ledger._event
+
+    def fail_after_event(connection, actor, head, action, record, operation_id=None):
+        original_event(connection, actor, head, action, record, operation_id)
+        if action == "approval_exhausted":
+            raise SQLAlchemyError("injected refusal journal failure")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ledger, "_event", fail_after_event)
+        with pytest.raises(SQLAlchemyError, match="injected refusal journal failure"):
+            claim("second", "image-b")
+    assert budget_records(engine, project_key) == before
+    with pytest.raises(BudgetRefused) as rejected:
+        claim("second", "image-b")
+    assert rejected.value.code == "approval_exhausted"
+    after = budget_records(engine, project_key)
+    for table in (budgets.head, budgets.dry_run, budgets.review_request):
+        assert after[table.name] == before[table.name]
+    old_operations = {row["operation_id"]: row for row in before[budgets.operation.name]}
+    assert len(after[budgets.operation.name]) == len(old_operations)
+    for row in after[budgets.operation.name]:
+        previous = old_operations[row["operation_id"]]
+        assert row == (
+            previous | {"review_pause": "approval_exhausted"}
+            if row["operation_id"] == operation_id
+            else previous
+        )
+    old_events = {row["id"]: row for row in before[budgets.event.name]}
+    added = [row for row in after[budgets.event.name] if row["id"] not in old_events]
+    assert len(added) == 1
+    assert len(after[budgets.event.name]) == len(old_events) + 1
+    refusal = added[0]
+    assert refusal["action"] == "approval_exhausted"
+    assert refusal["operation_id"] == operation_id
+    assert refusal["principal_id"] == actor.id
+    assert refusal["principal_kind"] == "service"
+    assert refusal["policy_revision"] == revision
+    assert refusal["record"] == {"request_id": "second", "estimate": 30}
+    assert all(
+        row == old_events[row["id"]] for row in after[budgets.event.name] if row["id"] in old_events
+    )
+    # Reconnect and replay cannot grant the rejected child or append another refusal.
+    ledger = BudgetStore(engine)
+    for request_id in ("second", "third"):
+        with pytest.raises(BudgetRefused) as replay:
+            claim(request_id, "image-b")
+        assert replay.value.code == "approval_exhausted"
+        assert budget_records(engine, project_key) == after
+    view = ledger.review_snapshot(project_key, operation_id)
+    assert view["pause_reason"] == "approval_exhausted"
+    assert len(view["requests"]) == 1
+    assert view["requests"][0]["request_id"] == "first"
+    assert ledger.snapshot(project_key).entry(operation_id).exposure == 40
+    ledger.set_policy(
+        project_key, actor=admin, expected_revision=revision, policy=BudgetPolicy(0, 0, 0)
+    )
+    return refusal
 
 
 def exercise_audit_reads(engine, project_key):
@@ -34,32 +185,14 @@ def exercise_audit_reads(engine, project_key):
         revision = connection.execute(
             sa.select(budgets.head.c.revision).where(budgets.head.c.project_id == project_key)
         ).scalar_one_or_none()
-    ledger.set_policy(
-        project_key,
-        actor=Principal(account["id"], account["name"], account["kind"], account["role"]),
-        expected_revision=revision or 0,
-        policy=BudgetPolicy(0, 0, 0),
+    admin = Principal(account["id"], account["name"], account["kind"], account["role"])
+    revision = ledger.set_policy(
+        project_key, actor=admin, expected_revision=revision or 0, policy=BudgetPolicy(0, 0, 0)
     )
-    # Synthetic journal input tests PostgreSQL projection/recovery, not emission
-    # by a real paid attempt. The zero-limit policy and every ledger row stay put.
-    refusal_id = str(uuid4())
-    with engine.begin() as connection:
-        connection.execute(
-            sa.insert(budgets.event).values(
-                id=refusal_id,
-                project_id=project_key,
-                operation_id=None,
-                principal_id=account["id"],
-                principal_kind=account["kind"],
-                principal_role=account["role"],
-                principal_version="synthetic-audit-fixture",
-                policy_revision=(revision or 0) + 1,
-                action="approval_exhausted",
-                record={"private": "must-not-leak"},
-                occurred_at=datetime.now(UTC),
-            )
-        )
+    refusal_record = exercise_emitted_refusal(engine, project_key, ledger, admin, revision)
+    refusal_id = refusal_record["id"]
     budget_before = ledger.snapshot(project_key)
+    accounting_before = budget_records(engine, project_key)
 
     def records():
         with engine.connect() as connection:
@@ -205,7 +338,11 @@ def exercise_audit_reads(engine, project_key):
         assert export.status_code == 200
         assert [json.loads(line) for line in export.text.splitlines()] == events
         assert "must-not-leak" not in export.text
-        assert "synthetic-audit-fixture" not in export.text
+        for private in ("request_id", "estimate", "principal_version", "configuration_sha256"):
+            assert private not in export.text
+        assert refusal["actor_id"] == refusal_record["principal_id"]
+        assert refusal["actor_kind"] == "service"
+        assert refusal["revision"] == refusal_record["policy_revision"]
         # Filter complete committed history before counts/cursors, and preserve
         # exact page/export equality on the real PostgreSQL UUID representation.
         for params, matching in (
@@ -356,7 +493,30 @@ def exercise_audit_reads(engine, project_key):
             )
             assert hidden_cursor.status_code == 409
             assert hidden_cursor.json() == {"detail": "audit_state_rejected"}
+    with authenticated_client(engine) as (client, identities, _):
+        login(client, identities["admin"][1])
+        params = {"kind": "Budget", "actor_kind": "service", "search": refusal_id}
+        recovered = client.get(path, params=params)
+        assert recovered.status_code == 200
+        assert recovered.headers["cache-control"] == "no-store"
+        assert recovered.json() == {
+            "project_id": project_key,
+            "events": [refusal],
+            "total": 1,
+            "next_after": None,
+        }
+        exported = client.get(path + "/export", params=params)
+        assert exported.status_code == 200
+        assert exported.headers["cache-control"] == "no-store"
+        assert [json.loads(line) for line in exported.text.splitlines()] == [refusal]
+        client.cookies.clear()
+        login(client, identities["reviewer"][1])
+        hidden = client.get(path, params=params)
+        assert hidden.status_code == 200
+        assert hidden.json()["total"] == 0 and hidden.json()["events"] == []
+        assert client.get(path + "/export", params=params).text == ""
     assert ledger.snapshot(project_key) == budget_before
+    assert budget_records(engine, project_key) == accounting_before
     assert records() == before
     assert snapshot(engine, project_key) == registry
     assert qualification_journals(engine) == journals

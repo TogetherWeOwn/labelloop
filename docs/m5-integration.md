@@ -6,7 +6,47 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Original reservation timestamps — implementation, verification pending
+## Producer-emitted budget refusal — implementation, verification pending
+
+The both-recipe PostgreSQL audit smoke now obtains `approval_exhausted` from the
+real BudgetStore review-request claim instead of inserting a synthetic journal row.
+The inputs and prices remain explicitly synthetic accounting fixtures. One child
+claim commits; a second exceeds the approved parent reservation and must return
+no claim. No worker/provider adapter executes and no paid call or real spend occurs.
+A post-event injected failure must roll back both pause and journal append. Retrying
+without injection must commit exactly one service-attributed refusal and the parent
+pause, retain every historical row and the sole earlier child, and preserve parent
+exposure. New-store replay of the refused or another request must change nothing.
+The fixture restores zero spending limits through the real append-only policy path.
+
+Real session HTTP must include the emitted event in authorized counts/pages/export,
+retain its original service actor and policy revision, exclude its private request
+and estimate payload, and recover identical metadata after closing the first client.
+Reviewer reads/exports must exclude it even with its exact ID. Complete budget
+head/dry-run/operation/child/event snapshots, qualification journals and both registry
+heads/events must remain unchanged by inspection. These new controls await Actions;
+no local tests/builds ran. No production code, event classification, schema/migration,
+dependency, UI design or gate changed. This proves one real refusal producer path,
+not complete refused-attempt history, provider dispatch or full operational mounting.
+REA: reuse the existing transactionally committed refusal and session query/export.
+
+## Bound cost metadata and timestamps — verified baseline
+
+Exact `b34eeb2848fbad52b0bc3404c1a4e68c64b5f6ea`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603521102),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603519534) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603519665) passed.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603521102/job/129113560330),
+[both-recipe PostgreSQL ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603521102/job/129113560456),
+[web/browser](https://github.com/TogetherWeOwn/labelloop/actions/runs/42603521102/job/129113560212),
+queue/migration cycles/all four parents, dev-stack and lint/types/import-contract
+passed. This verifies original reservation timestamps, digest-bound LLM-review/job
+metadata and prior complete scoped summary controls, superseding their pending
+labels below. Platform kind remains unknown: the stored intent does not distinguish
+training, annotation or prediction. Totals not extracted; no milestone acceptance,
+authenticated product mount, independent domain quality or new refusal-control PASS.
+
+## Original reservation timestamps — historical pending report
 
 Cost pages now project nullable `reserved_at` from the existing immutable `reserve`
 event, while holding the budget writer-head lock. One bounded lookup covers only
