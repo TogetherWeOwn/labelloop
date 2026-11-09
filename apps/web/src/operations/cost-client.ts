@@ -30,6 +30,9 @@ export interface BudgetPage {
   operations: CostOperation[];
   next_after: string | null;
 }
+export interface BudgetExport extends BudgetPage {
+  next_after: null;
+}
 export interface CostReadQuery {
   after?: string;
   limit?: number;
@@ -97,8 +100,27 @@ function totals(value: unknown): value is CostTotals {
   return value.operation_count !== 0 || [actual, estimate, reserved, unconfirmed, exposure, value.delta].every((amount) => amount === 0);
 }
 
+function budgetPage(value: unknown, project: string, limit: number): value is BudgetPage {
+  return object(value, pageKeys) && value.project_id === project && value.currency === 'USD' && value.unit === 'micro_usd'
+    && integer(value.policy_revision) && value.policy_revision >= 1 && policy(value.policy)
+    && (value.pause_reason === null || value.pause_reason === 'insufficient_credits' || value.pause_reason === 'estimate_overrun')
+    && Array.isArray(value.operations) && value.operations.length <= limit && value.operations.every(operation)
+    && new Set(value.operations.map((entry: CostOperation) => entry.operation_id)).size === value.operations.length
+    && (value.next_after === null || identity(value.next_after));
+}
+
 export function costClient(project: string) {
   return {
+    async exportJson(signal: AbortSignal): Promise<Blob> {
+      if (!projectKey(project)) throw unavailable();
+      // One complete server read, not an export assembled from mutable pages.
+      // Buffer and validate the entire response before creating a download.
+      const body = await readSessionText(`/api/projects/${encodeURIComponent(project)}/costs/export`, signal, 'application/json', 16 * 1024 * 1024, unavailable);
+      let value: unknown;
+      try { value = JSON.parse(body); } catch { throw unavailable(); }
+      if (!budgetPage(value, project, 10_000) || value.next_after !== null) throw unavailable();
+      return new Blob([JSON.stringify(value)], { type: 'application/json;charset=utf-8' });
+    },
     async summary(query: CostSummaryQuery, signal: AbortSignal): Promise<BudgetSummary> {
       if (!projectKey(project) || !object(query, ['month', 'iteration_id']) || !month(query.month) || !identity(query.iteration_id)) throw unavailable();
       const params = new URLSearchParams({ month: query.month, iteration_id: query.iteration_id });
@@ -122,15 +144,10 @@ export function costClient(project: string) {
       const body = await readSessionText(`/api/projects/${encodeURIComponent(project)}/costs?${params}`, signal, 'application/json', 256 * 1024, unavailable);
       let value: unknown;
       try { value = JSON.parse(body); } catch { throw unavailable(); }
-      if (!object(value, pageKeys) || value.project_id !== project || value.currency !== 'USD' || value.unit !== 'micro_usd'
-        || !integer(value.policy_revision) || value.policy_revision < 1 || !policy(value.policy)
-        || (value.pause_reason !== null && value.pause_reason !== 'insufficient_credits' && value.pause_reason !== 'estimate_overrun')
-        || !Array.isArray(value.operations) || value.operations.length > (query.limit ?? 50) || !value.operations.every(operation)
-        || new Set(value.operations.map((entry: CostOperation) => entry.operation_id)).size !== value.operations.length
-        || value.operations.some((entry: CostOperation) => entry.operation_id === query.after)
-        || !(value.next_after === null || identity(value.next_after))) throw unavailable();
+      if (!budgetPage(value, project, query.limit ?? 50)
+        || value.operations.some((entry) => entry.operation_id === query.after)) throw unavailable();
       if (value.next_after !== null && (value.operations.length !== (query.limit ?? 50) || value.next_after !== value.operations.at(-1)?.operation_id)) throw unavailable();
-      return value as unknown as BudgetPage;
+      return value;
     },
   };
 }

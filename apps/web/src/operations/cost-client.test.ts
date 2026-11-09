@@ -116,6 +116,108 @@ describe('complete session-backed cost summaries', () => {
   });
 });
 
+describe('complete session-backed cost export', () => {
+  it('downloads one independently current project read, preserving full metadata beyond a page', async () => {
+    const operations = Array.from({ length: 101 }, (_, index) => ({ ...entry, operation_id: `export-${index}`, iteration_id: `iteration-${index}`, month: '2026-10' }));
+    operations.push({ ...entry, operation_id: 'confirmed-zero', state: 'settled', actual: 0, exposure: 0 });
+    const value = page(operations, { policy_revision: 5, pause_reason: 'estimate_overrun' });
+    const request = stub(json(value));
+    const abort = signal();
+    const blob = await costClient('project-a').exportJson(abort);
+    expect(blob.type).toBe('application/json;charset=utf-8');
+    expect(JSON.parse(await blob.text())).toEqual(value);
+    expect(request).toHaveBeenCalledExactlyOnceWith('/api/projects/project-a/costs/export', {
+      method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: abort, headers: { Accept: 'application/json' },
+    });
+  });
+
+  it.each([0, 10_000])('accepts exactly %s distinct validated operations', async (count) => {
+    const value = page(Array.from({ length: count }, (_, index) => ({ ...entry, operation_id: `export-${index}` })));
+    stub(json(value));
+    expect(JSON.parse(await (await costClient('project-a').exportJson(signal())).text())).toEqual(value);
+  });
+
+  it('encodes opaque project identity without allowing filters or page cursors', async () => {
+    const project = 'scope/?日本語';
+    const request = stub(json(page([], { project_id: project })));
+    await costClient(project).exportJson(signal());
+    expect(request.mock.calls[0]?.[0]).toBe(`/api/projects/${encodeURIComponent(project)}/costs/export`);
+  });
+
+  it.each(['', '.', '..', 'two scopes', 'x'.repeat(129)])('rejects invalid export project %s before fetch', async (project) => {
+    const request = stub(json(page()));
+    await expect(costClient(project).exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    page([], { next_after: 'partial' }), page([], { project_id: 'foreign' }), page([], { policy_revision: 0 }),
+    page([], { currency: 'EUR' }), page([], { unit: 'usd' }), page([], { policy: null }),
+    page([], { pause_reason: 'unknown' }), page([], { private: 'excluded' }), page([entry, entry]),
+    page([entry, { ...entry, operation_id: 'later', exposure: 0 }]),
+    page([entry, { ...entry, operation_id: 'later', private: 'excluded' }]),
+    page(Array.from({ length: 10_001 }, (_, index) => ({ ...entry, operation_id: `export-${index}` }))),
+  ])('rejects the entire partial, substituted or oversized export', async (value) => {
+    const request = stub(json(value));
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 403, 404, 409, 503])('redacts export HTTP %s and never retries or fetches pages', async (status) => {
+    const response = new Response('private diagnostic', { status });
+    const cancel = vi.spyOn(response.body!, 'cancel');
+    const request = stub(response);
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    () => new Response('{private', { headers: { 'Content-Type': 'application/json' } }),
+    () => new Response(JSON.stringify(page()), { headers: { 'Content-Type': 'text/html' } }),
+    () => new Response(new Uint8Array([0xc3, 0x28]), { headers: { 'Content-Type': 'application/json' } }),
+    () => new Response(null, { headers: { 'Content-Type': 'application/json' } }),
+  ])('redacts invalid export encoding, syntax and content without creating a file', async (response) => {
+    stub(response());
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+  });
+
+  it('cancels the stream above the independent 16 MiB byte bound', async () => {
+    const cancel = vi.fn();
+    stub(new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1)); }, cancel }), { headers: { 'Content-Type': 'application/json' } }));
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('discards an interrupted export stream without returning its valid prefix', async () => {
+    const response = new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(page())));
+      controller.error(new Error('private stream diagnostic'));
+    } }), { headers: { 'Content-Type': 'application/json' } });
+    stub(response);
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+  });
+
+  it('redacts export transport errors without retrying', async () => {
+    const request = vi.fn().mockRejectedValue(new Error('private transport diagnostic'));
+    vi.stubGlobal('fetch', request);
+    await expect(costClient('project-a').exportJson(signal())).rejects.toThrow(/^Cost records unavailable$/);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('does not fetch cancelled exports or return a late cancelled response', async () => {
+    const controller = new AbortController();
+    const request = stub(json(page()));
+    controller.abort();
+    await expect(costClient('project-a').exportJson(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request).not.toHaveBeenCalled();
+    const later = new AbortController();
+    request.mockImplementation(() => { later.abort(); return Promise.resolve(json(page())); });
+    await expect(costClient('project-a').exportJson(later.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request).toHaveBeenCalledOnce();
+  });
+});
+
 describe('session-backed cost transport', () => {
   it('preserves actual null versus confirmed zero, child exposure, policy zero/null and pause metadata', async () => {
     const value = page([entry, { ...entry, operation_id: 'operation-2', state: 'settled', actual: 0, exposure: 0, approved_by: 'admin', reserved_autonomously: false }], { pause_reason: 'estimate_overrun' });

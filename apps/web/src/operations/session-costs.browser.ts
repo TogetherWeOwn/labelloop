@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
-import type { BudgetPage, BudgetSummary, CostOperation } from './cost-client.ts';
+import type { BudgetExport, BudgetPage, BudgetSummary, CostOperation } from './cost-client.ts';
 
 const endpoint = '/api/projects/costs-demo/costs';
 const policy = { monthly_limit: 1_000_000, iteration_limit: 2_000_000, operation_limit: 0, autonomous_spend: false };
@@ -220,6 +220,130 @@ for (const failure of ['expired', 'duplicate', 'changed-policy', 'foreign'] as c
     expect(requests[3].searchParams.get('after')).toBe(requests[5].searchParams.get('after'));
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`complete cost export at ${width}px ignores loaded rows and filters without replacing them`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const requests: URL[] = [];
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    let release: (() => void) | undefined;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const complete: BudgetExport = { ...ledger, policy_revision: 5, next_after: null, operations: [...ledger.operations, ...Array.from({ length: 58 }, (_, index) => ({ ...operation, operation_id: `unloaded-${index}`, month: '2026-10', iteration_id: 'old-iteration' }))] };
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      expect(route.request().method()).toBe('GET');
+      expect(await route.request().headerValue('accept')).toBe('application/json');
+      if (url.pathname.endsWith('/export')) {
+        expect(url.search).toBe('');
+        await delayed;
+        await route.fulfill({ json: complete });
+      } else await route.fulfill({ json: url.pathname.endsWith('/summary') ? summary : firstPage });
+    });
+    await page.goto('/operational-fixtures.html?view=costs&state=session');
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    expect(requests).toHaveLength(2);
+    await page.getByRole('button', { name: 'Training', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(0);
+    await expect(page.getByText('Complete project JSON includes all iterations and operation kinds', { exact: false })).toBeVisible();
+    const fileReady = page.waitForEvent('download');
+    const button = page.getByRole('button', { name: 'Download complete project JSON', exact: true });
+    await button.click();
+    await expect(button).toBeDisabled();
+    await expect(page.getByText('Preparing the authorized project export…', { exact: true })).toBeVisible();
+    release?.();
+    const file = await fileReady;
+    expect(file.suggestedFilename()).toBe('costs.json');
+    const path = await file.path();
+    expect(path).not.toBeNull();
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(complete);
+    await expect(button).toBeEnabled();
+    await expect(page.getByText('Project export downloaded.', { exact: true })).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(0);
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
+    expect(requests).toHaveLength(3);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const failure of ['expired', 'foreign', 'partial', 'invalid-later'] as const) {
+  test(`complete cost export ${failure} downloads nothing, retains rows and retries explicitly`, async ({ page }) => {
+    let exports = 0;
+    let downloads = 0;
+    let recovered = false;
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('download', () => { downloads += 1; });
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith('/export')) {
+        exports += 1;
+        if (!recovered && failure === 'expired') await route.fulfill({ status: 401, json: { detail: 'private export diagnostic' } });
+        else await route.fulfill({ json: {
+          ...ledger,
+          ...(!recovered && failure === 'foreign' ? { project_id: 'foreign' } : {}),
+          ...(!recovered && failure === 'partial' ? { next_after: operation.operation_id } : {}),
+          ...(!recovered && failure === 'invalid-later' ? { operations: [...ledger.operations, { ...operation, operation_id: 'bad-later', exposure: -1 }] } : {}),
+        } });
+      } else await route.fulfill({ json: url.pathname.endsWith('/summary') ? summary : ledger });
+    });
+    await page.goto('/operational-fixtures.html?view=costs&state=session');
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+    const button = page.getByRole('button', { name: 'Download complete project JSON', exact: true });
+    await button.click();
+    await expect(page.getByText('Project export could not be loaded. Try again.', { exact: true })).toBeVisible();
+    await expect(button).toBeEnabled();
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+    await expect(page.locator('body')).not.toContainText('private export diagnostic');
+    expect(exports).toBe(1);
+    expect(downloads).toBe(0);
+    recovered = true;
+    const fileReady = page.waitForEvent('download');
+    await button.click();
+    await fileReady;
+    await expect(page.getByText('Project export downloaded.', { exact: true })).toBeVisible();
+    expect(exports).toBe(2);
+    expect(downloads).toBe(1);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('scope replacement cancels an old complete export without downloading its late response', async ({ page }) => {
+  let release: (() => void) | undefined;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  let finish: (() => void) | undefined;
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  let downloads = 0;
+  page.on('download', () => { downloads += 1; });
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    const replacement = url.pathname.includes('costs-replacement');
+    if (url.pathname === `${endpoint}/export`) {
+      await delayed;
+      try { await route.fulfill({ json: ledger }); } finally { finish?.(); }
+    } else {
+      const value = url.pathname.endsWith('/summary') ? summary : ledger;
+      await route.fulfill({ json: { ...value, project_id: replacement ? 'costs-replacement' : 'costs-demo' } });
+    }
+  });
+  await page.goto('/operational-fixtures.html?view=costs&state=session-scope-swap');
+  await expect(page.locator('tbody tr')).toHaveCount(2);
+  const oldExport = page.waitForRequest((request) => new URL(request.url()).pathname === `${endpoint}/export`);
+  await page.getByRole('button', { name: 'Download complete project JSON', exact: true }).click();
+  await oldExport;
+  const cancelled = page.waitForEvent('requestfailed', (request) => new URL(request.url()).pathname === `${endpoint}/export`);
+  await page.getByRole('button', { name: 'Replace cost scope' }).click();
+  await cancelled;
+  await expect(page.locator('tbody tr')).toHaveCount(2);
+  release?.();
+  await finished;
+  await expect(page.getByRole('button', { name: 'Download complete project JSON', exact: true })).toBeEnabled();
+  await expect(page.getByText('Project export downloaded.', { exact: true })).toHaveCount(0);
+  expect(downloads).toBe(0);
+});
 
 test('scope replacement cancels the old read and cannot show its late result', async ({ page }) => {
   let release: (() => void) | undefined;
