@@ -6,7 +6,41 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP final-test independence vetoes — pending Actions
+## Committed HTTP canary freshness and completeness vetoes — pending Actions
+
+The same synthetic candidate used by the committed HTTP promotion/rollback positive
+control now has seven additional canary populations: reused actual compiled training
+and validation groups, canonical development and final groups, the ordinary audit
+population's group, incomplete observations alone, and complete plus competing partial
+outcomes. Each population commits before the service/HTTP reads it. Reused-group
+outcomes first pass the existing sample/measurement quality check in isolation;
+matching canonical splits prevent unrelated split conflicts from satisfying the test.
+These fixtures do not change any CPU manifest, historical outcome or production gate.
+
+The internal service must reject each specific freshness, completeness or ambiguity
+gate. Actual admin HTTP promotion must return redacted 409/no-store and preserve both
+complete registry heads, every promotion event and qualification journal after client
+close/reconnect. The original fresh canary must still recover the identical qualified
+context, then the same candidate/request must promote and roll back successfully.
+Every rejected outcome remains stored: no score-based cherry-picking or cleanup can
+make the positive control pass. The new partial-only fixture option defaults to the
+existing complete observations. New assertions await exact-head Actions; no local
+tests ran. No production code, policy, migration, dependency or second engine changed.
+REA: exercise the existing sample/outcome selector and freshness gates through the
+real authenticated promotion transaction. Fixtures are software mechanics, not gold.
+
+## Committed HTTP final-test independence vetoes — verified baseline
+
+Exact `8fa5a0a960cda53beb090444db367eb871bd557b`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42537198292),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42537198015) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42537197961)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42537198292/job/128904052870),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42537198292/job/128904052845),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies the final-test controls below, not the new canary
+controls, independent measurements or full M5 acceptance. Totals not extracted;
+required Devin/fresh-context/native QA/Security reviews remain gates.
 
 Both-recipe CPU smoke prepares two separate synthetic sole-final candidates, each
 with committed canonical populations, selection/exposure, unique audit/canary
@@ -24,8 +58,8 @@ and all qualification journals must remain unchanged. Adaptation and quarantine
 use separate final populations, so neither control inherits the other's invalidity.
 The existing subsequent successful committed promotion/rollback remains the positive
 control. No production code, lifecycle gate, schema, migration or dependency changes.
-These new assertions await exact-head Actions; no local tests ran. REA: reuse the
-existing sole-final fixture, authenticated invalidation and promotion transactions.
+These assertions passed exact-head Actions at `8fa5a0a`; no local tests ran. REA:
+reuse the existing sole-final fixture, authenticated invalidation and promotion transactions.
 
 ## Committed HTTP support and critical-slice vetoes — verified baseline
 

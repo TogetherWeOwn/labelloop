@@ -55,6 +55,7 @@ def _outcome(
     split="train",
     suffix="",
     alternatives=True,
+    complete=True,
 ):
     """Seed synthetic sources, optionally on an already-used group; never edit CPU inputs."""
     prefix = release.release_id + ("-assembly-canary" if canary else "-assembly-audit") + suffix
@@ -147,6 +148,8 @@ def _outcome(
         AuditObservation(item.asset_id, 1, actor, True, True, True)
         for item in frozen.sample.candidates
     )
+    if not complete:
+        observations = observations[:1]
     record_annotation_audit(
         connection,
         project_key=release.project_id,

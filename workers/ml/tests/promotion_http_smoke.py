@@ -376,6 +376,159 @@ def exercise_http_final_test_vetoes(engine, release, final, context, actor):
     return 2
 
 
+def exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload):
+    import pytest
+    from qualification_context_smoke import _outcome
+
+    from labelloop_api import model_schema
+    from labelloop_api.annotation_evidence_store import load_annotation_evidence
+    from labelloop_api.promotion_service import promote_candidate
+    from labelloop_api.qualification_context_store import (
+        AnnotationOutcomeRef,
+        load_qualification_context,
+    )
+    from labelloop_api.training_group_store import model_input_groups
+
+    scope = dict(project_key=candidate.project_id, recipe_key=candidate.recipe_id)
+    with engine.begin() as connection:
+        project_id, model_id, manifest = connection.execute(
+            sa.select(
+                model_schema.model_release.c.project_id,
+                model_schema.model_release.c.id,
+                model_schema.training_run.c.input_manifest,
+            )
+            .join(model_schema.training_run)
+            .where(model_schema.model_release.c.release_key == candidate.release_id)
+        ).one()
+        inputs = model_input_groups(connection, project_id=project_id, model_id=model_id)
+        train = next(item for item in manifest["samples"] if item["split"] == "train")
+        validation = next(item for item in manifest["samples"] if item["split"] == "val")
+        assert train["group_id"] in inputs.training
+        assert validation["group_id"] in inputs.selection
+        lineage = qualified.evidence.lineage
+        freshness = "canary groups must be fresh, outside training, evaluation and prior audit"
+        cases = (
+            ("training", train["group_id"], "train", freshness),
+            (
+                "compiled-validation",
+                validation["group_id"],
+                "val",
+                "canary groups overlap compiled checkpoint selection",
+            ),
+            (
+                "development",
+                lineage.development.group_ids[0],
+                "test",
+                "canary groups overlap recorded selection or calibration",
+            ),
+            ("final", qualified.current_final_test.dataset.group_ids[0], "test", freshness),
+            (
+                "ordinary-audit",
+                sorted(qualified.evidence.annotation_audit.group_ids)[0],
+                "train",
+                freshness,
+            ),
+        )
+        adverse = []
+        for name, group, split, message in cases:
+            outcome = _outcome(
+                connection,
+                candidate,
+                qualified,
+                actor,
+                canary=True,
+                group_id=group,
+                split=split,
+                suffix="-http-reused-" + name,
+                alternatives=False,
+            )
+            stored = load_annotation_evidence(
+                connection,
+                project_key=candidate.project_id,
+                release_key=outcome.release_key,
+                audit_key=outcome.audit_key,
+                evidence_key=outcome.evidence_key,
+                canary_model_key=candidate.release_id,
+            )
+            # Sampling, scope support and clean measurements pass; only prior group
+            # use makes these canaries invalid. Matching splits avoid a false control
+            # that rejects a malformed canonical assignment instead of freshness.
+            stored.evidence.require_quality(
+                qualified.current_pipeline,
+                qualified.evidence.scope,
+                qualified.evidence.targets,
+                canary=True,
+            )
+            assert stored.evidence.group_ids == {group}
+            adverse.append((outcome, message))
+        for name, complete, alternatives, message in (
+            (
+                "partial-only",
+                False,
+                False,
+                "annotation audit blocks qualification: adverse or missing observations",
+            ),
+            (
+                "complete-and-partial",
+                True,
+                True,
+                "qualification requires one unambiguous measured annotation outcome",
+            ),
+        ):
+            outcome = _outcome(
+                connection,
+                candidate,
+                qualified,
+                actor,
+                canary=True,
+                suffix="-http-" + name,
+                alternatives=alternatives,
+                complete=complete,
+            )
+            adverse.append((outcome, message))
+    original = snapshot(engine, candidate.project_id)
+    journals = qualification_journals(engine)
+    path = f"/projects/{candidate.project_id}/promotions"
+    for outcome, message in adverse:
+        arguments = dict(
+            **scope,
+            model_key=candidate.release_id,
+            annotation_release_key=payload["annotation_release_key"],
+            canary_release_key=outcome.release_key,
+            expected_revision=payload["expected_revision"],
+        )
+        # Both reads use new connections after all sample/outcome writes commit.
+        # Reject the intended gate, not a stale head, missing comparison or digest.
+        with engine.begin() as connection:
+            with pytest.raises(ValueError, match=message):
+                promote_candidate(
+                    connection, **arguments, actor_id=actor, require_fixture_policy=True
+                )
+        with authenticated_client(engine) as (client, identities, _workers):
+            headers = login(client, identities["admin"][1])
+            response = client.post(
+                path, headers=headers, json=payload | {"canary_release_key": outcome.release_key}
+            )
+            assert response.status_code == 409
+            assert response.json() == {"detail": "registry_change_rejected"}
+            assert response.headers["cache-control"] == "no-store"
+        assert snapshot(engine, candidate.project_id) == original
+        assert qualification_journals(engine) == journals
+    with engine.begin() as connection:
+        restored = load_qualification_context(
+            connection,
+            **scope,
+            model_key=candidate.release_id,
+            qualification_key="durable-http-preflight",
+            annotation=AnnotationOutcomeRef(payload["annotation_release_key"]),
+            canary=AnnotationOutcomeRef(payload["canary_release_key"]),
+        )
+        assert restored == qualified
+    # The caller now promotes this same candidate with the same request and fresh
+    # canary, then rolls back. Every rejected evidence row remains immutable.
+    return len(adverse)
+
+
 def exercise_durable_http_promotion(engine, release, final, context, actor):
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
@@ -437,6 +590,9 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
             canary=AnnotationOutcomeRef(canary.release_key),
         )
         qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
+    canary_vetoes = exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload)
+    assert snapshot(engine, release.project_id) == original
+    journals = qualification_journals(engine)
 
     def reject_failed_event(client, headers, body, captured):
         injected = []
@@ -516,6 +672,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "scope": "fixture-only copied metrics, not independent measurements or domain quality",
         "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
         "committed_http_adapted_and_quarantined_final_veto_cases": final_test_vetoes,
+        "committed_http_reused_partial_and_ambiguous_canary_veto_cases": canary_vetoes,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,
