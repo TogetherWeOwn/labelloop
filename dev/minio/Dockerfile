@@ -7,7 +7,10 @@ RUN case "$TARGETARCH" in \
       arm64) checksum="$MINIO_SHA256_ARM64" ;; \
       *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
-    wget --no-verbose "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-$TARGETARCH.RELEASE.2025-09-07T16-13-09Z" -O /usr/local/bin/minio && \
+    for attempt in 1 2 3; do \
+      if wget --no-verbose -T 30 "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-$TARGETARCH.RELEASE.2025-09-07T16-13-09Z" -O /usr/local/bin/minio; then break; fi; \
+      test "$attempt" -lt 3 || exit 1; \
+    done && \
     echo "$checksum /usr/local/bin/minio" | sha256sum -c - && \
     chmod 0555 /usr/local/bin/minio
 EXPOSE 9000 9001

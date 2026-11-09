@@ -6,7 +6,35 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Current principal-name audit projection — pending Actions
+## MinIO download resilience — pending Actions
+
+Completed exact `fd66017e96407f7705eb047c871c1fbf339cb0d5`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808):
+[dev-stack](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808/job/129007401269)
+failed downloading the unchanged checksum-pinned MinIO executable with HTTP 504.
+Readiness did not run; no overall CI or milestone PASS is claimed.
+[Unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808/job/129007401217)
+passed **2417 tests, 81 skipped**; both-recipe
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808/job/129007401163),
+queue, migration round trip/all four parents, web-build, lint/types/import-contract,
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767477) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767459) passed.
+This verifies principal-name/session and persisted PostgreSQL controls, superseding
+their previous pending label, without clearing the failed dev-stack gate.
+
+The MinIO image now allows at most three download attempts with wget's 30-second
+network timeout. This is not a hard total wall-clock deadline. Each attempt writes
+the same destination without resume; exhausted attempts fail the layer. A completed
+download must pass the unchanged architecture-specific SHA-256 before chmod. A
+checksum mismatch is not retried or accepted. URL, release, base-image digest and
+both checksums remain unchanged; no mirror, runtime dependency, readiness bypass,
+CI waiver or always-on resource is added. Six network-free regressions execute the
+actual Docker RUN using a wget stand-in: both architectures, transient recovery,
+exhaustion, corrupt immediate/recovered downloads and unsupported architecture.
+New assertions await Actions; no local tests/builds or dependency install ran.
+REA: reuse the pinned fetch and existing dev-stack gate, not a replacement artifact.
+
+## Current principal-name audit projection — verified at fd66017
 
 The existing audit read/export resolves nullable current directory names by exact
 recorded principal ID. Legacy actor strings matching usernames never acquire an
@@ -23,8 +51,9 @@ New session adapter controls cover exact-ID/kind compatibility, username collisi
 name changes/disabled accounts, literal patterns, paging/export equality and hidden
 promotion rejection. Both-recipe PostgreSQL HTTP controls require current-name
 recovery and matching search/export after reconnect, retain unknown provenance,
-and preserve registry/qualification/review evidence. New assertions are unverified
-until exact-head Actions. No schema, migration, dependency, provider call or gate
+and preserve registry/qualification/review evidence. These assertions passed the
+exact-head unit and ML-smoke jobs linked above; overall CI remains failed at the
+independent MinIO download. No schema, migration, dependency, provider call or gate
 change. Full AuditLog mounting, remaining event kinds/refusals and real navigation
 remain unfinished. REA: reuse authorized events and the existing auth directory,
 not another identity store or inferred historical actor category.

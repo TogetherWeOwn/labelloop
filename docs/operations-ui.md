@@ -98,8 +98,11 @@ Search/filter and UUID fixture controls passed
 [CI at a3fcca5](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
 including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944)
 and both-recipe [PostgreSQL smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106973).
-The new current-name resolution/search controls remain unverified until exact-head
-Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
+Current-name resolution/search controls passed unit and both-recipe PostgreSQL
+smoke at [fd66017](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808),
+with **2417 unit passed, 81 skipped**. Overall CI failed separately because the
+checksum-pinned MinIO download returned HTTP 504 in dev-stack; this is not an
+overall gate PASS. No new event store, schema, dependency, spend or provider call. REA: reuse
 immutable canonical events and exact auth identities, not another audit journal.
 
 ## Authenticated ledger read port — integration pending
