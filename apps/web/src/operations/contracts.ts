@@ -53,10 +53,10 @@ export type AuditKind = 'Review' | 'Promotion' | 'Connection' | 'Budget';
 export interface AuditEvent {
   id: string;
   at: string;
-  principal: { id: string; name: string; type: 'person' | 'service' };
+  principal: { id: string; name: string; type: 'person' | 'service' | 'unknown'; recorded_kind?: 'human' | 'model' | 'system' | 'service' | 'unknown' };
   kind: AuditKind;
   sentence: string; // Server-redacted display text; never raw provider payloads.
-  refused: boolean;
+  refused: boolean | null; // Null is unrecorded, never a successful-action claim.
   record: { label: string; href: string } | null;
 }
 export interface AuditQuery {

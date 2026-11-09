@@ -127,6 +127,38 @@ checksum-pinned MinIO download returned HTTP 504 in dev-stack; this is not an
 overall gate PASS. No new event store, schema, dependency, spend or provider call. REA: reuse
 immutable canonical events and exact auth identities, not another audit journal.
 
+### Session-backed display adapter
+
+`sessionAuditPort(project)` now implements the supplied `AuditPort` through the
+strict session transport. It maps only server-returned rows, preserves server
+counts/cursors, uses kind-qualified event IDs, and leaves record links null.
+Missing current names fall back to the recorded actor ID. Unknown actor kind stays
+unknown even when a current name resolves; the existing neutral tag marks the
+missing provenance. Model/system/service actors share the Services display
+category while retaining exact `recorded_kind`. Nullable refusal remains nullable;
+only an explicit true receives refusal styling. Export retains the complete
+original metadata JSON lines, never just displayed pages or inferred principal types.
+
+The existing People filter maps to `human`, Services to `model/system/service`,
+and both mean no actor-kind restriction (including unknown history). Unknown
+history is not classified by a matching current name. Date controls translate exact
+calendar dates to inclusive UTC day bounds, including the final microsecond; malformed
+or inverted ranges reject. Empty selections and connection-only requests fail
+closed before network access, rather than turning into unfiltered queries or
+invented empty history. Mixed kinds select the available Review/Promotion/Budget
+journal only. Connection events, empty-selection UX, a dedicated unknown filter,
+real record navigation and authenticated shell mounting remain unfinished; this
+adapter is not complete AuditLog acceptance. Keep its identity stable within a
+project/session lifetime and replace it when either scope changes.
+
+[CI at f55fe5d](https://github.com/TogetherWeOwn/labelloop/actions/runs/42586297134)
+passed web-build (including transport lint/types/tests), unit, both-recipe ML smoke,
+queue/migration cycles/all four parents and dev-stack. CodeQL and gitleaks also
+passed that exact transport head. The new adapter/unknown-state tests await
+new-head Actions; no local tests or builds ran. No new layout, component, token,
+event store, dependency, provider or spend operation. REA: reuse the supplied
+AuditLog port, session transport and existing neutral tag, not another audit journal.
+
 ## Authenticated ledger read port — integration pending
 
 `GET /projects/{project_key}/costs?limit=50&after=<operation_id>` is an admin-session

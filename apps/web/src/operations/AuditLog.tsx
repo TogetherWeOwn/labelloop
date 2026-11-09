@@ -68,7 +68,7 @@ export function AuditView({ state, role, query, onQuery, onMore, onExport, expor
   const id = useId();
   const toggleKind = (kind: AuditKind) => onQuery({ ...query, kinds: query.kinds.includes(kind) ? query.kinds.filter((k) => k !== kind) : [...query.kinds, kind] });
   const disabled = state.status !== 'ready' || state.stale;
-  return <section className="operations"><header className="phead"><div><h1>Audit log. <span>Who did what, and as whom.</span></h1><p>Entries can’t be edited. Every event names the authenticated person or service.</p>
+  return <section className="operations"><header className="phead"><div><h1>Audit log. <span>Who did what, and as whom.</span></h1><p>Entries can’t be edited. Recorded actor identities are shown without inferring missing provenance.</p>
     {role === 'reviewer' && <p>Read-only · review events only. Admins see every kind.</p>}</div></header>
     <div className="audit-filters"><div className="chips" role="group" aria-label="Event kind">{(role === 'reviewer' ? ['Review'] as const : kinds).map((kind) => <button className="chip" key={kind} aria-pressed={query.kinds.includes(kind)} onClick={() => toggleKind(kind)}>{kind}</button>)}</div>
       <div className="chips" role="group" aria-label="Who">{(['person', 'service'] as const).map((type) => <button className="chip" key={type} aria-pressed={query.principals.includes(type)} onClick={() => onQuery({ ...query, principals: query.principals.includes(type) ? query.principals.filter((p) => p !== type) : [...query.principals, type] })}>{type === 'person' ? 'People' : 'Services'}</button>)}</div>
@@ -78,7 +78,7 @@ export function AuditView({ state, role, query, onQuery, onMore, onExport, expor
     </div>
     <ViewBoundary state={state}>{(page) => <>
       {page.events.length === 0 ? <Notice><p>No {query.kinds.length === 1 ? query.kinds[0]?.toLowerCase() : 'matching'} events in this period.</p><button className="pill ghost" onClick={() => onQuery(initialQuery)}>Clear filters</button></Notice> : <TableRegion label="Audit events"><table className="audit-table"><caption>Audit events · newest first</caption><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Who</th><th scope="col" className="audit-extra">Kind</th><th scope="col">What happened</th><th scope="col" className="audit-extra">Record</th></tr></thead><tbody>{page.events.map((event) => <tr key={event.id}>
-        <td><Utc value={event.at} /></td><td><span className={event.principal.type === 'service' ? 'mono' : ''}>{event.principal.name}</span>{event.principal.type === 'service' && <> <span className="tag">Service</span></>}</td>
+        <td><Utc value={event.at} /></td><td><span className={event.principal.type === 'service' ? 'mono' : ''}>{event.principal.name}</span>{event.principal.type !== 'person' && <> <span className="tag">{event.principal.type === 'unknown' ? 'Actor kind unavailable' : 'Service'}</span></>}</td>
         <td className="audit-extra">{event.kind}</td><td><span className={event.refused ? 'danger-text' : ''}>{event.sentence}</span><span className="audit-folded secondary">{event.kind} · <RecordLink record={event.record} /></span></td><td className="audit-extra"><RecordLink record={event.record} /></td>
       </tr>)}</tbody></table></TableRegion>}
       <p className="label">{page.events.length} of {page.total} events</p>
