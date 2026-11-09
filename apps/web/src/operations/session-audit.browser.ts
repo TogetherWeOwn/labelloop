@@ -25,7 +25,7 @@ for (const width of [1280, 390]) {
         const url = new URL(request.url());
         requests.push(url);
         expect(request.method()).toBe('GET');
-        expect(request.headers().cookie).toContain('fixture-session-marker=recorded-only');
+        expect(await request.headerValue('cookie')).toContain('fixture-session-marker=recorded-only');
         expect(url.origin).toBe('http://127.0.0.1:4173');
         expect([endpoint, `${endpoint}/export`]).toContain(url.pathname);
         if (url.pathname.endsWith('/export')) {
@@ -48,22 +48,22 @@ for (const width of [1280, 390]) {
       await expect(page.getByText('2 of 3 events', { exact: true })).toBeVisible();
       await expect(page.locator('tbody .danger-text')).toHaveText('Paid operation refused.');
       await expect(page.getByRole('button', { name: 'Show 50 more' })).toHaveCount(0);
-      await expect(page.locator('tbody')).not.toContainText(events[2]!.sentence);
+      await expect(page.locator('tbody')).not.toContainText(events[2].sentence);
       const downloaded = page.waitForEvent('download');
       await page.getByRole('button', { name: 'Export JSON lines' }).click();
       const file = await downloaded;
       expect(file.suggestedFilename()).toBe('audit.jsonl');
       const path = await file.path();
       expect(path).not.toBeNull();
-      const exported = await readFile(path!, 'utf8');
+      const exported = await readFile(path, 'utf8');
       expect(exported).toBe(events.map((event) => JSON.stringify(event)).join('\n') + '\n');
       await expect(page.getByRole('status')).toHaveText('Export downloaded.');
       expect(requests).toHaveLength(3);
-      expect(requests[0]!.searchParams.getAll('kind')).toEqual(['Review', 'Promotion', 'Budget']);
-      expect(requests[0]!.searchParams.has('actor_kind')).toBe(false);
-      expect(requests[1]!.searchParams.get('after')).toBe(`Promotion/${id}`);
-      expect(requests[2]!.searchParams.has('after')).toBe(false);
-      expect(requests[2]!.searchParams.has('limit')).toBe(false);
+      expect(requests[0].searchParams.getAll('kind')).toEqual(['Review', 'Promotion', 'Budget']);
+      expect(requests[0].searchParams.has('actor_kind')).toBe(false);
+      expect(requests[1].searchParams.get('after')).toBe(`Promotion/${id}`);
+      expect(requests[2].searchParams.has('after')).toBe(false);
+      expect(requests[2].searchParams.has('limit')).toBe(false);
       expect(errors).toEqual([]);
     });
 

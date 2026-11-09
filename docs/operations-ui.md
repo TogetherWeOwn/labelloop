@@ -272,7 +272,11 @@ responses; an invented cookie marker tests transport, not login or authorization
 Desktop/mobile cases cover server pages/counts, unknown actor provenance, escaped
 names, refusal styling, full original-metadata export and read/export filter parity.
 Failure cases cover 401, foreign project payloads and malformed exports without
-retry/private error disclosure/download. New controls await exact-head Actions.
+retry/private error disclosure/download. First head `cebdd2d` failed web lint
+on seven redundant non-null assertions before browser execution; those assertions
+are removed. Cookie checks use Playwright's complete `headerValue` accessor,
+not the security-filtered synchronous header map. Corrected controls await
+exact-head Actions; no browser PASS is claimed.
 This is not a product route or real-backend acceptance; do not deploy the fixture.
 Audit `state=scope-swap|freshness-refresh|deferred-page` supplies deterministic deferred
 ports for mounted lifecycle and long-table pagination regressions, not new product

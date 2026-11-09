@@ -28,6 +28,16 @@ metadata export beyond viewed pages. Filters/date bounds must match between read
 and export. Expired-session responses, foreign project data and malformed exports
 must fail closed, without private diagnostic output, automatic retry or download.
 
+First browser-control head `cebdd2d` failed
+[web lint](https://github.com/TogetherWeOwn/labelloop/actions/runs/42594478660/job/129083733433)
+on seven redundant non-null assertions before web types/tests/browser execution.
+Structured annotations identify array-index and download-path assertions; only
+those assertions are removed. Cookie inspection uses Playwright's complete
+`headerValue` accessor rather than its security-filtered synchronous header map.
+CodeQL/gitleaks and unit/queue/lint/types/import-contract passed that head, not
+these new browser controls. Missing fixture artifacts follow the earlier lint stop.
+Corrected assertions remain unverified until exact-head Actions; no gate is waived.
+
 These new assertions await exact-head Actions. The normal application entry,
 accepted design/components, backend, schema/migrations and dependency set are
 unchanged. No local suite/build, paid call or deployment. Authenticated shell/full
