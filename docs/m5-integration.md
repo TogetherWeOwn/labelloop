@@ -6,7 +6,36 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed HTTP canary freshness and completeness vetoes — pending Actions
+## Committed HTTP promotion policy-change controls — pending Actions
+
+Both-recipe committed promotion smoke now appends three valid configuration changes
+before the same candidate/request is promoted: reviewer prompt, supported condition
+scope, and null targets with their matching acceptance-policy digest. New connections
+must recover each change and reject the historical context. The real promotion
+service must also reject reassembly at its specific pipeline, coverage or null-target
+gate; a stale registry revision or generic broken fixture cannot satisfy that check.
+Actual admin HTTP must return redacted 409/no-store, preserving both complete heads,
+every promotion event and every qualification journal after client close/reconnect.
+
+Each change and its restoration append exactly one policy event, retaining every
+historical row and every other qualification table. Restoring the original policy
+must recover the identical qualified context without any registry mutation. The
+existing subsequent same-candidate HTTP promotion/rollback remains the positive
+control. No production code, gate, migration, dependency or second policy engine
+changed. New assertions await exact-head Actions; no local tests or builds ran.
+REA: reuse current policy, persisted outcome assembly and the real promotion transaction.
+
+## Committed HTTP canary freshness and completeness vetoes — verified baseline
+
+Exact `dec34269c3f750f49bde7c2631966c95a964b7b8`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42538901835),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42538901543) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42538901536)
+succeeded, including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42538901835/job/128909276571),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42538901835/job/128909276652),
+queue/migration cycles/all four parent upgrades, web-build/dev-stack/lint/types and
+import-contract. This verifies canary vetoes below, not the new policy-change controls,
+independent measurements or full M5 acceptance. Totals not extracted; required reviews remain.
 
 The same synthetic candidate used by the committed HTTP promotion/rollback positive
 control now has seven additional canary populations: reused actual compiled training
@@ -24,8 +53,8 @@ close/reconnect. The original fresh canary must still recover the identical qual
 context, then the same candidate/request must promote and roll back successfully.
 Every rejected outcome remains stored: no score-based cherry-picking or cleanup can
 make the positive control pass. The new partial-only fixture option defaults to the
-existing complete observations. New assertions await exact-head Actions; no local
-tests ran. No production code, policy, migration, dependency or second engine changed.
+existing complete observations. These assertions passed exact-head Actions at
+`dec3426`; no local tests ran. No production code, policy, migration, dependency or second engine changed.
 REA: exercise the existing sample/outcome selector and freshness gates through the
 real authenticated promotion transaction. Fixtures are software mechanics, not gold.
 

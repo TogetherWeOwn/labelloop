@@ -529,6 +529,142 @@ def exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload):
     return len(adverse)
 
 
+def exercise_http_promotion_policy_changes(engine, candidate, qualified, actor, payload):
+    import pytest
+
+    from labelloop_api import qualification_schema
+    from labelloop_api.promotion_service import promote_candidate
+    from labelloop_api.qualification_context_store import (
+        AnnotationOutcomeRef,
+        load_qualification_context,
+    )
+    from labelloop_api.qualification_policy_store import (
+        append_qualification_policy,
+        current_policy_context,
+        load_qualification_policy,
+    )
+    from labelloop_core.qualification import QualificationTargets
+    from labelloop_core.qualification_data import record_sha256
+
+    scope = dict(project_key=candidate.project_id, recipe_key=candidate.recipe_id)
+    with engine.begin() as connection:
+        original = load_qualification_policy(connection, **scope)
+        assert current_policy_context(connection, qualified) == qualified
+    null_targets = QualificationTargets()
+    changed_prompt = "1" * 64 if original.policy.pipeline.prompt_sha256 != "1" * 64 else "2" * 64
+    changes = (
+        (
+            replace(
+                original.policy,
+                pipeline=replace(original.policy.pipeline, prompt_sha256=changed_prompt),
+            ),
+            "audit does not describe the complete pinned acceptance pipeline",
+        ),
+        (
+            replace(
+                original.policy,
+                scope=tuple(
+                    replace(cell, condition=cell.condition + "-changed")
+                    for cell in original.policy.scope
+                ),
+            ),
+            "missing or extra class/source/condition audit coverage",
+        ),
+        (
+            replace(
+                original.policy,
+                targets=null_targets,
+                pipeline=replace(
+                    original.policy.pipeline,
+                    acceptance_policy_sha256=record_sha256(null_targets),
+                ),
+            ),
+            "null or missing qualification targets retain the incumbent",
+        ),
+    )
+    heads = snapshot(engine, candidate.project_id)
+    path = f"/projects/{candidate.project_id}/promotions"
+    arguments = dict(
+        **scope,
+        model_key=candidate.release_id,
+        annotation_release_key=payload["annotation_release_key"],
+        canary_release_key=payload["canary_release_key"],
+        expected_revision=payload["expected_revision"],
+        actor_id=actor,
+        require_fixture_policy=True,
+    )
+    for policy, message in changes:
+        assert policy != original.policy
+        prior = qualification_journals(engine)
+        with engine.begin() as connection:
+            current = load_qualification_policy(connection, **scope)
+            changed = append_qualification_policy(
+                connection,
+                **scope,
+                actor_id=actor,
+                expected_revision=current.revision,
+                policy=policy,
+            )
+        before = qualification_journals(engine)
+        # Configuration is the only intended write. Neither appending it nor a
+        # failed promotion may erase earlier evidence or mutate the other recipe.
+        for name, rows in prior.items():
+            if name == qualification_schema.policy_event.name:
+                assert len(before[name]) == len(rows) + 1
+                assert all(row in before[name] for row in rows)
+            else:
+                assert before[name] == rows
+        with engine.begin() as connection:
+            assert load_qualification_policy(connection, **scope) == changed
+            with pytest.raises(ValueError, match="stale or substituted"):
+                current_policy_context(connection, qualified)
+            # Reassembly must reject the intended gate too, not merely an old
+            # context, stale registry revision or malformed configuration.
+            with pytest.raises(ValueError, match=message):
+                promote_candidate(connection, **arguments)
+        with authenticated_client(engine) as (client, identities, _workers):
+            headers = login(client, identities["admin"][1])
+            response = client.post(path, headers=headers, json=payload)
+            assert response.status_code == 409
+            assert response.json() == {"detail": "registry_change_rejected"}
+            assert response.headers["cache-control"] == "no-store"
+        assert snapshot(engine, candidate.project_id) == heads
+        assert qualification_journals(engine) == before
+        with engine.begin() as connection:
+            restored = append_qualification_policy(
+                connection,
+                **scope,
+                actor_id=actor,
+                expected_revision=changed.revision,
+                policy=original.policy,
+            )
+        after = qualification_journals(engine)
+        for name, rows in before.items():
+            if name == qualification_schema.policy_event.name:
+                assert len(after[name]) == len(rows) + 1
+                assert all(row in after[name] for row in rows)
+            else:
+                assert after[name] == rows
+        with engine.begin() as connection:
+            assert load_qualification_policy(connection, **scope) == restored
+            assert current_policy_context(connection, qualified) == qualified
+            assert (
+                load_qualification_context(
+                    connection,
+                    **scope,
+                    model_key=candidate.release_id,
+                    qualification_key="durable-http-preflight",
+                    annotation=AnnotationOutcomeRef(payload["annotation_release_key"]),
+                    canary=AnnotationOutcomeRef(payload["canary_release_key"]),
+                )
+                == qualified
+            )
+        assert snapshot(engine, candidate.project_id) == heads
+    # The caller promotes this same candidate/request only after all three policy
+    # changes reject and append-only restoration recovers the exact context.
+    return len(changes)
+
+
 def exercise_durable_http_promotion(engine, release, final, context, actor):
     from qualification_context_smoke import _outcome, prepare_sole_final_candidate
 
@@ -591,6 +727,9 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         )
         qualified.require_qualified(candidate, report, comparison, PromotionPolicy(1, 0.0))
     canary_vetoes = exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload)
+    policy_vetoes = exercise_http_promotion_policy_changes(
+        engine, candidate, qualified, actor, payload
+    )
     assert snapshot(engine, release.project_id) == original
     journals = qualification_journals(engine)
 
@@ -673,6 +812,7 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
         "committed_http_adapted_and_quarantined_final_veto_cases": final_test_vetoes,
         "committed_http_reused_partial_and_ambiguous_canary_veto_cases": canary_vetoes,
+        "committed_http_prompt_scope_and_null_target_promotion_veto_cases": policy_vetoes,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,
