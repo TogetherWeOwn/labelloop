@@ -430,13 +430,25 @@ def exercise_annotation_recovery(engine, release, final, context, canary, actor,
         assert annotation_rows(engine) == before
 
         item["http_actor_id"] = append_http_fixture_review(engine, project_id, item)
+        assert item["http_actor_id"] != arguments["actor_id"]
         after = annotation_rows(engine)
         for table in before:
             assert len(after[table]) == len(before[table]) + 1
             assert all(row in after[table] for row in before[table])
             added = next(row for row in after[table] if row not in before[table])
             assert added["asset_id"] == item["asset_id"]
-            assert added["actor_id"] == item["http_actor_id"]
+            if table == completeness_assessment.name:
+                # Unchanged objects inherit the original assessment, not a new
+                # completeness decision attributed to the HTTP session actor.
+                original = next(
+                    row
+                    for row in before[table]
+                    if row["asset_id"] == item["asset_id"] and row["revision"] == 1
+                )
+                assert added == original | {"revision": 2}
+                assert added["actor_id"] == arguments["actor_id"]
+            else:
+                assert added["actor_id"] == item["http_actor_id"]
             if table == review_event.name:
                 assert added["actor_kind"] == "system"
                 assert added["expected_revision"] == 1

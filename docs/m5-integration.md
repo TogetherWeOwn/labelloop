@@ -6,6 +6,27 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Inherited completeness attribution fixture repair — pending Actions
+
+Exact `efa1c6b123865e47ed30e810b1ba5b0508af8d60`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42554622459).
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42554622459/job/128957491304)
+reported **2 failed, 17 passed**: both recipes reached the new committed HTTP
+write's row checks, then incorrectly required the inherited completeness assessment
+to have the HTTP actor. The existing revision writer copies unchanged completeness
+with its original assessor and timestamp; it attributes the new review, revision
+and teacher origin to the session actor. Unit, queue/migration cycles/all four
+parent upgrades, web-build/dev-stack/lint/types/import-contract, CodeQL and gitleaks
+passed, but do not clear failed CI or verify the remaining persisted controls.
+
+The corrected smoke requires distinct original/session actors, exact whole-row
+completeness inheritance except its new revision, and session attribution on all
+new decision/origin rows. All existing row-count, immutable-history and recovery
+controls remain. No production writer, attribution contract, gate, migration,
+dependency or endpoint changed. Corrected assertions await exact-head Actions;
+no local tests ran. REA: follow the existing canonical writer's provenance contract,
+not rewrite original assessment history to match a new caller.
+
 ## Admin fixture-only annotation HTTP — pending Actions
 
 `POST /projects/{project_id}/assets/{asset_id}/fixture-automatic-reviews` uses the
