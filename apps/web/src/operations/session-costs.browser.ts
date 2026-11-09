@@ -1,0 +1,169 @@
+import { readFile } from 'node:fs/promises';
+import { expect, test } from '@playwright/test';
+import type { BudgetPage, BudgetSummary, CostOperation } from './cost-client.ts';
+
+const endpoint = '/api/projects/costs-demo/costs';
+const policy = { monthly_limit: 1_000_000, iteration_limit: 2_000_000, operation_limit: 0, autonomous_spend: false };
+const total = { operation_count: 8, actual: 300_000, confirmed_estimate: 350_000, reserved: 500_000, unconfirmed: 200_000, exposure: 1_000_000, delta: -50_000 };
+const summary: BudgetSummary = {
+  project_id: 'costs-demo', currency: 'USD', unit: 'micro_usd', policy_revision: 1, policy, pause_reason: 'insufficient_credits',
+  month: '2026-11', iteration_id: 'iteration-a', monthly: total, iteration: { ...total, reserved: 600_000, exposure: 1_100_000 },
+};
+const operation: CostOperation = {
+  operation_id: 'operation-a', iteration_id: 'iteration-a', month: '2026-11', price_version: 'private-price-version',
+  estimate: 100_000, actual: null, exposure: 900_000, state: 'unconfirmed', approved_by: null,
+  reserved_autonomously: true, reserved_at: null, kind: null, annotation_job_id: null, review_pause: null,
+};
+const ledger: BudgetPage = {
+  project_id: 'costs-demo', currency: 'USD', unit: 'micro_usd', policy_revision: 1, policy, pause_reason: 'insufficient_credits',
+  operations: [operation, { ...operation, operation_id: 'operation-b', kind: 'LLM review', annotation_job_id: 'Batch <not markup>', review_pause: 'approval_exhausted', state: 'settled', actual: 0, exposure: 0, reserved_at: '2026-11-08T12:00:00.123456Z' }], next_after: null,
+};
+
+for (const width of [1280, 390]) {
+  test.describe(`${width}px session cost transport`, () => {
+    test.use({ viewport: { width, height: 800 } });
+
+    test('mounted supplied view preserves complete summaries, unknowns and read-only commands', async ({ page, context }) => {
+      const requests: URL[] = [];
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      // Invented marker tests cookie transport only, never real authentication.
+      await context.addCookies([{ name: 'fixture-session-marker', value: 'recorded-only', url: 'http://127.0.0.1:4173', httpOnly: true, sameSite: 'Strict' }]);
+      await page.route('**/api/**', async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        requests.push(url);
+        expect(request.method()).toBe('GET');
+        expect(await request.headerValue('cookie')).toContain('fixture-session-marker=recorded-only');
+        expect(url.origin).toBe('http://127.0.0.1:4173');
+        expect([endpoint, `${endpoint}/summary`]).toContain(url.pathname);
+        await route.fulfill({ json: url.pathname.endsWith('/summary') ? summary : ledger });
+      });
+      await page.goto('/operational-fixtures.html?view=costs&state=session');
+      await expect(page.locator('tbody tr')).toHaveCount(2);
+      await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
+      await expect(page.getByRole('meter', { name: 'This iteration · iteration-a' })).toHaveAttribute('aria-valuetext', '55% of limit; $1.10 against $2.00');
+      await expect(page.locator('tbody')).toContainText('Reservation time unavailable');
+      await expect(page.locator('tbody')).toContainText('Operation kind unavailable');
+      await expect(page.locator('tbody')).toContainText('Object unavailable');
+      await expect(page.locator('tbody')).toContainText('Batch <not markup>');
+      await expect(page.locator('tbody')).toContainText('Billing confirmed · review paused: approval exhausted');
+      await expect(page.locator('tbody tr').nth(0)).toContainText('Unconfirmed');
+      await expect(page.locator('tbody tr').nth(1)).toContainText('$0.00');
+      await expect(page.locator('tbody img, tbody a')).toHaveCount(0);
+      await expect(page.locator('tbody')).not.toContainText('Refused');
+      await expect(page.getByRole('button', { name: 'Save limits' })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Resume paid steps' })).toBeDisabled();
+      await expect(page.getByRole('switch', { name: 'Spend without asking' })).toBeDisabled();
+      await expect(page.getByLabel('Monthly limit (USD)')).toBeDisabled();
+      await expect(page.locator('body')).not.toContainText('private-price-version');
+      const download = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Download shown rows CSV' }).click();
+      const file = await download;
+      expect(file.suggestedFilename()).toBe('costs.csv');
+      const path = await file.path();
+      expect(path).not.toBeNull();
+      const csv = await readFile(path, 'utf8');
+      expect(csv.split('\r\n')).toHaveLength(3);
+      expect(csv.split('\r\n')[1]).toContain('"","operation-a","","",""');
+      expect(csv).toContain('"Unconfirmed"');
+      expect(csv).toContain('"$0.00"');
+      expect(csv).not.toContain('private-price-version');
+      expect(requests).toHaveLength(2);
+      expect(requests[0].searchParams.toString()).toBe('month=2026-11&iteration_id=iteration-a');
+      expect(requests[1].searchParams.toString()).toBe('limit=50');
+      expect(errors).toEqual([]);
+    });
+  });
+}
+
+for (const failure of ['expired-summary', 'expired-page', 'foreign-summary', 'foreign-page', 'mixed-policy', 'malformed-page'] as const) {
+  test(`session costs ${failure} hides partial success and retries only on request`, async ({ page }) => {
+    const requests: URL[] = [];
+    const errors: string[] = [];
+    let recovered = false;
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      const isSummary = url.pathname.endsWith('/summary');
+      if (!recovered && ((isSummary && failure === 'expired-summary') || (!isSummary && failure === 'expired-page'))) {
+        await route.fulfill({ status: 401, contentType: 'application/json', body: '{"detail":"private fixture diagnostic"}' });
+      } else if (!recovered && !isSummary && failure === 'malformed-page') {
+        await route.fulfill({ json: { detail: 'private fixture diagnostic' } });
+      } else {
+        const record = isSummary ? summary : ledger;
+        await route.fulfill({ json: { ...record, ...(!recovered && failure === (isSummary ? 'foreign-summary' : 'foreign-page') ? { project_id: 'foreign' } : {}), ...(!recovered && !isSummary && failure === 'mixed-policy' ? { policy_revision: 2 } : {}) } });
+      }
+    });
+    await page.goto('/operational-fixtures.html?view=costs&state=session');
+    await expect(page.getByText('Records could not be loaded. Try again.', { exact: true })).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(0);
+    await expect(page.getByRole('meter')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download shown rows CSV' })).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('private fixture diagnostic');
+    expect(requests).toHaveLength(failure.endsWith('summary') ? 1 : 2);
+    const before = requests.length;
+    recovered = true;
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+    expect(requests).toHaveLength(before + 2);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('session costs empty page retains authoritative totals without asserting nothing paid ran', async ({ page }) => {
+  await page.route('**/api/**', async (route) => {
+    await route.fulfill({ json: new URL(route.request().url()).pathname.endsWith('/summary') ? summary : { ...ledger, operations: [] } });
+  });
+  await page.goto('/operational-fixtures.html?view=costs&state=session');
+  await expect(page.getByText('No operations on this page match this scope and filter.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
+  await expect(page.locator('body')).not.toContainText('Nothing paid has run yet');
+});
+
+test('session costs first page does not replace complete summaries or imply a complete export', async ({ page }) => {
+  const operations: CostOperation[] = Array.from({ length: 50 }, (_, index) => ({ ...operation, operation_id: `page-operation-${index}`, month: '2026-10', iteration_id: 'older-iteration', state: 'cancelled', exposure: 0 }));
+  const requests: URL[] = [];
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    await route.fulfill({ json: url.pathname.endsWith('/summary') ? summary : { ...ledger, operations, next_after: operations[49].operation_id } });
+  });
+  await page.goto('/operational-fixtures.html?view=costs&state=session');
+  await expect(page.locator('tbody tr')).toHaveCount(50);
+  await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
+  await expect(page.getByText('Complete month and iteration summaries. Ledger rows are one independently read page, not a shared snapshot. Refused-attempt history is not included here.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download shown rows CSV' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download CSV', exact: true })).toHaveCount(0);
+  expect(requests).toHaveLength(2);
+});
+
+test('scope replacement cancels the old read and cannot show its late result', async ({ page }) => {
+  let release: (() => void) | undefined;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  let finish: (() => void) | undefined;
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    const replacement = url.pathname.includes('costs-replacement');
+    if (!replacement && url.pathname.endsWith('/summary')) {
+      await delayed;
+      try { await route.fulfill({ json: summary }); } finally { finish?.(); }
+    } else {
+      const record = url.pathname.endsWith('/summary') ? summary : { ...ledger, operations: [{ ...operation, operation_id: 'replacement-only' }] };
+      await route.fulfill({ json: { ...record, project_id: replacement ? 'costs-replacement' : 'costs-demo' } });
+    }
+  });
+  const oldRequest = page.waitForRequest((request) => new URL(request.url()).pathname === `${endpoint}/summary`);
+  await page.goto('/operational-fixtures.html?view=costs&state=session-scope-swap');
+  await oldRequest;
+  await expect(page.getByRole('heading', { name: 'Loading records' })).toBeVisible();
+  await page.getByRole('button', { name: 'Replace cost scope' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await expect(page.locator('tbody')).toContainText('replacement-only');
+  release?.();
+  await finished;
+  await expect(page.locator('tbody')).toContainText('replacement-only');
+  await expect(page.locator('tbody')).not.toContainText('operation-a');
+});
