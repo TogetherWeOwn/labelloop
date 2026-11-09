@@ -190,6 +190,7 @@ def test_admin_metadata_projection_is_redacted_and_does_not_infer_promotion_acto
         "record_id": str(ASSET),
         "revision": 1,
         "sentence": "Recorded a review decision.",
+        "refused": None,
     }
     assert "must-not-leak" not in response.text and "private-decision" not in response.text
 
@@ -553,6 +554,7 @@ def test_budget_metadata_uses_recorded_principal_kind_and_redacts_payloads(
             "record_id": str(PROJECT),
             "revision": 1,
             "sentence": "Recorded a budget event.",
+            "refused": None,
         }
     ]
     for search in (identity, UUID(identity).hex, str(PROJECT)):
@@ -646,6 +648,57 @@ def test_malformed_budget_metadata_fails_closed(http, store, field, value):
         assert response.json() == {"detail": "audit_state_rejected"}
 
 
+@pytest.mark.parametrize(
+    "action,refused",
+    [
+        ("approval_exhausted", True),
+        ("policy", None),
+        ("review_request_claim", None),
+        ("insufficient_credits", None),
+        ("budget_exceeded", None),
+        ("private-action", None),
+    ],
+)
+def test_refusal_requires_exact_durable_budget_action(http, store, action, refused):
+    with store.engine.begin() as connection:
+        identity = budget(connection, 60)
+        connection.execute(
+            sa.update(budgets.event)
+            .where(budgets.event.c.id == identity)
+            .values(
+                action=action,
+                record={"refused": True, "reason": "approval_exhausted", "private": "hidden"},
+            )
+        )
+        review(connection, 70, decision="approval_exhausted", reason="approval_exhausted")
+        before = connection.execute(sa.select(budgets.event)).all()
+    login(http, "admin")
+    response = http.get(PATH, params={"kind": "Budget", "limit": 1})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    page = response.json()
+    assert page["total"] == 1 and page["next_after"] is None
+    event = page["events"][0]
+    assert event["id"] == identity and event["refused"] is refused
+    assert event["sentence"] == (
+        "Refused a review request: approval exhausted." if refused else "Recorded a budget event."
+    )
+    exported = http.get(PATH + "/export", params={"kind": "Budget"})
+    assert exported.status_code == 200
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"]
+    assert "hidden" not in exported.text and "private-operation" not in exported.text
+    assert http.get(PATH, params={"search": "approval_exhausted"}).json()["total"] == 0
+    others = http.get(PATH, params={"kind": "Review"}).json()["events"]
+    assert all(other["refused"] is None for other in others)
+    with store.engine.connect() as connection:
+        assert connection.execute(sa.select(budgets.event)).all() == before
+    http.cookies.clear()
+    login(http)
+    assert http.get(PATH, params={"kind": "Budget"}).json()["total"] == 0
+    assert http.get(PATH + "/export", params={"kind": "Budget"}).text == ""
+    assert http.get(PATH, params={"after": f"Budget/{identity}"}).status_code == 409
+
+
 def test_openapi_has_typed_metadata_only_contract():
     contract = app.openapi()
     schema = contract["paths"]["/projects/{project_key}/audit-log"]["get"]["responses"]["200"][
@@ -663,4 +716,6 @@ def test_openapi_has_typed_metadata_only_contract():
         "record_id",
         "revision",
         "sentence",
+        "refused",
     }
+    assert properties["refused"]["anyOf"] == [{"type": "boolean"}, {"type": "null"}]

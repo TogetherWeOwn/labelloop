@@ -1,6 +1,8 @@
 """Committed review/promotion history through real HTTP on disposable PostgreSQL."""
 
 import json
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import sqlalchemy as sa
 from registry_http_smoke import authenticated_client, login, qualification_journals, snapshot
@@ -38,6 +40,25 @@ def exercise_audit_reads(engine, project_key):
         expected_revision=revision or 0,
         policy=BudgetPolicy(0, 0, 0),
     )
+    # Synthetic journal input tests PostgreSQL projection/recovery, not emission
+    # by a real paid attempt. The zero-limit policy and every ledger row stay put.
+    refusal_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            sa.insert(budgets.event).values(
+                id=refusal_id,
+                project_id=project_key,
+                operation_id=None,
+                principal_id=account["id"],
+                principal_kind=account["kind"],
+                principal_role=account["role"],
+                principal_version="synthetic-audit-fixture",
+                policy_revision=(revision or 0) + 1,
+                action="approval_exhausted",
+                record={"private": "must-not-leak"},
+                occurred_at=datetime.now(UTC),
+            )
+        )
     budget_before = ledger.snapshot(project_key)
 
     def records():
@@ -124,6 +145,8 @@ def exercise_audit_reads(engine, project_key):
             raise AssertionError("audit pagination did not terminate")
         assert len(events) == len(expected)
         assert {(event["kind"], event["id"]) for event in events} == set(expected)
+        refusal = next(event for event in events if event["id"] == refusal_id)
+        assert refusal["kind"] == "Budget" and refusal["refused"] is True
         for event in events:
             saved = expected[(event["kind"], event["id"])]
             assert (
@@ -144,7 +167,15 @@ def exercise_audit_reads(engine, project_key):
                     ).scalar_one()
                 assert event["record_id"] == str(project_id)
                 assert event["revision"] == saved["policy_revision"]
-                assert event["sentence"] == "Recorded a budget event."
+                refused = True if saved["action"] == "approval_exhausted" else None
+                assert event["refused"] is refused
+                assert event["sentence"] == (
+                    "Refused a review request: approval exhausted."
+                    if refused
+                    else "Recorded a budget event."
+                )
+            else:
+                assert event["refused"] is None
             account = directory.get(event["actor_id"])
             compatible = account is not None and (
                 event["actor_kind"] == "unknown"
@@ -165,6 +196,7 @@ def exercise_audit_reads(engine, project_key):
                 "record_id",
                 "revision",
                 "sentence",
+                "refused",
             }
         named_promotion = next(
             event for event in events if event["kind"] == "Promotion" and event["actor_name"]
@@ -172,6 +204,8 @@ def exercise_audit_reads(engine, project_key):
         export = client.get(path + "/export")
         assert export.status_code == 200
         assert [json.loads(line) for line in export.text.splitlines()] == events
+        assert "must-not-leak" not in export.text
+        assert "synthetic-audit-fixture" not in export.text
         # Filter complete committed history before counts/cursors, and preserve
         # exact page/export equality on the real PostgreSQL UUID representation.
         for params, matching in (

@@ -6,7 +6,40 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Budget audit metadata — pending Actions
+## Explicit refusal metadata — pending Actions
+
+Audit metadata now reports nullable `refused`: only the budget writer's exact
+`approval_exhausted` action yields `true` and a fixed redacted refusal sentence.
+Every other action and review/promotion record yields `null` (unknown, never
+success). Neither private payload text nor a similar action name is authority.
+The writer already commits this event before raising its refusal; this change
+adds no event producer and does not claim that all refused attempts are recorded.
+Authorization, search/count/cursor/export and historical principal semantics are
+unchanged. No new schema, migration, dependency, paid call or policy command.
+
+New session cases cover the explicit action, unknown/other actions, payload and
+review-decision spoofing, export parity, hidden reviewer access and non-mutation.
+Both-recipe PostgreSQL smoke commits an explicitly synthetic refusal journal row,
+then checks typed true/null recovery, redaction, pagination/export and immutable
+history through real HTTP. That fixture proves projection, not actual paid-attempt
+emission. New assertions await exact-head Actions; full operational mounting,
+connection/refused-attempt coverage, real navigation and expanded restore remain
+incomplete. REA: reuse the existing immutable budget journal and authorized query.
+
+## Budget audit metadata — verified baseline
+
+Exact `189c4cfa3b23463decc11c87c1b4364007f5aec6`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42575242438),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42575242438/job/129021405848),
+[both-recipe ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42575242438/job/129021405882),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42575242005) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42575242074) succeeded.
+Queue/migration cycles/all four parent upgrades, dev-stack/web-build and
+lint/types/import-contract passed. Budget audit/session/recovery assertions below
+are verified, superseding their historical pending labels. Totals not extracted;
+this is not verification of the new refusal slice or full milestone acceptance.
+
+## Budget audit metadata — historical pending report
 
 The existing audit query/export now includes admin-visible metadata from the
 immutable budget journal. Authorization still selects sources before search,

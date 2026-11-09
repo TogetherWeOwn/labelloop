@@ -41,6 +41,8 @@ class AuditMetadata(BaseModel):
     record_id: UUID
     revision: Annotated[int, Field(ge=0)]
     sentence: str
+    # Only explicit durable refusal events are classified; null is not success.
+    refused: bool | None
 
 
 class AuditMetadataPage(BaseModel):
@@ -69,6 +71,7 @@ def visible_events(project_id, project_key, actor, kind, since, through, actor_k
             db.review_event.c.actor_kind,
             uuid_key(db.review_event.c.asset_id).label("record_id"),
             db.review_event.c.expected_revision.label("revision"),
+            sa.cast(sa.null(), sa.Boolean).label("refused"),
         )
         .join(db.source_asset)
         .where(db.source_asset.c.project_id == project_id)
@@ -84,6 +87,7 @@ def visible_events(project_id, project_key, actor, kind, since, through, actor_k
                 sa.literal("unknown").label("actor_kind"),
                 uuid_key(models.promotion_event.c.recipe_id).label("record_id"),
                 models.promotion_event.c.revision,
+                sa.cast(sa.null(), sa.Boolean).label("refused"),
             ).where(models.promotion_event.c.project_id == project_id)
         )
         queries.append(
@@ -95,6 +99,12 @@ def visible_events(project_id, project_key, actor, kind, since, through, actor_k
                 budgets.event.c.principal_kind.label("actor_kind"),
                 uuid_key(db.project.c.id).label("record_id"),
                 budgets.event.c.policy_revision.label("revision"),
+                # This writer commits the event before raising BudgetRefused.
+                # Unknown actions/payload text never imply refusal or success.
+                sa.case(
+                    (budgets.event.c.action == "approval_exhausted", sa.true()),
+                    else_=sa.cast(sa.null(), sa.Boolean),
+                ).label("refused"),
             )
             .join(db.project, db.project.c.project_key == budgets.event.c.project_id)
             .where(budgets.event.c.project_id == project_key, db.project.c.id == project_id)
@@ -215,7 +225,12 @@ def load_audit_page(
             actor_name=row["actor_name"],
             record_id=UUID(row["record_id"]),
             revision=row["revision"],
-            sentence=SENTENCES[row["kind"]],
+            sentence=(
+                "Refused a review request: approval exhausted."
+                if row["refused"] is True
+                else SENTENCES[row["kind"]]
+            ),
+            refused=row["refused"],
         )
         for row in records[:limit]
     ]
