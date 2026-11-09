@@ -6,7 +6,39 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Current-champion automatic annotation orchestration — pending Actions
+## Committed fixture annotation recovery — pending Actions
+
+The both-recipe PostgreSQL smoke now separately commits synthetic completeness and
+completed proposal inputs, then calls the internal current-champion annotation
+service in independent transactions for positive and negative canonical revisions.
+Closed-connection readback must recover the exact original policy, qualification,
+release digest, final evaluation, both contributing proposal IDs and deduplicated
+teacher lineage. A later authenticated champion rollback must leave that historical
+annotation evidence unchanged, rather than substitute the restored champion.
+
+Stale registry/annotation revisions, a missing later proposal and an injected
+origin-write failure must preserve every annotation revision, review event,
+completeness row and teacher origin. Each success must append exactly one row to
+each table while preserving all historical and unrelated rows. Registry heads and
+all other qualification journals must remain unchanged. New assertions await
+exact-head Actions; no local tests ran. These are internal fixture-policy storage
+mechanics, not HTTP annotation authorization, real inference/reviewer execution,
+source/condition truth, independent measurements or domain gold. Real automatic
+annotation remains closed. No production code, schema, dependency or gate changed.
+
+## Current-champion automatic annotation orchestration — verified baseline
+
+Exact `ce1112ededbe3364717f1c99c4708e01cb495bd7`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42547388775),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42547388775/job/128935251616),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42547388775/job/128935251694),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42547388766) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42547388593)
+succeeded, including migration round trips/all four parent upgrades, queue,
+web-build and dev-stack. This verifies the previously pending service and scoped
+remediation controls below, not the new committed annotation extension or complete
+M5 acceptance. A missing remediation binding rejects affected cells; unaffected
+cells retain acceptance, with nonempty coverage required for both paths.
 
 The internal `automatic_review_service.append_current_review` locks the selected
 project, verifies the asset belongs to it, and reuses the existing current-champion
@@ -28,9 +60,10 @@ fixture savepoint, not committed annotation recovery or HTTP authorization.
 
 Authentication, original reviewer execution, authoritative source/condition scope
 and complete influence selection remain caller obligations. No route constructs
-this port from submitted claims; real automatic annotation remains closed. New
-assertions await Actions; no local tests ran. REA: reuse the recorded promotion
-reader and atomic annotation writer, not another policy or provenance engine.
+this port from submitted claims; real automatic annotation remains closed. These
+savepoint assertions are verified at the baseline above; the committed extension
+remains pending. REA: reuse the recorded promotion reader and atomic annotation
+writer, not another policy or provenance engine.
 
 ## Committed HTTP promotion canonical-group controls — verified baseline
 

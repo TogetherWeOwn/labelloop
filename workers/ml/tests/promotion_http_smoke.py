@@ -980,6 +980,23 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         )
     assert snapshot(engine, release.project_id) == promoted
     assert qualification_journals(engine) == journals
+    from annotation_recovery_smoke import (
+        assert_annotation_recovery,
+        exercise_annotation_recovery,
+    )
+
+    recovery = exercise_annotation_recovery(
+        engine, candidate, report, persisted, canary, actor, expected.revision
+    )
+    assert snapshot(engine, release.project_id) == promoted
+    after_annotation = qualification_journals(engine)
+    for table in journals:
+        if table == "qualification_generated_label_origin":
+            assert len(after_annotation[table]) == len(journals[table]) + 2
+            assert all(row in after_annotation[table] for row in journals[table])
+        else:
+            assert after_annotation[table] == journals[table]
+    journals = after_annotation
     with authenticated_client(engine) as (client, identities, _workers):
         headers = login(client, identities["admin"][1])
         for revision in (before.revision, expected.revision):
@@ -1012,6 +1029,8 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
     assert event["actor_id"] == rollback_actor and event["action"] == "rollback"
     assert event["record"]["after"] == json_record(restored)
     assert qualification_journals(engine) == journals
+    # Historical annotation policy/teacher evidence survives a later champion change.
+    assert_annotation_recovery(engine, candidate, report, persisted, recovery)
     return {
         "scope": "fixture-only copied metrics, not independent measurements or domain quality",
         "committed_http_support_and_critical_slice_veto_cases": quality_vetoes,
@@ -1020,6 +1039,9 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_prompt_scope_and_null_target_promotion_veto_cases": policy_vetoes,
         "committed_http_current_canonical_group_promotion_veto_cases": group_vetoes,
         "internal_fixture_annotation_service_consumed_committed_champion_promotion": True,
+        "committed_positive_and_negative_annotations_recovered_after_reconnect": True,
+        "original_policy_and_proposal_teacher_evidence_survived_champion_rollback": True,
+        "failed_annotation_origin_and_stale_replays_preserved_all_annotation_rows": True,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,
         "complete_metadata_principal_and_selected_qualification_recovered": True,
         "failed_promotion_and_rollback_events_preserved_both_heads_and_journals": True,
