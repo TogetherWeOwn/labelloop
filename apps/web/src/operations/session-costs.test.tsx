@@ -4,7 +4,7 @@ import type { BudgetPage, BudgetSummary, CostOperation } from './cost-client.ts'
 import type { CostCommands, CostsRecord } from './contracts.ts';
 import { CostsView } from './CostsView.tsx';
 import { ledgerCsv, scopedEntries, totals } from './records.ts';
-import { sessionCostsRecord } from './session-costs.ts';
+import { appendSessionCosts, sessionCostsRecord } from './session-costs.ts';
 
 const project = 'project-a';
 const query = { month: '2026-11', iteration_id: 'iteration-a' };
@@ -117,6 +117,40 @@ describe('session cost display contract', () => {
     const fetch = responses(where === 'summary' ? { ...summary, project_id: 'foreign' } : summary, where === 'page' ? { ...page, project_id: 'foreign' } : page);
     await expect(read()).rejects.toThrow(/^Cost records unavailable$/);
     expect(fetch).toHaveBeenCalledTimes(where === 'summary' ? 1 : 2);
+  });
+
+  it('appends distinct independent pages but retains the newest server summaries without summing rows', async () => {
+    responses();
+    const first = await read();
+    const next = { ...first, next_after: null, summaries: { ...first.summaries, monthly: { ...total, operation_count: 9 } }, entries: [{ ...first.entries[0], operation_id: 'operation-b' }] };
+    const combined = appendSessionCosts(first, next);
+    expect(combined.entries.map((entry) => entry.operation_id)).toEqual(['operation-a', 'operation-b']);
+    expect(combined).toMatchObject({ next_after: null, summaries: { monthly: { ...total, operation_count: 9 } } });
+    expect(first.entries).toHaveLength(1);
+    expect(first.next_after).toBe('operation-a');
+  });
+
+  it.each([
+    { project_id: 'foreign' }, { month: '2026-10' }, { iteration_id: 'foreign' }, { revision: 2 },
+    { pause_reason: 'estimate_overrun' as const }, { policy: { ...policy, monthly_limit: 0 } },
+    { policy: { ...policy, iteration_limit: null } }, { policy: { ...policy, operation_limit: null } },
+    { policy: { ...policy, autonomous_spend: true } },
+  ])('rejects changed page context without mutating loaded rows: %j', async (change) => {
+    responses();
+    const first = await read();
+    const next = { ...first, ...change, entries: [{ ...first.entries[0], operation_id: 'operation-b' }] };
+    expect(() => appendSessionCosts(first, next)).toThrow(/^Cost records unavailable$/);
+    expect(first.entries).toHaveLength(1);
+  });
+
+  it('rejects duplicate rows, continuation after the end and more than 10,000 retained rows', async () => {
+    responses();
+    const first = await read();
+    expect(() => appendSessionCosts(first, first)).toThrow(/^Cost records unavailable$/);
+    expect(() => appendSessionCosts({ ...first, next_after: null }, first)).toThrow(/^Cost records unavailable$/);
+    const full = { ...first, entries: Array.from({ length: 10_000 }, (_, index) => ({ ...first.entries[0], operation_id: `operation-${index}` })) };
+    expect(appendSessionCosts({ ...full, entries: full.entries.slice(0, -1) }, { ...first, entries: [full.entries[9999]] }).entries).toHaveLength(10_000);
+    expect(() => appendSessionCosts(full, first)).toThrow(/^Cost records unavailable$/);
   });
 
   it('forwards the same cancellation signal to both reads and never retries an expired session', async () => {

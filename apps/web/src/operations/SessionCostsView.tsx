@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CostsRecord, CostScope, Role, ViewState } from './contracts.ts';
 import { CostsView } from './CostsView.tsx';
-import { sessionCostsRecord } from './session-costs.ts';
+import { appendSessionCosts, sessionCostsRecord } from './session-costs.ts';
 
 type Props = { project: string; month: string; iteration: string; role: Role; scope: CostScope };
 
@@ -13,16 +13,34 @@ export function SessionCostsView(props: Props) {
 
 function SessionCostsRead({ project, month, iteration, role, scope }: Props) {
   const [attempt, setAttempt] = useState(0);
+  const [after, setAfter] = useState<string | null>(null);
+  const [pageStatus, setPageStatus] = useState<'idle' | 'pending' | 'failed'>('idle');
   const [state, setState] = useState<ViewState<CostsRecord>>({ status: 'loading' });
-  const refresh = () => { setState({ status: 'loading' }); setAttempt((value) => value + 1); };
+  const loaded = useRef<CostsRecord | null>(null);
+  const refresh = () => { loaded.current = null; setAfter(null); setPageStatus('idle'); setState({ status: 'loading' }); setAttempt((value) => value + 1); };
   useEffect(() => {
     const controller = new AbortController();
-    void sessionCostsRecord(project, { month, iteration_id: iteration }, {}, controller.signal).then((record) => {
-      if (!controller.signal.aborted) setState({ status: 'ready', data: record, updatedAt: new Date().toISOString(), stale: false });
+    void sessionCostsRecord(project, { month, iteration_id: iteration }, after === null ? {} : { after }, controller.signal).then((record) => {
+      if (controller.signal.aborted) return;
+      const combined = after === null ? record : loaded.current === null ? null : appendSessionCosts(loaded.current, record);
+      if (combined === null) throw new Error('Cost records unavailable');
+      loaded.current = combined;
+      setState({ status: 'ready', data: combined, updatedAt: new Date().toISOString(), stale: false });
+      setPageStatus('idle');
     }).catch(() => {
-      if (!controller.signal.aborted) setState({ status: 'error', retry: () => { setState({ status: 'loading' }); setAttempt((value) => value + 1); } });
+      if (controller.signal.aborted) return;
+      if (after !== null) setPageStatus('failed');
+      else setState({ status: 'error', retry: () => { setState({ status: 'loading' }); setAttempt((value) => value + 1); } });
     });
     return () => controller.abort();
-  }, [project, month, iteration, attempt]);
-  return <CostsView state={state} readId={attempt} role={role} scope={scope} onRefresh={refresh} />;
+  }, [project, month, iteration, after, attempt]);
+  return <CostsView state={state} readId={attempt} role={role} scope={scope} onRefresh={refresh} paging={{
+    pending: pageStatus === 'pending', failed: pageStatus === 'failed',
+    onMore: () => {
+      const record = loaded.current;
+      if (pageStatus !== 'idle' || record?.source !== 'session' || record.next_after === null) return;
+      setPageStatus('pending'); setAfter(record.next_after);
+    },
+    onRetry: () => { setPageStatus('pending'); setAttempt((value) => value + 1); },
+  }} />;
 }

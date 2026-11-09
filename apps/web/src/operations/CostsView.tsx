@@ -5,13 +5,15 @@ import { Facts, Notice, PaidPause, TableRegion, Utc, ViewBoundary } from './shar
 
 const kinds: readonly OperationKind[] = ['Training', 'LLM review', 'Auto-annotation', 'Predict'];
 
-export function CostsView({ state, readId, role, scope, commands, onRefresh }: {
+type CostPaging = { pending: boolean; failed: boolean; onMore: () => void; onRetry: () => void };
+
+export function CostsView({ state, readId, role, scope, commands, onRefresh, paging }: {
   // Advance only after a successful authoritative read, even if revision is unchanged.
-  state: ViewState<CostsRecord>; readId: string | number; role: Role; scope: CostScope; commands?: CostCommands; onRefresh: () => void;
+  state: ViewState<CostsRecord>; readId: string | number; role: Role; scope: CostScope; commands?: CostCommands; onRefresh: () => void; paging?: CostPaging;
 }) {
   return <section className="operations"><header className="phead"><div><h1>Costs. <span>Nothing paid runs without an estimate.</span></h1>
     {role === 'reviewer' && <p>Read-only. Only an admin can manage spending policy.</p>}</div></header>
-    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, role, record.source])} record={record} readId={readId} role={role} scope={scope} stale={stale} commands={record.source === 'session' ? undefined : commands} onRefresh={onRefresh} />}</ViewBoundary>
+    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, role, record.source])} record={record} readId={readId} role={role} scope={scope} stale={stale} commands={record.source === 'session' ? undefined : commands} onRefresh={onRefresh} paging={paging} />}</ViewBoundary>
   </section>;
 }
 
@@ -27,8 +29,8 @@ function BudgetMeter({ label, used, limit }: { label: string; used: number; limi
       {percent > 80 && <p>{exhausted ? 'At or above the limit.' : `You've used ${percentLabel}% of this limit.`}</p>}</> : <p>Limit not set · paid steps unavailable.</p>}</div>;
 }
 
-function CostsContent({ record, readId, role, scope, stale, commands, onRefresh }: {
-  record: CostsRecord; readId: string | number; role: Role; scope: CostScope; stale: boolean; commands?: CostCommands; onRefresh: () => void;
+function CostsContent({ record, readId, role, scope, stale, commands, onRefresh, paging }: {
+  record: CostsRecord; readId: string | number; role: Role; scope: CostScope; stale: boolean; commands?: CostCommands; onRefresh: () => void; paging?: CostPaging;
 }) {
   const [kind, setKind] = useState<OperationKind | null>(null);
   const command = useCostCommand(readId, stale, commands, onRefresh);
@@ -37,7 +39,7 @@ function CostsContent({ record, readId, role, scope, stale, commands, onRefresh 
   const iteration = record.source === 'session' ? record.summaries.iteration : totals(record.entries.filter((entry) => entry.project_id === record.project_id && entry.iteration_id === record.iteration_id));
   const entries = scopedEntries(record, scope).filter((entry) => kind === null || entry.kind === kind);
   return <div className="stack"><p className="label">{record.month} · USD · prices {record.price_version ?? 'per operation; version unavailable in this view'} · {scope.kind}: {scope.id}</p>
-    {record.source === 'session' && <p>Complete month and iteration summaries. Ledger rows are one independently read page, not a shared snapshot. Refused-attempt history is not included here.</p>}
+    {record.source === 'session' && <p>Complete month and iteration summaries. Ledger rows are independently read pages, not a shared snapshot. Refused-attempt history is not included here.</p>}
     <PaidPause reason={record.pause_reason}>{role === 'admin' && <button type="button" className="pill ghost" disabled={command.disabled} onClick={() => { if (commands) void command.execute(() => commands.resumePaid(record.revision)); }}>Resume paid steps</button>}</PaidPause>
     <div className="tiles">
       <BudgetMeter label="Spent and committed this month" used={month.exposure} limit={record.policy.monthly_limit} />
@@ -62,6 +64,12 @@ function CostsContent({ record, readId, role, scope, stale, commands, onRefresh 
           <td>{entry.state === 'refused' ? <span className="tag danger">{approvalLabel(entry)}</span> : approvalLabel(entry)}</td>
           <td>{usd(entry.estimate)}</td><td>{actualCostLabel(entry)}</td><td>{entry.result}</td>
         </tr>)}</tbody></table></TableRegion>}
+        {record.source === 'session' && paging && <>
+          <p className="label">{record.entries.length} loaded operations · filters apply to loaded rows only</p>
+          {record.next_after !== null && <button className="pill ghost audit-more" aria-disabled={stale || paging.pending || paging.failed} onClick={() => { if (!stale && !paging.pending && !paging.failed) paging.onMore(); }}>Show 50 more operations</button>}
+          {paging.pending && <p role="status">Loading more operations…</p>}
+          {paging.failed && <Notice tone="danger"><p role="alert">More operations could not be loaded. Existing operations are retained. Refresh records if policy changed.</p><button className="pill ghost" disabled={stale} onClick={paging.onRetry}>Retry loading more operations</button><button className="pill ghost" disabled={stale} onClick={onRefresh}>Refresh records</button></Notice>}
+        </>}
       </section>
     </div>
   </div>;

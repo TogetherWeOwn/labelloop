@@ -135,11 +135,90 @@ test('session costs first page does not replace complete summaries or imply a co
   await page.goto('/operational-fixtures.html?view=costs&state=session');
   await expect(page.locator('tbody tr')).toHaveCount(50);
   await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
-  await expect(page.getByText('Complete month and iteration summaries. Ledger rows are one independently read page, not a shared snapshot. Refused-attempt history is not included here.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Complete month and iteration summaries. Ledger rows are independently read pages, not a shared snapshot. Refused-attempt history is not included here.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Download shown rows CSV' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Download CSV', exact: true })).toHaveCount(0);
   expect(requests).toHaveLength(2);
 });
+
+const firstPageOperations: CostOperation[] = Array.from({ length: 50 }, (_, index) => ({ ...operation, operation_id: `loaded-${index}` }));
+const firstPage: BudgetPage = { ...ledger, operations: firstPageOperations, next_after: firstPageOperations[49].operation_id };
+
+for (const width of [1280, 390]) {
+  test(`session cost paging at ${width}px follows server cursor and exports only loaded rows`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const requests: URL[] = [];
+    let release: (() => void) | undefined;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      if (url.pathname.endsWith('/summary')) await route.fulfill({ json: summary });
+      else if (url.searchParams.has('after')) {
+        expect(url.searchParams.get('after')).toBe(firstPage.next_after);
+        await delayed;
+        await route.fulfill({ json: { ...ledger, operations: [{ ...operation, operation_id: 'last-loaded' }] } });
+      } else await route.fulfill({ json: firstPage });
+    });
+    await page.goto('/operational-fixtures.html?view=costs&state=session');
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    expect(requests).toHaveLength(2);
+    await page.getByRole('button', { name: 'Training', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click();
+    await expect(page.getByText('Loading more operations…', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show 50 more operations', exact: true })).toHaveAttribute('aria-disabled', 'true');
+    await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click();
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    release?.();
+    await expect(page.locator('tbody tr')).toHaveCount(51);
+    await expect(page.getByRole('button', { name: 'Show 50 more operations', exact: true })).toHaveCount(0);
+    await expect(page.getByText('51 loaded operations · filters apply to loaded rows only', { exact: true })).toBeVisible();
+    await expect(page.getByRole('meter', { name: 'Spent and committed this month' })).toHaveAttribute('aria-valuetext', '100% of limit; $1.00 against $1.00');
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download shown rows CSV' }).click();
+    const file = await download;
+    const path = await file.path();
+    expect(path).not.toBeNull();
+    const csv = await readFile(path, 'utf8');
+    expect(csv.split('\r\n')).toHaveLength(52);
+    expect(csv).toContain('last-loaded');
+    expect(requests).toHaveLength(4);
+  });
+}
+
+for (const failure of ['expired', 'duplicate', 'changed-policy', 'foreign'] as const) {
+  test(`session cost paging ${failure} retains loaded rows and retries only explicitly`, async ({ page }) => {
+    const requests: URL[] = [];
+    let recovered = false;
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      if (url.pathname.endsWith('/summary')) await route.fulfill({ json: summary });
+      else if (!url.searchParams.has('after')) await route.fulfill({ json: firstPage });
+      else if (!recovered && failure === 'expired') await route.fulfill({ status: 401, json: { detail: 'private paging diagnostic' } });
+      else await route.fulfill({ json: {
+        ...ledger, operations: [{ ...operation, operation_id: !recovered && failure === 'duplicate' ? 'loaded-0' : 'last-loaded' }],
+        ...(!recovered && failure === 'changed-policy' ? { policy_revision: 2 } : {}),
+        ...(!recovered && failure === 'foreign' ? { project_id: 'foreign' } : {}),
+      } });
+    });
+    await page.goto('/operational-fixtures.html?view=costs&state=session');
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    await page.getByRole('button', { name: 'Show 50 more operations', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('More operations could not be loaded');
+    await expect(page.locator('tbody tr')).toHaveCount(50);
+    await expect(page.locator('body')).not.toContainText('private paging diagnostic');
+    expect(requests).toHaveLength(4);
+    recovered = true;
+    await page.getByRole('button', { name: 'Retry loading more operations', exact: true }).click();
+    await expect(page.locator('tbody tr')).toHaveCount(51);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(requests).toHaveLength(6);
+    expect(requests[3].searchParams.get('after')).toBe(requests[5].searchParams.get('after'));
+  });
+}
 
 test('scope replacement cancels the old read and cannot show its late result', async ({ page }) => {
   let release: (() => void) | undefined;

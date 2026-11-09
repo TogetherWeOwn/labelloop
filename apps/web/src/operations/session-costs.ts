@@ -1,6 +1,19 @@
 import type { CostsRecord } from './contracts.ts';
 import { costClient, type CostOperation, type CostReadQuery, type CostSummaryQuery } from './cost-client.ts';
 
+// Loaded pages are independent reads, never a reconstructed ledger snapshot.
+export function appendSessionCosts(previous: CostsRecord, next: CostsRecord): CostsRecord {
+  if (previous.source !== 'session' || next.source !== 'session'
+    || previous.project_id !== next.project_id || previous.month !== next.month || previous.iteration_id !== next.iteration_id
+    || previous.revision !== next.revision || previous.pause_reason !== next.pause_reason
+    || previous.policy.monthly_limit !== next.policy.monthly_limit || previous.policy.iteration_limit !== next.policy.iteration_limit
+    || previous.policy.operation_limit !== next.policy.operation_limit || previous.policy.autonomous_spend !== next.policy.autonomous_spend
+    || previous.next_after === null) throw new Error('Cost records unavailable');
+  const entries = [...previous.entries, ...next.entries];
+  if (entries.length > 10_000 || new Set(entries.map((entry) => entry.operation_id)).size !== entries.length) throw new Error('Cost records unavailable');
+  return { ...next, entries };
+}
+
 const results: Record<CostOperation['state'], string> = {
   reserved: 'Reserved', dispatched: 'Dispatched', unconfirmed: 'Billing unconfirmed',
   settled: 'Billing confirmed', cancelled: 'Cancelled', insufficient_credits: 'Paid steps paused: insufficient credits',
@@ -8,7 +21,7 @@ const results: Record<CostOperation['state'], string> = {
 
 // Both reads are authorized and validated by the existing fixed-route client.
 // Matching policy is not a ledger snapshot: no cross-read/page total is inferred.
-export async function sessionCostsRecord(project: string, summaryQuery: CostSummaryQuery, pageQuery: CostReadQuery, signal: AbortSignal): Promise<CostsRecord> {
+export async function sessionCostsRecord(project: string, summaryQuery: CostSummaryQuery, pageQuery: CostReadQuery, signal: AbortSignal): Promise<Extract<CostsRecord, { source: 'session' }>> {
   const client = costClient(project);
   const summary = await client.summary(summaryQuery, signal);
   const page = await client.query(pageQuery, signal);
