@@ -16,6 +16,7 @@ from minio import Minio
 from labelloop_api.annotation_reads import router as annotation_router
 from labelloop_api.auth import authentication_boundary, router, validation_error
 from labelloop_api.automatic_review_api import router as automatic_review_router
+from labelloop_api.budget_reads import router as budget_reads_router
 from labelloop_api.registry_api import router as registry_router
 
 app = FastAPI(title="Labelloop", version="0.0.0", docs_url=None, redoc_url=None, openapi_url=None)
@@ -25,6 +26,7 @@ app.include_router(router)
 app.include_router(registry_router)
 app.include_router(annotation_router)
 app.include_router(automatic_review_router)
+app.include_router(budget_reads_router)
 logger = logging.getLogger(__name__)
 
 

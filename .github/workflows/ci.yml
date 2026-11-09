@@ -332,7 +332,7 @@ jobs:
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
       - name: Budget ledger PostgreSQL races, restart and atomic rollback
-        run: uv run pytest apps/api/tests/test_budget_store.py -v
+        run: uv run pytest apps/api/tests/test_budget_store.py apps/api/tests/test_budget_reads.py -v
         env:
           LABELLOOP_BUDGET_POSTGRES: "1"
       - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence

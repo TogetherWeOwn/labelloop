@@ -6,7 +6,31 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## HTTP annotation current-policy vetoes — pending Actions
+## Authenticated durable cost read — pending Actions
+
+The admin-only `/projects/{project_key}/costs` read consumes existing policy/pause
+and ledger records in one budget-head-locked transaction. Typed bounded pages
+preserve integer micro-USD, nullable actuals, confirmed zero and core exposure;
+private intent/provider evidence is excluded. Missing/unconfigured scopes and
+malformed ledger state fail closed. Position cursors never authorize access and
+policy revision is not misrepresented as a ledger snapshot version. This is a read
+port, not the complete UI projection, refused-attempt history, policy command or
+spend grant. Session/role, paging, substitution, redaction/rollback and disposable
+PostgreSQL recovery controls await exact-head Actions; no local tests ran. The
+existing Actions budget step includes the new controls. No migration/dependency,
+paid call or second budget engine. See [operational boundary](operations-ui.md).
+
+## HTTP annotation current-policy vetoes — verified baseline
+
+Exact `268cc90b6e11ba26d716966be00c8211db111ab0`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42559379134),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42559379134/job/128972243925),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42559379134/job/128972243903),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42559378727) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42559378707)
+succeeded. Queue/migration cycles/all four parents, web-build/dev-stack and
+lint/types/import-contract passed. The HTTP policy controls below are verified,
+not the new cost port or complete M5 acceptance. Totals not extracted.
 
 Both recipes now submit otherwise-valid admin-session/CSRF annotation requests for
 positive and negative sources after each separately committed prompt, condition-scope
@@ -20,8 +44,8 @@ The identical HTTP requests must succeed before policy changes and after append-
 restoration. These positive controls use the existing borrowed-connection fixture
 adapter and roll back; they are not new durable annotation or execution evidence.
 One shared payload builder keeps success and rejection inputs identical. No production
-code, gate, endpoint, migration or dependency changed. New controls await exact-head
-Actions; no local tests ran. REA: reuse the delivered HTTP/session and atomic
+code, gate, endpoint, migration or dependency changed. These controls passed the
+exact-head Actions baseline above; no local tests ran. REA: reuse the delivered HTTP/session and atomic
 annotation service with the existing policy-recovery fixture, not another engine.
 
 ## Fixture annotation recovery and completeness inheritance — verified baseline

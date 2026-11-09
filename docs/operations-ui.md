@@ -55,7 +55,33 @@ keyboard focus. Page errors retain those rows and offer an explicit retry of the
 same cursor, never an automatic retry. Initial-query errors still use the full error
 boundary.
 
-## Not delivered: authenticated integration
+## Authenticated ledger read port — integration pending
+
+`GET /projects/{project_key}/costs?limit=50&after=<operation_id>` is an admin-session
+read over the existing durable budget tables. The response model is published in
+the application's generated `app.openapi()` contract as `BudgetPage`. It explicitly
+labels USD/micro-USD, current policy revision/limits and pause reason, and returns
+at most 100 operation projections plus `next_after`. Actuals remain nullable;
+confirmed zero is not unconfirmed billing. Exposure uses the existing core entry
+calculation, including retained child exposure. Raw intent, provider evidence,
+configuration and pricing payloads are not returned. Missing/unconfigured scopes
+are unavailable, not manufactured empty budgets; malformed entries fail closed.
+
+Every page takes the budget writers' existing head lock through outer commit.
+Ordering is by immutable operation identity, not timestamp or cost. `after` is only
+a position within the requested project, never authorization. Each page is a new
+consistent read, not a frozen cross-page snapshot: new operations can appear before
+a prior cursor. `policy_revision` is not a ledger revision or freshness token.
+Consumers must refresh from page one to recover the current complete collection.
+
+This read port is **not yet mounted in CostsView**. It does not supply refused-attempt
+history, scoped totals, operation display labels/links, policy-write/resume commands,
+or a complete `CostsRecord`. No paid operation is dispatched. New session, bounded
+paging, redaction, rollback and disposable PostgreSQL recovery controls await
+exact-head Actions; no local tests ran. REA: reuse the durable ledger codec and core
+exposure property, not another budget engine.
+
+## Not delivered: complete authenticated integration
 
 Main currently has no operational read APIs. `contracts.ts` contains **projection
 ports, not generated OpenAPI contracts**. Do not treat the TypeScript types or the
