@@ -10,6 +10,7 @@ RUN case "$TARGETARCH" in \
     for attempt in 1 2 3; do \
       if wget --no-verbose -T 30 "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-$TARGETARCH.RELEASE.2025-09-07T16-13-09Z" -O /usr/local/bin/minio; then break; fi; \
       test "$attempt" -lt 3 || exit 1; \
+      sleep "$((1 << attempt))" || exit 1; \
     done && \
     echo "$checksum /usr/local/bin/minio" | sha256sum -c - && \
     chmod 0555 /usr/local/bin/minio

@@ -15,6 +15,7 @@ PAYLOAD = b"licence-clean fake executable\n"
     ("architecture", "failures", "corrupt", "expected_attempts", "succeeds"),
     [
         ("amd64", 0, False, 1, True),
+        ("amd64", 1, False, 2, True),
         ("arm64", 2, False, 3, True),
         ("amd64", 3, False, 3, False),
         ("amd64", 0, True, 1, False),
@@ -35,6 +36,18 @@ def test_minio_download_keeps_bounded_attempts_and_checksum_gate(
     destination = tmp_path / "minio"
     command = command.replace("/usr/local/bin/minio", str(destination))
     counter = tmp_path / "attempts"
+    delays = tmp_path / "delays"
+    sleeper = tmp_path / "sleep"
+    sleeper.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        'test "$#" -eq 1\n'
+        'attempt=0; read -r attempt < "$COUNTER"\n'
+        'test "$attempt" -lt 3\n'
+        'test "$1" -eq "$((1 << attempt))"\n'
+        'printf "%s\\n" "$1" >> "$DELAYS"\n'
+    )
+    sleeper.chmod(0o700)
     downloader = tmp_path / "wget"
     downloader.write_text(
         "#!/bin/sh\n"
@@ -69,6 +82,7 @@ def test_minio_download_keeps_bounded_attempts_and_checksum_gate(
             "MINIO_SHA256_ARM64": checksum,
             "DESTINATION": str(destination),
             "COUNTER": str(counter),
+            "DELAYS": str(delays),
             "FAILURES": str(failures),
             "CORRUPT": "yes" if corrupt else "no",
         },
@@ -79,6 +93,9 @@ def test_minio_download_keeps_bounded_attempts_and_checksum_gate(
     )
     assert (result.returncode == 0) is succeeds, result.stderr
     assert (int(counter.read_text()) if counter.exists() else 0) == expected_attempts
+    assert (delays.read_text().splitlines() if delays.exists() else []) == [
+        str(1 << attempt) for attempt in range(1, expected_attempts)
+    ]
     if succeeds:
         assert destination.read_bytes() == PAYLOAD
         assert destination.stat().st_mode & 0o777 == 0o555
