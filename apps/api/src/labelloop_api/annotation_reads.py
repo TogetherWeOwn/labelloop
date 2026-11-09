@@ -2,18 +2,20 @@
 
 from datetime import datetime
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection, create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from labelloop_api.auth import require_reviewer
+from labelloop_api import automatic_review_store
+from labelloop_api.auth import require_admin, require_reviewer
 from labelloop_api.auth_store import Principal
 from labelloop_api.database_url import quoted_database_url
 from labelloop_api.schema import annotation_revision, project, source_asset
+from labelloop_core.qualification_data import record_sha256
 
 # Persisted UUIDs are opaque lookup handles; canonical keys need not be URL segments.
 router = APIRouter(prefix="/projects/{project_id}/assets/{asset_id}", tags=["annotations"])
@@ -51,6 +53,60 @@ class AnnotationSnapshot(ReadModel):
 class AnnotationHistory(ReadModel):
     revisions: list[RevisionRecord]
     next_before_revision: int | None
+
+
+class AutomaticAcceptanceMetadata(ReadModel):
+    revision: int
+    historical_only: Literal[True] = True
+    qualification_id: str
+    release_sha256: str
+    evaluation_key: str
+    pipeline_id: str
+    policy_sha256: str
+    fixture_only: bool
+
+
+@router.get(
+    "/annotation-history/{revision}/automatic-acceptance",
+    response_model=AutomaticAcceptanceMetadata,
+)
+def automatic_acceptance_metadata(
+    project_id: UUID,
+    asset_id: UUID,
+    revision: Annotated[int, Path(ge=2)],
+    actor: Annotated[Principal, Depends(require_admin)],
+):
+    # Metadata from the exact original event, never today's policy/champion. No
+    # final-test scores, population membership, raw correction or grant is exposed.
+    try:
+        with annotation_engine().begin() as connection:
+            source = connection.execute(
+                select(project.c.project_key, source_asset.c.asset_key)
+                .select_from(source_asset.join(project))
+                .where(project.c.id == project_id, source_asset.c.id == asset_id)
+            ).first()
+            if source is None:
+                raise HTTPException(404, detail="annotation_not_found")
+            original = automatic_review_store.load_automatic_acceptance(
+                connection,
+                project_key=source.project_key,
+                asset_key=source.asset_key,
+                revision=revision,
+            )
+            record = AutomaticAcceptanceMetadata(
+                revision=revision,
+                qualification_id=original.qualification_id,
+                release_sha256=original.release_sha256,
+                evaluation_key=original.evaluation_key,
+                pipeline_id=original.policy.pipeline.pipeline_id,
+                policy_sha256=record_sha256(original.policy),
+                fixture_only=original.policy.targets.fixture_only,
+            )
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="automatic_acceptance_provenance_unavailable") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="annotations_unavailable") from None
+    return record
 
 
 @lru_cache(maxsize=1)

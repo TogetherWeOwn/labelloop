@@ -1040,6 +1040,8 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         "committed_http_current_canonical_group_promotion_veto_cases": group_vetoes,
         "internal_fixture_annotation_service_consumed_committed_champion_promotion": True,
         "committed_positive_and_negative_annotations_recovered_after_reconnect": True,
+        "admin_http_original_acceptance_metadata_survived_champion_rollback": True,
+        "historical_metadata_denials_and_read_failures_preserved_all_evidence": True,
         "original_policy_and_proposal_teacher_evidence_survived_champion_rollback": True,
         "failed_annotation_origin_and_stale_replays_preserved_all_annotation_rows": True,
         "committed_setup_promotion_and_rollback_recovered_after_client_close": True,

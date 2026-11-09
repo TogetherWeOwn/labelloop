@@ -6,7 +6,41 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Committed fixture annotation recovery — pending Actions
+## Authenticated original-acceptance metadata — pending Actions
+
+The admin-session read
+`GET /projects/{project_id}/assets/{asset_id}/annotation-history/{revision}/automatic-acceptance`
+resolves the exact project/asset UUID pair and consumes the existing immutable
+original-event reader. It returns historical qualification/release/evaluation
+identities, original pipeline/policy digests and an explicit fixture-only marker.
+It never reloads today's policy/champion, returns final scores or population
+membership, or grants current acceptance. Missing/legacy/malformed provenance is
+unavailable, not backfilled. Reviewers and workers cannot read this admin surface.
+No automatic-annotation write route, new storage, migration or dependency is added.
+
+New adapter controls cover both recipes, authentication/permission denial before
+canonical access, expired sessions, exact scope, invalid revisions, redacted
+failures and outer rollback. Both-recipe PostgreSQL controls must recover committed
+positive/negative historical metadata through real session HTTP before and after
+champion rollback, reject absent/foreign sources and missing original revisions,
+and preserve all annotation, registry and qualification rows after successful and
+injected post-load-failure reads. These assertions await exact-head Actions; no
+local tests ran. This metadata port is not the complete operational UI projection,
+original execution proof, independent measurements or domain gold.
+REA: reuse original-event validation and the delivered canonical read/auth boundary.
+
+## Committed fixture annotation recovery — verified baseline
+
+Exact `c4b632a440bf5df1d32930b51ae114ba2a42d533`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42549033988),
+[ML smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42549033988/job/128940272916),
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42549033988/job/128940273011),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42549033792) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42549033756)
+succeeded, including queue/migration cycles/all four parent upgrades,
+web-build/dev-stack/lint/types/import-contract. This verifies the committed
+annotation recovery controls below, not the new metadata endpoint or full M5.
+Totals not extracted; required independent/native reviews remain.
 
 The both-recipe PostgreSQL smoke now separately commits synthetic completeness and
 completed proposal inputs, then calls the internal current-champion annotation
@@ -20,8 +54,8 @@ Stale registry/annotation revisions, a missing later proposal and an injected
 origin-write failure must preserve every annotation revision, review event,
 completeness row and teacher origin. Each success must append exactly one row to
 each table while preserving all historical and unrelated rows. Registry heads and
-all other qualification journals must remain unchanged. New assertions await
-exact-head Actions; no local tests ran. These are internal fixture-policy storage
+all other qualification journals remain unchanged. These assertions passed
+exact-head Actions at the baseline above; no local tests ran. These are internal fixture-policy storage
 mechanics, not HTTP annotation authorization, real inference/reviewer execution,
 source/condition truth, independent measurements or domain gold. Real automatic
 annotation remains closed. No production code, schema, dependency or gate changed.
@@ -61,8 +95,8 @@ fixture savepoint, not committed annotation recovery or HTTP authorization.
 Authentication, original reviewer execution, authoritative source/condition scope
 and complete influence selection remain caller obligations. No route constructs
 this port from submitted claims; real automatic annotation remains closed. These
-savepoint assertions are verified at the baseline above; the committed extension
-remains pending. REA: reuse the recorded promotion reader and atomic annotation
+savepoint assertions and the committed extension are verified at their respective
+baselines above. REA: reuse the recorded promotion reader and atomic annotation
 writer, not another policy or provenance engine.
 
 ## Committed HTTP promotion canonical-group controls — verified baseline

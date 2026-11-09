@@ -1,4 +1,4 @@
-"""Committed fixture annotation recovery; not HTTP authorization or execution truth."""
+"""Committed fixture recovery and admin metadata; no annotation HTTP write grant."""
 
 import pytest
 import sqlalchemy as sa
@@ -58,6 +58,86 @@ def assert_annotation_recovery(engine, release, final, context, recovery):
                 load_automatic_acceptance(
                     connection, project_key=release.project_id, asset_key=asset_key, revision=3
                 )
+    assert_http_annotation_recovery(engine, release, recovery)
+
+
+def assert_http_annotation_recovery(engine, release, recovery):
+    from uuid import uuid4
+
+    from registry_http_smoke import (
+        authenticated_client,
+        login,
+        qualification_journals,
+        snapshot,
+    )
+
+    from labelloop_api import annotation_reads, automatic_review_store
+    from labelloop_core.qualification_data import record_sha256
+
+    registry = snapshot(engine, release.project_id)
+    journals = qualification_journals(engine)
+    with authenticated_client(engine) as (client, identities, workers):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(annotation_reads, "annotation_engine", lambda: engine)
+            for key, item in recovery["assets"].items():
+                base = f"/projects/{recovery['project_id']}/assets/{item['asset_id']}"
+                path = base + "/annotation-history/2/automatic-acceptance"
+                client.cookies.clear()
+                assert client.get(path).status_code == 401
+                for token in workers.values():
+                    response = client.get(path, headers={"authorization": "Bearer " + token})
+                    assert response.status_code == 403
+                login(client, identities["reviewer"][1])
+                assert client.get(path + "?role=admin").status_code == 403
+                login(client, identities["admin"][1])
+                original = item["original"]
+                expected = dict(
+                    revision=2,
+                    historical_only=True,
+                    qualification_id=original.qualification_id,
+                    release_sha256=original.release_sha256,
+                    evaluation_key=original.evaluation_key,
+                    pipeline_id=original.policy.pipeline.pipeline_id,
+                    policy_sha256=record_sha256(original.policy),
+                    fixture_only=True,
+                )
+                response = client.get(path)
+                assert response.status_code == 200
+                assert response.json() == expected
+                assert response.headers["cache-control"] == "no-store"
+                for absent in (
+                    f"/projects/{uuid4()}/assets/{item['asset_id']}",
+                    f"/projects/{recovery['project_id']}/assets/{uuid4()}",
+                ):
+                    response = client.get(absent + "/annotation-history/2/automatic-acceptance")
+                    assert response.status_code == 404
+                    assert response.json() == {"detail": "annotation_not_found"}
+                response = client.get(base + "/annotation-history/3/automatic-acceptance")
+                assert response.status_code == 409
+                assert response.json() == {"detail": "automatic_acceptance_provenance_unavailable"}
+                reader = automatic_review_store.load_automatic_acceptance
+                loaded = []
+
+                def fail_after_read(
+                    connection, _key=key, _loaded=loaded, _reader=reader, **arguments
+                ):
+                    assert arguments["asset_key"] == _key
+                    _loaded.append(_reader(connection, **arguments))
+                    raise sa.exc.SQLAlchemyError("private historical provenance read failure")
+
+                with pytest.MonkeyPatch.context() as failure:
+                    failure.setattr(
+                        automatic_review_store, "load_automatic_acceptance", fail_after_read
+                    )
+                    response = client.get(path)
+                assert loaded == [original]
+                assert response.status_code == 503
+                assert response.json() == {"detail": "annotations_unavailable"}
+                assert response.headers["cache-control"] == "no-store"
+                assert client.get(path).json() == expected
+    assert annotation_rows(engine) == recovery["rows"]
+    assert snapshot(engine, release.project_id) == registry
+    assert qualification_journals(engine) == journals
 
 
 def exercise_annotation_recovery(engine, release, final, context, canary, actor, revision):
