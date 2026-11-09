@@ -48,8 +48,10 @@ for (const width of [1280, 390]) {
       await expect(page.locator('tbody')).toContainText('Object unavailable');
       await expect(page.locator('tbody')).toContainText('Batch <not markup>');
       await expect(page.locator('tbody')).toContainText('Billing confirmed · review paused: approval exhausted');
-      await expect(page.locator('tbody tr').nth(0)).toContainText('Unconfirmed');
-      await expect(page.locator('tbody tr').nth(1)).toContainText('$0.00');
+      await expect(page.locator('tbody tr').filter({ hasText: 'operation-a' })).toContainText('Unconfirmed');
+      await expect(page.locator('tbody tr').filter({ hasText: 'operation-b' })).toContainText('$0.00');
+      await expect(page.locator('tbody tr').first()).toContainText('operation-b');
+      await expect(page.locator('tbody tr').last()).toContainText('Reservation time unavailable');
       await expect(page.locator('tbody img, tbody a')).toHaveCount(0);
       await expect(page.locator('tbody')).not.toContainText('Refused');
       await expect(page.getByRole('button', { name: 'Save limits' })).toBeDisabled();
@@ -65,7 +67,7 @@ for (const width of [1280, 390]) {
       expect(path).not.toBeNull();
       const csv = await readFile(path, 'utf8');
       expect(csv.split('\r\n')).toHaveLength(3);
-      expect(csv.split('\r\n')[1]).toContain('"","operation-a","","",""');
+      expect(csv.split('\r\n').find((row) => row.includes('"operation-a"'))).toContain('"","operation-a","","",""');
       expect(csv).toContain('"Unconfirmed"');
       expect(csv).toContain('"$0.00"');
       expect(csv).not.toContain('private-price-version');
