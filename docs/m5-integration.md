@@ -6,7 +6,29 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Checkpoint and session cost consumer — verification pending
+## Complete project cost export — verification pending
+
+The admin-session-only `/projects/{project_key}/costs/export` returns typed JSON
+for every project operation in one bounded read under the existing writer-head
+lock. It reuses the exact page projection, including original reservation time,
+digest-bound review/job metadata, null actuals, confirmed zero, retained-child
+exposure and review pauses. A successful response has no continuation cursor.
+Above 10,000 operations it rejects without a partial success; malformed later
+records likewise reject the entire read. Policy revision is not a durable ledger
+snapshot, nor is an export a cross-request snapshot shared with the screen.
+
+New session controls cover complete output beyond the first page, empty/exact-bound
+and over-bound ledgers, project isolation, authorization before reads, missing
+budgets, later invalid bindings, redacted outer rollback and typed OpenAPI.
+Disposable PostgreSQL controls extend closed-client recovery and require the writer
+lock to remain held until outer commit. These new assertions await exact-head
+Actions. No local tests/builds ran. This backend JSON port is not yet consumed by
+the view: its CSV remains loaded-row-only. No spending command, migration,
+dependency, new ledger or UI design is introduced.
+REA: reuse the existing validated projection and writer lock, not a paged export
+that can silently mix independent reads.
+
+## Checkpoint and session cost consumer — verified baseline
 
 The fixed 2026-11-09T12:00:00Z integration checkpoint was missed. Remaining
 acceptance is not cut or silently re-dated: full authenticated CostsView/AuditLog
@@ -22,19 +44,21 @@ existing CostsView. Complete server summaries drive meters independently of the
 one displayed ledger page; retained-child exposure and null metadata survive.
 Policy mismatches reject, but equal policy is not called a shared ledger snapshot.
 Shown-row CSV and page copy cannot claim complete history or refused attempts.
-Session spending commands stay disabled. New network-free transport and SSR
-controls await exact-head Actions; no local tests/builds ran. This is a consumer
-seam, not authenticated application mounting, a new shell or a second ledger.
-
-Baseline `bdce5872d8a899aaf73944ea7af8a912060a372b`
-[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609231536),
-[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609230930) and
-[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609231029)
-passed, including unit, both-recipe PostgreSQL ML smoke, web/browser,
-queue/migration cycles/all four parents and dev-stack. Prior producer-refusal and
-review-pause assertions are verified, superseding their historical pending labels.
-This does not verify the new cost consumer or establish M5 acceptance. Required
-Devin, fresh-context and native QA/Security reviews and pinned merge remain gates.
+Session spending commands stay disabled. Transport/SSR, mounted intercepted-HTTP
+controls and explicit server-cursor paging passed exact-head Actions at baseline
+`d0bbf714578e0731b05bf46cdfdc7404cda9cf67`:
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42623086622),
+[web/browser](https://github.com/TogetherWeOwn/labelloop/actions/runs/42623086622/job/129179958893),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42623085696) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42623086329).
+Both viewport pending-click controls now complete cursor/request-count/filter/
+append/loaded-row-CSV assertions. Earlier pending labels for these controls are
+superseded. Unit, both-recipe PostgreSQL ML smoke, queue/migration cycles/all four
+parents and dev-stack also passed. Totals not extracted; no local tests/builds ran.
+This is a consumer seam, not real authentication, normal application mounting, a
+new shell or a second ledger. It does not verify the new complete-export port or
+establish M5 acceptance. Required Devin, fresh-context and native QA/Security
+reviews and pinned merge remain gates.
 REA: reuse complete authoritative summaries and supplied view contracts.
 
 ## Producer-emitted budget refusal — historical pending report

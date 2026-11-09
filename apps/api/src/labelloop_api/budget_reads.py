@@ -68,6 +68,11 @@ class BudgetPage(BaseModel):
     next_after: str | None
 
 
+class BudgetExport(BudgetPage):
+    # A successful export is complete, not a page or a resumable partial file.
+    next_after: None = None
+
+
 class CostTotals(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -274,6 +279,36 @@ def load_budget_page(connection, *, project_key, after, limit):
         operations=operations,
         next_after=rows[limit - 1]["operation_id"] if len(rows) > limit else None,
     )
+
+
+def load_budget_export(connection, *, project_key):
+    # One bounded read under the writer lock, never a walk over independent pages.
+    page = load_budget_page(
+        connection, project_key=project_key, after=None, limit=SUMMARY_MAX_OPERATIONS
+    )
+    if page.next_after is not None:
+        raise ValueError("complete ledger export exceeds read bound")
+    return BudgetExport(**page.model_dump())
+
+
+@router.get("/projects/{project_key}/costs/export", response_model=BudgetExport)
+def export_costs(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> BudgetExport:
+    try:
+        with auth_store().engine.begin() as connection:
+            connection.execute(
+                sa.select(project.c.id).where(project.c.project_key == project_key)
+            ).scalar_one()
+            export = load_budget_export(connection, project_key=project_key)
+    except NoResultFound:
+        raise HTTPException(404, detail="cost_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="cost_state_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="costs_unavailable") from None
+    return export
 
 
 @router.get("/projects/{project_key}/costs/summary", response_model=BudgetSummary)

@@ -91,8 +91,9 @@ def http(monkeypatch, store):
         ("insufficient_credits", None, 0, 40),
     ],
 )
+@pytest.mark.parametrize("path", [PATH, PATH + "/export"])
 def test_projection_preserves_actual_exposure_and_redacts_private_records(
-    http, store, state, actual, floor, exposure
+    http, store, state, actual, floor, exposure, path
 ):
     with store.engine.begin() as connection:
         persist(connection, entry(state=state, actual=actual, exposure_floor=floor))
@@ -104,7 +105,7 @@ def test_projection_preserves_actual_exposure_and_redacts_private_records(
             )
         )
     assert login(http, "admin").status_code == 200
-    response = http.get(PATH)
+    response = http.get(path)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     page = response.json()
@@ -401,7 +402,8 @@ def test_cursor_accepts_full_stored_identity_contract(http, store):
 @pytest.mark.parametrize(
     "name", [None, "reviewer", "worker-core", "worker-ml", "worker-llm", "worker-platform"]
 )
-def test_denial_precedes_any_cost_query(http, store, monkeypatch, name):
+@pytest.mark.parametrize("path", [PATH, PATH + "/export"])
+def test_denial_precedes_any_cost_query(http, store, monkeypatch, name, path):
     def forbidden():
         raise AssertionError("unauthorized cost read")
 
@@ -411,7 +413,7 @@ def test_denial_precedes_any_cost_query(http, store, monkeypatch, name):
         headers["authorization"] = "Bearer " + worker_token(store, name)
     elif name:
         login(http, name)
-    response = http.get(PATH, headers=headers)
+    response = http.get(path, headers=headers)
     assert response.status_code == (401 if name is None else 403)
     assert response.headers["cache-control"] == "no-store"
 
@@ -470,6 +472,103 @@ def test_projection_failure_rolls_back_and_redacts(http, store, monkeypatch, err
             connection.execute(sa.select(sa.func.count()).select_from(db.operation)).scalar_one()
             == 0
         )
+
+
+EXPORT = PATH + "/export"
+
+
+def test_export_contains_complete_project_not_only_first_page(http, store):
+    with store.engine.begin() as connection:
+        for index in range(101):
+            persist(connection, entry(f"operation-{index:03}"))
+        before = connection.execute(sa.select(db.operation)).mappings().all()
+    login(http, "admin")
+    page = http.get(PATH).json()
+    assert len(page["operations"]) == 50 and page["next_after"] is not None
+    response = http.get(EXPORT)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    exported = response.json()
+    assert exported["next_after"] is None
+    assert [row["operation_id"] for row in exported["operations"]] == [
+        f"operation-{index:03}" for index in range(101)
+    ]
+    assert exported["operations"][:50] == page["operations"]
+    assert "must-not-leak" not in response.text
+    with store.engine.connect() as connection:
+        assert connection.execute(sa.select(db.operation)).mappings().all() == before
+    assert http.get("/projects/foreign/costs/export").json()["operations"] == []
+
+
+@pytest.mark.parametrize("count", [0, 2, 3])
+def test_export_bound_returns_all_or_refuses(http, store, monkeypatch, count):
+    monkeypatch.setattr(budget_reads, "SUMMARY_MAX_OPERATIONS", 2)
+    with store.engine.begin() as connection:
+        for index in range(count):
+            persist(connection, entry(f"operation-{index}"))
+    login(http, "admin")
+    response = http.get(EXPORT)
+    assert response.headers["cache-control"] == "no-store"
+    if count <= 2:
+        assert response.status_code == 200
+        assert len(response.json()["operations"]) == count
+        assert response.json()["next_after"] is None
+    else:
+        assert response.status_code == 409
+        assert response.json() == {"detail": "cost_state_rejected"}
+        assert "operation-" not in response.text
+
+
+@pytest.mark.parametrize("key", ["missing", "unconfigured"])
+def test_export_requires_existing_configured_project(http, key):
+    login(http, "admin")
+    response = http.get(f"/projects/{key}/costs/export")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "cost_scope_not_found"}
+
+
+def test_export_rejects_invalid_later_operation_without_partial_body(http, store):
+    with store.engine.begin() as connection:
+        for index in range(51):
+            persist(connection, entry(f"operation-{index:03}"))
+        connection.execute(
+            sa.update(db.operation)
+            .where(db.operation.c.operation_id == "operation-050")
+            .values(dry_run_digest="0" * 64)
+        )
+    login(http, "admin")
+    assert http.get(PATH).status_code == 200
+    response = http.get(EXPORT)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "cost_state_rejected"}
+
+
+@pytest.mark.parametrize("error", [ValueError("private"), SQLAlchemyError("private")])
+def test_export_failure_rolls_back_and_redacts(http, store, monkeypatch, error):
+    def fail(connection, **kwargs):
+        persist(connection, entry("must-roll-back"))
+        raise error
+
+    monkeypatch.setattr(budget_reads, "load_budget_export", fail)
+    login(http, "admin")
+    response = http.get(EXPORT)
+    assert response.status_code == (409 if isinstance(error, ValueError) else 503)
+    assert "private" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    with store.engine.connect() as connection:
+        assert not connection.execute(sa.select(db.operation)).all()
+
+
+def test_export_openapi_cannot_advertise_partial_cursor():
+    contract = app.openapi()
+    route = contract["paths"]["/projects/{project_key}/costs/export"]["get"]
+    assert route["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BudgetExport"
+    }
+    assert (
+        contract["components"]["schemas"]["BudgetExport"]["properties"]["next_after"]["type"]
+        == "null"
+    )
 
 
 SUMMARY = PATH + "/summary"
@@ -645,6 +744,10 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         assert page.json()["operations"][0]["exposure"] == 40
         assert page.json()["operations"][0]["kind"] == "LLM review"
         assert page.json()["operations"][0]["annotation_job_id"] is None
+        export = client.get(PATH + "/export")
+        assert export.status_code == 200
+        assert export.headers["cache-control"] == "no-store"
+        assert export.json() == page.json()
         with postgres_budget.engine.connect() as connection:
             reserved_at = connection.execute(
                 sa.select(db.event.c.occurred_at).where(
@@ -676,6 +779,7 @@ def test_postgres_committed_ledger_http_recovery(monkeypatch, store, postgres_bu
         login(client, "admin")
         recovered = client.get(PATH)
         assert recovered.json() == page.json()
+        assert client.get(PATH + "/export").json() == export.json()
         recovered_summary = client.get(SUMMARY, params=SUMMARY_QUERY)
         assert recovered_summary.json() == summary.json()
     assert postgres_budget.snapshot("budget-fixture") == before
@@ -733,13 +837,19 @@ def test_postgres_bound_operation_metadata_recovers_after_policy_change(
         )
 
 
-def test_postgres_summary_retains_writer_lock_until_outer_commit(postgres_budget):
+@pytest.mark.parametrize("export", [False, True])
+def test_postgres_summary_retains_writer_lock_until_outer_commit(postgres_budget, export):
     reserve(postgres_budget)
     with postgres_budget.engine.begin() as connection:
-        summary = budget_reads.load_budget_summary(
-            connection, project_key="budget-fixture", **SUMMARY_QUERY
-        )
-        assert summary.monthly.exposure == 40
+        if export:
+            result = budget_reads.load_budget_export(connection, project_key="budget-fixture")
+            assert result.operations[0].exposure == 40
+            assert result.next_after is None
+        else:
+            summary = budget_reads.load_budget_summary(
+                connection, project_key="budget-fixture", **SUMMARY_QUERY
+            )
+            assert summary.monthly.exposure == 40
         # A separate writer connection cannot take the head before this read commits.
         with postgres_budget.engine.begin() as writer:
             writer.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
