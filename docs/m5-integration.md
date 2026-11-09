@@ -6,6 +6,36 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
+## Audit metadata search and actor filters — pending Actions
+
+The existing read/export port now accepts bounded metadata-only search and exact
+recorded actor-kind filters. Actor IDs match literal case-insensitive substrings;
+event/record UUIDs match exactly. SQL pattern characters are escaped, and private
+payloads/decisions/reasons are never searched. Unknown promotion actor kind remains
+unknown, even when the same identifier appears on a human review. Authorization
+selects sources before filters/counts/cursors/export. This is not display-name
+resolution, connection/budget history, full record navigation or AuditLog mounting.
+
+New real-session adapters cover literal SQL patterns, exact portable UUIDs,
+foreign/hidden/private exclusions, actor-kind separation, filtered pagination and
+export equality, invalid filter bounds and filtered-out cursor rejection. Both
+recipe PostgreSQL/HTTP exercises extend the committed history checks with exact
+UUID/actor filters and reviewer no-disclosure/no-mutation controls. New assertions
+are unverified until exact-head Actions. No schema, migration, dependency, provider
+call or policy gate changed. REA: extend the existing authorized metadata subquery,
+not the private event payload or a second audit store.
+
+Exact `a33dd53914e3c8ac3b3f052d4a812eab162e8752`
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566877492):
+[unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566877492/job/128995224667)
+failed downloading setup-uv with HTTP 504 before dependency sync or tests. The
+SQLite UUID correction is still unverified by unit CI; no test failure at that
+head was observed because tests never ran. ML smoke, queue/migration cycles/all
+four parents, web-build/dev-stack, lint/types/import-contract,
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566877030) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566876991)
+passed, not overall CI. No unchanged-head rerun, dispatch, waiver or local suite.
+
 ## Audit-read SQLite UUID fixture correction — pending Actions
 
 Exact `5770e2a8be2433903e8619cd67e57647425c5cc0`

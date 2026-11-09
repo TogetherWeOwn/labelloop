@@ -16,6 +16,8 @@ from labelloop_api.auth_store import Principal, utc
 
 router = APIRouter(tags=["audit"])
 AuditKind = Literal["Review", "Promotion"]
+ActorKind = Literal["human", "model", "system", "unknown"]
+AuditSearch = Annotated[str | None, Query(min_length=1, max_length=128)]
 
 
 class AuditMetadata(BaseModel):
@@ -26,7 +28,7 @@ class AuditMetadata(BaseModel):
     kind: AuditKind
     actor_id: str = Field(min_length=1, max_length=256)
     # Unknown historical promotion actors are not inferred to be human principals.
-    actor_kind: Literal["human", "model", "system", "unknown"]
+    actor_kind: ActorKind
     record_id: UUID
     revision: Annotated[int, Field(ge=0)]
     sentence: str
@@ -41,7 +43,7 @@ class AuditMetadataPage(BaseModel):
     next_after: str | None
 
 
-def visible_events(project_id, actor, kind, since, through):
+def visible_events(project_id, actor, kind, since, through, actor_kind, search):
     # Select permitted sources before any filtering, counting, paging or export.
     review = (
         sa.select(
@@ -77,10 +79,35 @@ def visible_events(project_id, actor, kind, since, through):
         query = query.where(events.c.at >= since)
     if through is not None:
         query = query.where(events.c.at <= through)
+    if actor_kind is not None:
+        query = query.where(events.c.actor_kind == actor_kind)
+    if search is not None:
+        # Search only public metadata. Escaped LIKE treats % and _ literally;
+        # exact UUID comparisons work with both native and text-backed storage.
+        matches = [sa.func.lower(events.c.actor_id).contains(search.lower(), autoescape=True)]
+        try:
+            identity = UUID(search)
+        except ValueError:
+            pass
+        else:
+            matches.extend((events.c.id == identity, events.c.record_id == identity))
+        query = query.where(sa.or_(*matches))
     return query.subquery()
 
 
-def load_audit_page(connection, *, project_key, actor, kind, since, through, after, limit):
+def load_audit_page(
+    connection,
+    *,
+    project_key,
+    actor,
+    kind,
+    since,
+    through,
+    after,
+    limit,
+    actor_kind=None,
+    search=None,
+):
     if (since is not None and since.utcoffset() is None) or (
         through is not None and through.utcoffset() is None
     ):
@@ -92,7 +119,7 @@ def load_audit_page(connection, *, project_key, actor, kind, since, through, aft
     project_id = connection.execute(
         sa.select(db.project.c.id).where(db.project.c.project_key == project_key)
     ).scalar_one()
-    events = visible_events(project_id, actor, kind, since, through)
+    events = visible_events(project_id, actor, kind, since, through, actor_kind, search)
     query = sa.select(events)
     if after is not None:
         cursor_kind, separator, cursor_id = after.partition("/")
@@ -150,7 +177,7 @@ def load_audit_page(connection, *, project_key, actor, kind, since, through, aft
     )
 
 
-def read_audit(project_key, actor, kind, since, through, after, limit):
+def read_audit(project_key, actor, kind, since, through, after, limit, actor_kind, search):
     try:
         with auth_store().engine.begin() as connection:
             page = load_audit_page(
@@ -162,6 +189,8 @@ def read_audit(project_key, actor, kind, since, through, after, limit):
                 through=through,
                 after=after,
                 limit=limit,
+                actor_kind=actor_kind,
+                search=search,
             )
     except NoResultFound:
         raise HTTPException(404, detail="audit_scope_not_found") from None
@@ -184,8 +213,10 @@ def inspect_audit(
     through: datetime | None = None,
     after: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    actor_kind: ActorKind | None = None,
+    search: AuditSearch = None,
 ) -> AuditMetadataPage:
-    return read_audit(project_key, actor, kind, since, through, after, limit)
+    return read_audit(project_key, actor, kind, since, through, after, limit, actor_kind, search)
 
 
 @router.get("/projects/{project_key}/audit-log/export", response_class=Response)
@@ -195,10 +226,12 @@ def export_audit(
     kind: AuditKind | None = None,
     since: datetime | None = None,
     through: datetime | None = None,
+    actor_kind: ActorKind | None = None,
+    search: AuditSearch = None,
 ) -> Response:
     # Buffer a bounded complete result before responding: never silently truncate
     # or start an export that may fail halfway through a database cursor.
-    page = read_audit(project_key, actor, kind, since, through, None, 1000)
+    page = read_audit(project_key, actor, kind, since, through, None, 1000, actor_kind, search)
     if page.next_after is not None:
         raise HTTPException(409, detail="audit_export_requires_narrower_range")
     return Response(

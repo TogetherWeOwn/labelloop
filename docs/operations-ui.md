@@ -71,18 +71,27 @@ as its page. Pages contain at most 100 events ordered by UTC time, kind and UUID
 newest first. `after` is a visible event position (`kind/UUID`), not authorization:
 a foreign, hidden or filtered-out event rejects without disclosing its metadata.
 Each page is a fresh read, not a frozen cross-page history. Refresh from page one
-for newly appended events. Optional `kind`, `since` and inclusive `through` filters
-apply identically to `/audit-log/export`. Dates require explicit timezones and are
-normalized to UTC; inverted ranges reject. JSON-lines exports are fully buffered
+for newly appended events. Optional `kind`, `since`, inclusive `through`,
+`actor_kind` and `search` filters apply identically to `/audit-log/export`.
+`actor_kind` selects the recorded `human`, `model`, `system` or `unknown` category;
+a shared actor identifier never changes that provenance. Search accepts 1–128
+characters and matches a case-insensitive literal actor-ID substring or an exact
+event/record UUID (hyphenated or hex). `%`, `_` and `/` have no wildcard meaning.
+It does not search private payloads, decisions, reasons, display names or inferred
+record labels. Authorization still selects sources first; counts and cursors use
+the filtered population. Dates require explicit timezones and are normalized to
+UTC; inverted ranges reject. JSON-lines exports are fully buffered
 and capped at 1,000 events; overflow rejects with a narrower-range error, never a
 silently truncated file or a partially streamed failure.
 
 This port is **not yet mounted in AuditLog** and does not supply connection/budget
-history, refused attempts, principal display-name resolution, search, record links
-or the complete accepted UI projection. New real-session adapter controls and
-both-recipe disposable PostgreSQL committed review/promotion pagination/export,
-actor-recovery, reviewer-restriction and non-mutation controls await exact-head
-Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
+history, refused attempts, principal display-name resolution, record links
+or the complete accepted UI projection. Existing PostgreSQL review/promotion
+pagination/export/actor/reviewer/non-mutation controls passed
+[ML smoke at a33dd53](https://github.com/TogetherWeOwn/labelloop/actions/runs/42566877492/job/128995224622).
+That head's unit job stopped at setup-uv HTTP 504 before tests, so the SQLite UUID
+repair remains unverified there. New search/filter adapter and PostgreSQL controls
+await exact-head Actions. No new event store, schema, dependency, spend or provider call. REA: reuse
 immutable canonical review and registry event records, not another audit journal.
 
 ## Authenticated ledger read port — integration pending

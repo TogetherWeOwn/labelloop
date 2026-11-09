@@ -200,6 +200,87 @@ def test_stable_keyset_ordering_and_filtered_export_equality(http, store):
     assert response.headers["cache-control"] == "no-store"
 
 
+@pytest.mark.parametrize("name", ["admin", "reviewer"])
+@pytest.mark.parametrize(
+    ("search", "numbers"),
+    [
+        ("RECORDED", [20, 10]),
+        (str(UUID(int=20)), [20]),
+        (UUID(int=20).hex, [20]),
+        (str(ASSET), [20, 10]),
+        ("must-not-leak", []),
+        ("private-decision", []),
+        (str(UUID(int=40)), []),
+        (str(OTHER_ASSET), []),
+    ],
+)
+def test_metadata_search_is_scoped_and_matches_export(http, name, search, numbers):
+    login(http, name)
+    params = {"search": search}
+    response = http.get(PATH, params=params)
+    assert response.status_code == 200
+    page = response.json()
+    assert page["total"] == len(numbers)
+    assert [event["id"] for event in page["events"]] == [str(UUID(int=n)) for n in numbers]
+    exported = http.get(PATH + "/export", params=params)
+    assert exported.status_code == 200
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"]
+
+
+@pytest.mark.parametrize("search", ["%", "_", "/", "%' OR 1=1 --"])
+def test_actor_search_treats_sql_patterns_as_literal_text(http, store, search):
+    with store.engine.begin() as connection:
+        review(connection, 60, actor_id="literal" + search + "actor")
+    login(http, "admin")
+    page = http.get(PATH, params={"search": search}).json()
+    assert page["total"] == 1
+    assert [event["id"] for event in page["events"]] == [str(UUID(int=60))]
+    exported = http.get(PATH + "/export", params={"search": search})
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"]
+
+
+@pytest.mark.parametrize("actor_kind", ["human", "model", "system", "unknown"])
+def test_recorded_actor_kind_is_not_inferred_from_identity(http, store, actor_kind):
+    with store.engine.begin() as connection:
+        review(connection, 60, actor_kind="human", actor_id="recorded-actor")
+        review(connection, 70, actor_kind="model", actor_id="recorded-actor")
+    login(http, "admin")
+    params = {"actor_kind": actor_kind}
+    page = http.get(PATH, params=params).json()
+    expected = {"human": [60], "model": [70], "system": [20, 10], "unknown": [30]}[actor_kind]
+    assert page["total"] == len(expected)
+    assert [event["id"] for event in page["events"]] == [str(UUID(int=n)) for n in expected]
+    exported = http.get(PATH + "/export", params=params)
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"]
+
+
+@pytest.mark.parametrize("search", ["historical-actor", str(UUID(int=30))])
+def test_search_and_actor_filters_never_reveal_hidden_promotions(http, search):
+    login(http)
+    params = {"actor_kind": "unknown", "search": search}
+    page = http.get(PATH, params=params).json()
+    assert page == {"project_id": "audit-fixture", "events": [], "total": 0, "next_after": None}
+    assert http.get(PATH + "/export", params=params).text == ""
+
+
+def test_filtered_cursor_count_and_export_share_the_search_population(http):
+    login(http, "admin")
+    params = {"search": "RECORDED", "actor_kind": "system", "limit": 1}
+    page = http.get(PATH, params=params).json()
+    assert page["total"] == 2
+    assert page["next_after"] == f"Review/{UUID(int=20)}"
+    last = http.get(PATH, params=params | {"after": page["next_after"]}).json()
+    assert last["total"] == 2 and last["next_after"] is None
+    exported = http.get(PATH + "/export", params={"search": "RECORDED", "actor_kind": "system"})
+    assert [json.loads(line) for line in exported.text.splitlines()] == page["events"] + last[
+        "events"
+    ]
+    for changed in ({"search": "historical"}, {"actor_kind": "human"}):
+        response = http.get(PATH, params=params | {"after": page["next_after"]} | changed)
+        assert response.status_code == 409
+        assert response.json() == {"detail": "audit_state_rejected"}
+
+
 @pytest.mark.parametrize(
     "after", ["invalid", "Review/not-a-uuid", f"Review/{UUID(int=40)}", f"Promotion/{UUID(int=30)}"]
 )
@@ -247,11 +328,24 @@ def test_expired_session_cannot_read(http, monkeypatch, suffix):
         {"kind": "Connection"},
         {"after": "x" * 65},
         {"since": "not-a-date"},
+        {"actor_kind": "person"},
+        {"search": ""},
+        {"search": "x" * 129},
     ],
 )
 def test_query_bounds(http, params):
     login(http)
     response = http.get(PATH, params=params)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+
+
+@pytest.mark.parametrize(
+    "params", [{"actor_kind": "person"}, {"search": ""}, {"search": "x" * 129}]
+)
+def test_export_filter_bounds(http, params):
+    login(http)
+    response = http.get(PATH + "/export", params=params)
     assert response.status_code == 422
     assert response.json() == {"detail": "invalid_request"}
 

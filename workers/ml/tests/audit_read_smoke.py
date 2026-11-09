@@ -92,6 +92,46 @@ def exercise_audit_reads(engine, project_key):
         export = client.get(path + "/export")
         assert export.status_code == 200
         assert [json.loads(line) for line in export.text.splitlines()] == events
+        # Filter complete committed history before counts/cursors, and preserve
+        # exact page/export equality on the real PostgreSQL UUID representation.
+        for params, matching in (
+            ({"search": events[0]["id"]}, [events[0]]),
+            (
+                {"search": events[0]["record_id"]},
+                [event for event in events if event["record_id"] == events[0]["record_id"]],
+            ),
+            *(
+                (
+                    {"actor_kind": actor_kind},
+                    [event for event in events if event["actor_kind"] == actor_kind],
+                )
+                for actor_kind in ("human", "model", "system", "unknown")
+            ),
+            (
+                {"search": events[0]["actor_id"].upper(), "actor_kind": events[0]["actor_kind"]},
+                [
+                    event
+                    for event in events
+                    if events[0]["actor_id"].lower() in event["actor_id"].lower()
+                    and event["actor_kind"] == events[0]["actor_kind"]
+                ],
+            ),
+            ({"search": "%"}, [event for event in events if "%" in event["actor_id"]]),
+        ):
+            response = client.get(path, params=params | {"limit": 1})
+            assert response.status_code == 200
+            filtered = response.json()
+            assert filtered["total"] == len(matching)
+            assert filtered["events"] == matching[:1]
+            filtered_export = client.get(path + "/export", params=params)
+            assert filtered_export.status_code == 200
+            assert [json.loads(line) for line in filtered_export.text.splitlines()] == matching
+            if len(matching) > 1:
+                next_page = client.get(
+                    path, params=params | {"limit": 1, "after": filtered["next_after"]}
+                ).json()
+                assert next_page["total"] == len(matching)
+                assert next_page["events"] == matching[1:2]
         assert client.get("/projects/missing-audit-project/audit-log").status_code == 404
 
         # A new authenticated principal gets a new authorized query, not the
@@ -107,6 +147,22 @@ def exercise_audit_reads(engine, project_key):
         denied_cursor = client.get(path, params={"after": f"Promotion/{promotion['id']}"})
         assert denied_cursor.status_code == 409
         assert denied_cursor.json() == {"detail": "audit_state_rejected"}
+        for search in (promotion["id"], promotion["record_id"], promotion["actor_id"]):
+            params = {"search": search, "actor_kind": "unknown"}
+            response = client.get(path, params=params)
+            assert response.status_code == 200
+            assert response.json() == {
+                "project_id": project_key,
+                "events": [],
+                "total": 0,
+                "next_after": None,
+            }
+            assert client.get(path + "/export", params=params).text == ""
+            hidden_cursor = client.get(
+                path, params=params | {"after": f"Promotion/{promotion['id']}"}
+            )
+            assert hidden_cursor.status_code == 409
+            assert hidden_cursor.json() == {"detail": "audit_state_rejected"}
     assert records() == before
     assert snapshot(engine, project_key) == registry
     assert qualification_journals(engine) == journals
