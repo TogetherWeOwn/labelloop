@@ -243,6 +243,38 @@ shell and full CostsView mounting remain required and separately owned shell wor
 is not replaced. REA: reuse the delivered durable ledger projection and audit
 transport safeguards, not another ledger or authorization engine.
 
+### Session cost display contract — verification pending
+
+`sessionCostsRecord(project, summaryQuery, pageQuery, signal)` composes the strict
+session client's complete month/iteration summary with exactly one ledger page.
+Both reads retain server authorization, bounded transport and cancellation. A
+changed policy revision, limit, autonomous flag or project pause rejects the
+combined read without retry. Matching policy does **not** prove a shared ledger
+snapshot: the summary and page each have their own consistent transaction.
+
+`CostsRecord.source: 'session'` requires authoritative summaries and retains the
+page's continuation cursor. `CostsView` consumes those summaries, never sums the
+visible page for its meters. Filters and shown-row CSV affect the page only;
+copy explicitly excludes complete-history/export and refused-attempt claims.
+Missing timestamps, kinds, objects, recipes and shared price version remain null.
+Known times are reservation times. A bound annotation job supplies review-batch
+identity, not a training-run identity; session run filtering cannot invent one.
+Retained-child exposure survives the projection, actual zero stays confirmed,
+and a paused review stays distinct from a refused reservation. Autonomous approval
+comes only from the recorded flag, never from absent approver metadata.
+
+Session records currently disable spending commands even if a fixture command
+port is passed. Policy/resume HTTP wiring, full history/export/pagination controls,
+normal authenticated application mounting and real navigation remain unfinished.
+No shell, design token, layout, endpoint, dependency or accounting engine is added.
+Network-free transport/SSR tests cover complete totals beyond the page, unknown
+metadata/CSV, retained exposure, zero actuals, review pause, mixed-policy rejection,
+foreign scope, cancellation plumbing and expired sessions. New controls await
+exact-head Actions; no local test or build ran. This supersedes the earlier claim
+that the consumer contract cannot represent server summaries, not the remaining
+full operational-acceptance gaps. REA: reuse the supplied CostsView and strict
+session client rather than fabricate a rich ledger from paged reservations.
+
 ## Not delivered: complete authenticated integration
 
 Main currently has no operational read APIs. `contracts.ts` contains **projection

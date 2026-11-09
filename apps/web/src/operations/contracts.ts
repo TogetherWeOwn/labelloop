@@ -21,28 +21,45 @@ export interface CostEntry {
   operation_id: string;
   project_id: string;
   iteration_id: string;
-  object_id: string;
+  object_id: string | null;
   recipe_id: string | null;
   month: string;
-  at: string;
-  kind: OperationKind;
+  at: string | null;
+  kind: OperationKind | null;
   approved_by: string | null;
+  reserved_autonomously?: boolean;
+  exposure?: number;
   estimate: number;
   // Refusals are durable dispatch attempts, not core LedgerEntry reservations.
   state: 'reserved' | 'dispatched' | 'unconfirmed' | 'settled' | 'cancelled' | 'insufficient_credits' | 'refused';
   actual: number | null;
   result: string;
 }
-export interface CostsRecord {
+export interface CostTotals {
+  operation_count: number;
+  actual: number;
+  confirmed_estimate: number;
+  reserved: number;
+  unconfirmed: number;
+  exposure: number;
+  delta: number;
+}
+interface CostRecordFields {
   project_id: string;
-  revision: number;
+  revision: number; // Policy revision only, never ledger freshness.
   month: string;
   iteration_id: string;
-  price_version: string;
+  price_version: string | null;
   policy: BudgetPolicy;
   pause_reason: 'insufficient_credits' | 'estimate_overrun' | null;
   entries: readonly CostEntry[];
 }
+export type CostsRecord = CostRecordFields & (
+  | { source?: 'fixture'; summaries?: never; next_after?: never }
+  // A page cannot be summed into complete project/iteration totals. These are
+  // independently consistent server reads, not one frozen ledger snapshot.
+  | { source: 'session'; summaries: { monthly: CostTotals; iteration: CostTotals }; next_after: string | null }
+);
 export interface CostCommands {
   // Atomic server checks include admin, CSRF, revision and budget invariants.
   savePolicy: (policy: BudgetPolicy, expectedRevision: number) => Promise<void>;

@@ -1,5 +1,6 @@
-import type { BudgetPolicy } from './contracts.ts';
+import type { BudgetPolicy, CostTotals } from './contracts.ts';
 import { readSessionText } from './session-read.ts';
+export type { CostTotals } from './contracts.ts';
 
 // Wire projection of budget_reads.BudgetPage, not the richer CostsRecord. Policy
 // revisions are not ledger freshness; pages are independent consistent reads.
@@ -36,15 +37,6 @@ export interface CostReadQuery {
 export interface CostSummaryQuery {
   month: string;
   iteration_id: string;
-}
-export interface CostTotals {
-  operation_count: number;
-  actual: number;
-  confirmed_estimate: number;
-  reserved: number;
-  unconfirmed: number;
-  exposure: number;
-  delta: number;
 }
 export interface BudgetSummary extends Omit<BudgetPage, 'operations' | 'next_after'>, CostSummaryQuery {
   monthly: CostTotals;

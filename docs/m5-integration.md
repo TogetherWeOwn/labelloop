@@ -6,7 +6,38 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Producer-emitted budget refusal — implementation, verification pending
+## Checkpoint and session cost consumer — verification pending
+
+The fixed 2026-11-09T12:00:00Z integration checkpoint was missed. Remaining
+acceptance is not cut or silently re-dated: full authenticated CostsView/AuditLog
+mounting, normal navigation, policy/resume commands, connection/complete refusal
+history and expanded-schema restore/regeneration/model-evaluation-audit recovery
+remain incomplete. The 42-table source inventory is not recovery evidence.
+Fixture-only mechanics, incumbent retention and closed real-policy promotion and
+automatic-annotation paths remain the safe fallback. Independent domain gold is
+not the fixture-exit prerequisite; fixture mechanics are not domain quality.
+
+The session cost adapter now supplies a discriminated read projection to the
+existing CostsView. Complete server summaries drive meters independently of the
+one displayed ledger page; retained-child exposure and null metadata survive.
+Policy mismatches reject, but equal policy is not called a shared ledger snapshot.
+Shown-row CSV and page copy cannot claim complete history or refused attempts.
+Session spending commands stay disabled. New network-free transport and SSR
+controls await exact-head Actions; no local tests/builds ran. This is a consumer
+seam, not authenticated application mounting, a new shell or a second ledger.
+
+Baseline `bdce5872d8a899aaf73944ea7af8a912060a372b`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609231536),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609230930) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42609231029)
+passed, including unit, both-recipe PostgreSQL ML smoke, web/browser,
+queue/migration cycles/all four parents and dev-stack. Prior producer-refusal and
+review-pause assertions are verified, superseding their historical pending labels.
+This does not verify the new cost consumer or establish M5 acceptance. Required
+Devin, fresh-context and native QA/Security reviews and pinned merge remain gates.
+REA: reuse complete authoritative summaries and supplied view contracts.
+
+## Producer-emitted budget refusal — historical pending report
 
 The both-recipe PostgreSQL audit smoke now obtains `approval_exhausted` from the
 real BudgetStore review-request claim instead of inserting a synthetic journal row.

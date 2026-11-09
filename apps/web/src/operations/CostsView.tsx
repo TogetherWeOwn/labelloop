@@ -11,7 +11,7 @@ export function CostsView({ state, readId, role, scope, commands, onRefresh }: {
 }) {
   return <section className="operations"><header className="phead"><div><h1>Costs. <span>Nothing paid runs without an estimate.</span></h1>
     {role === 'reviewer' && <p>Read-only. Only an admin can manage spending policy.</p>}</div></header>
-    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, role])} record={record} readId={readId} role={role} scope={scope} stale={stale} commands={commands} onRefresh={onRefresh} />}</ViewBoundary>
+    <ViewBoundary state={state}>{(record, stale) => <CostsContent key={JSON.stringify([record.project_id, record.revision, role, record.source])} record={record} readId={readId} role={role} scope={scope} stale={stale} commands={record.source === 'session' ? undefined : commands} onRefresh={onRefresh} />}</ViewBoundary>
   </section>;
 }
 
@@ -33,10 +33,11 @@ function CostsContent({ record, readId, role, scope, stale, commands, onRefresh 
   const [kind, setKind] = useState<OperationKind | null>(null);
   const command = useCostCommand(readId, stale, commands, onRefresh);
   const monthly = record.entries.filter((entry) => entry.project_id === record.project_id && entry.month === record.month);
-  const month = totals(monthly);
-  const iteration = totals(record.entries.filter((entry) => entry.project_id === record.project_id && entry.iteration_id === record.iteration_id));
+  const month = record.source === 'session' ? record.summaries.monthly : totals(monthly);
+  const iteration = record.source === 'session' ? record.summaries.iteration : totals(record.entries.filter((entry) => entry.project_id === record.project_id && entry.iteration_id === record.iteration_id));
   const entries = scopedEntries(record, scope).filter((entry) => kind === null || entry.kind === kind);
-  return <div className="stack"><p className="label">{record.month} · USD · prices {record.price_version} · {scope.kind}: {scope.id}</p>
+  return <div className="stack"><p className="label">{record.month} · USD · prices {record.price_version ?? 'per operation; version unavailable in this view'} · {scope.kind}: {scope.id}</p>
+    {record.source === 'session' && <p>Complete month and iteration summaries. Ledger rows are one independently read page, not a shared snapshot. Refused-attempt history is not included here.</p>}
     <PaidPause reason={record.pause_reason}>{role === 'admin' && <button type="button" className="pill ghost" disabled={command.disabled} onClick={() => { if (commands) void command.execute(() => commands.resumePaid(record.revision)); }}>Resume paid steps</button>}</PaidPause>
     <div className="tiles">
       <BudgetMeter label="Spent and committed this month" used={month.exposure} limit={record.policy.monthly_limit} />
@@ -54,10 +55,10 @@ function CostsContent({ record, readId, role, scope, stale, commands, onRefresh 
           ['Per operation', record.policy.operation_limit === null ? 'Not set' : usd(record.policy.operation_limit)],
         ]} />}
       </aside>
-      <section className="card ledger" aria-labelledby="ledger-heading"><header><h2 id="ledger-heading">Ledger</h2><button className="linkbtn" onClick={() => download(new Blob([ledgerCsv(entries)], { type: 'text/csv;charset=utf-8' }), 'costs.csv')}>Download CSV</button></header>
+      <section className="card ledger" aria-labelledby="ledger-heading"><header><h2 id="ledger-heading">Ledger</h2><button className="linkbtn" onClick={() => download(new Blob([ledgerCsv(entries)], { type: 'text/csv;charset=utf-8' }), 'costs.csv')}>{record.source === 'session' ? 'Download shown rows CSV' : 'Download CSV'}</button></header>
         <div className="chips" role="group" aria-label="Operation kind"><button className="chip" aria-pressed={kind === null} onClick={() => setKind(null)}>All</button>{kinds.map((item) => <button className="chip" key={item} aria-pressed={kind === item} onClick={() => setKind(item)}>{item}</button>)}</div>
-        {entries.length === 0 ? <p>{record.entries.length === 0 ? 'Nothing paid has run yet. Local training and review are free.' : 'No operations match this scope and filter.'}</p> : <TableRegion label="Paid operation ledger"><table><caption>Every paid operation, including refused ones · newest first</caption><thead><tr>{['When (UTC)', 'Operation', 'Approved by', 'Estimate', 'Actual', 'Result'].map((label) => <th key={label} scope="col">{label === 'Estimate' ? <span className="tag warn">Estimate</span> : label}</th>)}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.operation_id}>
-          <td><Utc value={entry.at} /></td><th scope="row">{entry.kind} · {entry.object_id}{entry.recipe_id && <> · {entry.recipe_id}</>}<span className="secondary">{entry.operation_id} · {entry.iteration_id}</span></th>
+        {entries.length === 0 ? <p>{record.source === 'session' ? 'No operations on this page match this scope and filter.' : record.entries.length === 0 ? 'Nothing paid has run yet. Local training and review are free.' : 'No operations match this scope and filter.'}</p> : <TableRegion label="Paid operation ledger"><table><caption>{record.source === 'session' ? 'Current ledger page · known reservation times first' : 'Every paid operation, including refused ones · newest first'}</caption><thead><tr>{['When (UTC)', 'Operation', 'Approved by', 'Estimate', 'Actual', 'Result'].map((label) => <th key={label} scope="col">{label === 'Estimate' ? <span className="tag warn">Estimate</span> : label}</th>)}</tr></thead><tbody>{entries.map((entry) => <tr key={entry.operation_id}>
+          <td>{entry.at === null ? 'Reservation time unavailable' : <Utc value={entry.at} />}</td><th scope="row">{entry.kind ?? 'Operation kind unavailable'} · {entry.object_id ?? 'Object unavailable'}{entry.recipe_id && <> · {entry.recipe_id}</>}<span className="secondary">{entry.operation_id} · {entry.iteration_id}</span></th>
           <td>{entry.state === 'refused' ? <span className="tag danger">{approvalLabel(entry)}</span> : approvalLabel(entry)}</td>
           <td>{usd(entry.estimate)}</td><td>{actualCostLabel(entry)}</td><td>{entry.result}</td>
         </tr>)}</tbody></table></TableRegion>}
@@ -112,7 +113,7 @@ function PolicyEditor({ record, command, commands, onRefresh }: { record: CostsR
       else void execute(() => commands.savePolicy(policy, record.revision));
     } catch { setMessage('Enter nonnegative USD limits with up to six decimal places.'); }
   }}>
-    {!commands && <p>Read-only fixture. Authenticated spending commands are not connected.</p>}
+    {!commands && <p>{record.source === 'session' ? 'Read-only session records. Spending commands are not connected.' : 'Read-only fixture. Authenticated spending commands are not connected.'}</p>}
     <div className="toggle"><span>Spend without asking</span><button type="button" className="switch" role="switch" aria-label="Spend without asking" aria-checked={autonomous} disabled={disabled} onClick={() => { setConfirm(null); setAutonomous(!autonomous); }} aria-describedby={`${id}-why`} /><p id={`${id}-why`}>Off: every paid step waits for a person to approve its estimate. On: steps run inside the limits below, and each one still writes its estimate first.</p></div>
     {([['Monthly limit (USD)', monthly, setMonthly], ['Per iteration (USD)', iteration, setIteration], ['Per operation (USD)', operation, setOperation]] as const).map(([label, value, change], index) => <div className="field" key={label}><label htmlFor={`${id}-${index}`}>{label}</label><input id={`${id}-${index}`} className="input" inputMode="decimal" value={value} disabled={disabled} onChange={(event) => { setConfirm(null); change(event.target.value); }} /></div>)}
     {!policyComplete(record.policy) && <p>Set a monthly limit first. Paid steps are unavailable until all three limits are set.</p>}

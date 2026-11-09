@@ -21,8 +21,9 @@ export function policyComplete(policy: BudgetPolicy): boolean {
 export function scopedEntries(record: CostsRecord, scope: CostScope): readonly CostEntry[] {
   return record.entries.filter((entry) => entry.project_id === record.project_id && (
     scope.kind === 'project' ? scope.id === entry.project_id :
-    scope.kind === 'iteration' ? scope.id === entry.iteration_id : scope.id === entry.object_id
-  )).sort((a, b) => b.at.localeCompare(a.at) || a.operation_id.localeCompare(b.operation_id));
+    scope.kind === 'iteration' ? scope.id === entry.iteration_id :
+    scope.kind === 'run' && record.source === 'session' ? false : scope.id === entry.object_id
+  )).sort((a, b) => (b.at ?? '').localeCompare(a.at ?? '') || a.operation_id.localeCompare(b.operation_id));
 }
 
 export function totals(entries: readonly CostEntry[]) {
@@ -33,8 +34,8 @@ export function totals(entries: readonly CostEntry[]) {
       actual += entry.actual;
       delta += entry.actual - entry.estimate;
     } else if (entry.state !== 'cancelled' && entry.state !== 'refused') {
-      if (entry.state === 'unconfirmed') unconfirmed += entry.estimate;
-      else reserved += entry.estimate;
+      if (entry.state === 'unconfirmed') unconfirmed += entry.exposure ?? entry.estimate;
+      else reserved += entry.exposure ?? entry.estimate;
     }
   }
   return { actual, reserved, unconfirmed, delta, exposure: actual + reserved + unconfirmed };
@@ -45,14 +46,14 @@ export function actualCostLabel(entry: CostEntry): string {
 }
 
 export function approvalLabel(entry: CostEntry): string {
-  return entry.state === 'refused' ? 'Refused' : entry.approved_by ?? 'Approval unavailable';
+  return entry.state === 'refused' ? 'Refused' : entry.approved_by ?? (entry.reserved_autonomously ? 'Policy (autonomous)' : 'Approval unavailable');
 }
 
 // Neutralize spreadsheet formulas as well as CSV separators, quotes and newlines.
 export function ledgerCsv(entries: readonly CostEntry[]): string {
   const cell = (value: string) => `"${(/^\s*[=+@-]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`;
   return [['UTC', 'Operation', 'Kind', 'Object', 'Recipe', 'Approved by', 'Estimate USD', 'Actual USD', 'State', 'Result'],
-    ...entries.map((e) => [e.at, e.operation_id, e.kind, e.object_id, e.recipe_id ?? '', approvalLabel(e),
+    ...entries.map((e) => [e.at ?? '', e.operation_id, e.kind ?? '', e.object_id ?? '', e.recipe_id ?? '', approvalLabel(e),
       usd(e.estimate), actualCostLabel(e), e.state, e.result]),
   ].map((row) => row.map(cell).join(',')).join('\r\n');
 }
