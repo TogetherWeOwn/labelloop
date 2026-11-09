@@ -873,18 +873,27 @@ def exercise_durable_http_promotion(engine, release, final, context, actor):
         assert qualified.evidence.remediation_for == incidents
         assert qualified.evidence.canary_audit.remediation_for == incidents
         acceptance = load_acceptance(connection, **scope)
+        unbound = replace(
+            qualified,
+            evidence=replace(
+                qualified.evidence,
+                remediation_for=(),
+                canary_audit=replace(qualified.evidence.canary_audit, remediation_for=()),
+            ),
+        )
+        affected = unaffected = 0
         for cell in qualified.evidence.scope:
             acceptance.require_acceptance(candidate, report, qualified, cell)
-            unbound = replace(
-                qualified,
-                evidence=replace(
-                    qualified.evidence,
-                    remediation_for=(),
-                    canary_audit=replace(qualified.evidence.canary_audit, remediation_for=()),
-                ),
-            )
-            with pytest.raises(ValueError, match="post-incident qualification and canary evidence"):
+            if any(cell in item.scope for item in acceptance.pauses):
+                affected += 1
+                with pytest.raises(
+                    ValueError, match="post-incident qualification and canary evidence"
+                ):
+                    acceptance.require_acceptance(candidate, report, unbound, cell)
+            else:
+                unaffected += 1
                 acceptance.require_acceptance(candidate, report, unbound, cell)
+        assert affected > 0 and unaffected > 0
     canary_vetoes = exercise_http_canary_vetoes(engine, candidate, qualified, actor, payload)
     policy_vetoes = exercise_http_promotion_policy_changes(
         engine, candidate, qualified, actor, payload
