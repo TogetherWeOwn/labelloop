@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Iterator
@@ -341,6 +342,9 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
     evals_by_id = {row["id"]: row for row in tables["evaluation_run"].rows}
     models_by_key = {row["release_key"]: row for row in tables["model_release"].rows}
     models_by_id = {row["id"]: row for row in tables["model_release"].rows}
+    project_keys = {r["id"]: r["project_key"] for r in tables["project"].rows}
+    recipe_keys = {r["id"]: r["recipe_key"] for r in tables["preprocessing_recipe"].rows}
+    selected_by_training: dict[str, dict] = {}
 
     for run in tables["training_run"].rows:
         record = _nested(run, "record")
@@ -369,8 +373,30 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
                 raise ValueError("checkpoint evaluation artifact mismatch")
             seen.append(checkpoint.get("evaluation_run_id"))
         selected = _nested(record, "selected")
-        if selected.get("evaluation_run_id") not in seen:
-            raise ValueError("selected checkpoint disagrees with checkpoint evidence")
+        # Reuse the TrainingResult selected-checkpoint invariant: the selected
+        # checkpoint is exactly select_checkpoint(checkpoints) — the highest
+        # validation_map, earliest epoch on a tie, with unique epochs.
+        epochs = []
+        for checkpoint in checkpoints:
+            epoch = checkpoint.get("epoch")
+            score = checkpoint.get("validation_map")
+            if (
+                isinstance(epoch, bool)
+                or not isinstance(epoch, int)
+                or epoch < 0
+                or isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or not math.isfinite(score)
+                or not 0 <= score <= 1
+            ):
+                raise ValueError("incomplete checkpoint record in training lineage")
+            epochs.append(epoch)
+        if len(set(epochs)) != len(epochs):
+            raise ValueError("checkpoint epochs must be unique in training lineage")
+        winner = max(checkpoints, key=lambda item: (item["validation_map"], -item["epoch"]))
+        if selected != winner:
+            raise ValueError("selected checkpoint disagrees with fixed-shape validation")
+        selected_by_training[run["id"]] = selected
 
     for evaluation in tables["evaluation_run"].rows:
         if _nested(evaluation, "record").get("run_id") != evaluation["run_key"]:
@@ -394,6 +420,9 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
                 "policy"
             ) != record.get("policy"):
                 raise ValueError("model evaluation artifact mismatch")
+        selected = selected_by_training.get(model["training_run_id"])
+        if selected is not None and record.get("weights_sha256") != selected.get("sha256"):
+            raise ValueError("model weights disagree with selected checkpoint")
 
     linked: dict[str, set[str]] = {}
     for link in tables["model_evaluation"].rows:
@@ -416,16 +445,49 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
         ):
             raise ValueError("model evaluation links do not cover initial evidence")
 
+    def check_payload_scope(model: dict, payload: dict, state: dict) -> None:
+        # The audited model must belong to the enclosing registry scope: its
+        # payload keys must match the state keys, and the model row's foreign
+        # keys (when resolvable) must resolve to those same keys.
+        if (payload.get("project_id"), payload.get("recipe_id")) != (
+            state["project_id"],
+            state["recipe_id"],
+        ):
+            raise ValueError("registry payload scope mismatch")
+        if (
+            model["project_id"] in project_keys
+            and project_keys[model["project_id"]] != payload.get("project_id")
+        ) or (
+            model["recipe_id"] in recipe_keys
+            and recipe_keys[model["recipe_id"]] != payload.get("recipe_id")
+        ):
+            raise ValueError("registry payload scope mismatch")
+
+    def check_linked_evidence(model: dict, payload: dict, run_id: object) -> None:
+        if not isinstance(run_id, str):
+            raise ValueError("unresolved registry evaluation lineage")
+        if run_id not in linked.get(model["id"], set()):
+            raise ValueError("registry evaluation is not linked to the model release")
+        evaluation = evaluations.get(run_id)
+        if evaluation is None:
+            raise ValueError("unresolved registry evaluation lineage")
+        if evaluation["training_run_id"] != model["training_run_id"]:
+            raise ValueError("registry evaluation training lineage mismatch")
+        evidence = _nested(evaluation, "record")
+        model_record = _nested(model, "record")
+        if evidence.get("weights_sha256") != model_record.get("weights_sha256") or evidence.get(
+            "policy"
+        ) != model_record.get("policy"):
+            raise ValueError("registry evaluation artifact mismatch")
+
     for row in tables["promotion_event"].rows:
         record = _nested(row, "record")
-        for field in ("evaluation_key", "incumbent_evaluation_key"):
-            key = record.get(field)
-            if key is not None and key not in evaluations:
-                raise ValueError("unresolved promotion evaluation lineage")
+        states = {}
         for side in ("before", "after"):
             state = record.get(side)
             if not isinstance(state, dict) or set(state) != set(_REGISTRY_KEYS):
                 raise ValueError("incomplete registry payload state in promotion audit")
+            states[side] = state
             for field in ("champion", "rollback"):
                 payload = state[field]
                 if payload is None:
@@ -436,14 +498,24 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
                 if model is None:
                     raise ValueError("registry payload references a missing model release")
                 check_model_contract(payload, model)
+                check_payload_scope(model, payload, state)
                 for run_id in payload["evaluation_run_ids"]:
-                    if not isinstance(run_id, str):
-                        raise ValueError("unresolved registry evaluation lineage")
-                    evaluation = evaluations.get(run_id)
-                    if evaluation is None:
-                        raise ValueError("unresolved registry evaluation lineage")
-                    if evaluation["training_run_id"] != model["training_run_id"]:
-                        raise ValueError("registry evaluation training lineage mismatch")
+                    check_linked_evidence(model, payload, run_id)
+        # The action's own evaluation references must resolve to the model
+        # association of the release they qualify.
+        for field, side in (("evaluation_key", "after"), ("incumbent_evaluation_key", "before")):
+            key = record.get(field)
+            if key is None:
+                continue
+            if key not in evaluations:
+                raise ValueError("unresolved promotion evaluation lineage")
+            payload = states[side]["champion"]
+            if not isinstance(payload, dict):
+                raise ValueError("unresolved promotion evaluation lineage")
+            model = models_by_key.get(payload.get("release_id"))
+            if model is None or key not in payload["evaluation_run_ids"]:
+                raise ValueError("unresolved promotion evaluation lineage")
+            check_linked_evidence(model, payload, key)
 
 
 def check_recipe_lineage(tables: dict[str, TableInventory]) -> None:
@@ -549,6 +621,24 @@ def check_chains(tables: dict[str, TableInventory]) -> None:
                     model and state[payload]["release_id"] != model["release_key"]
                 ):
                     raise ValueError("registry rollback payload mismatch")
+                if model is not None:
+                    # The head's model rows must belong to the head's own scope.
+                    if (
+                        model["project_id"] in project_keys
+                        and project_keys[model["project_id"]] != state[payload]["project_id"]
+                    ) or (
+                        model["recipe_id"] in recipe_keys
+                        and recipe_keys[model["recipe_id"]] != state[payload]["recipe_id"]
+                    ):
+                        raise ValueError("registry head model scope mismatch")
+                    if (
+                        head["project_id"] in project_keys
+                        and project_keys[head["project_id"]] != state[payload]["project_id"]
+                    ) or (
+                        head["recipe_id"] in recipe_keys
+                        and recipe_keys[head["recipe_id"]] != state[payload]["recipe_id"]
+                    ):
+                        raise ValueError("registry head model scope mismatch")
     check_evaluation_lineage(tables)
     check_recipe_lineage(tables)
 

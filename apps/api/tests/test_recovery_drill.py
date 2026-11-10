@@ -215,6 +215,61 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
                 # A restored policy that disagrees with its variant manifest must
                 # not validate even when only the recipe table is resealed.
                 cases.append(reseal(snapshot, tamper_recipe_policy))
+
+                def drop_appended_link(document):
+                    appended = {
+                        row["id"]
+                        for row in document["tables"]["evaluation_run"]["rows"]
+                        if row["run_key"].endswith("-appended")
+                    }
+                    links = document["tables"]["model_evaluation"]
+                    links["rows"] = [
+                        row for row in links["rows"] if row["evaluation_id"] not in appended
+                    ]
+                    links["sha256"] = digest(encode(links["rows"]))
+
+                # Removing only an appended evaluation's model link (its row
+                # and audited payloads remain) must not validate.
+                cases.append(reseal(snapshot, drop_appended_link))
+
+                def tamper_selected_checkpoint(document):
+                    table = document["tables"]["training_run"]
+                    table["rows"][0]["record"]["selected"]["sha256"] = "f" * 64
+                    table["sha256"] = digest(encode(table["rows"]))
+
+                # A selected-checkpoint hash that disagrees with the
+                # deterministic selection / model weights must not validate.
+                cases.append(reseal(snapshot, tamper_selected_checkpoint))
+
+                def cross_scope_model(document):
+                    other = next(
+                        row
+                        for row in document["tables"]["preprocessing_recipe"]["rows"]
+                        if row["recipe_key"] == "full-letterbox-640-v1"
+                    )
+                    models = document["tables"]["model_release"]
+                    row = next(
+                        item
+                        for item in models["rows"]
+                        if item["record"]["recipe_id"] == "full-letterbox-320-v1"
+                    )
+                    row["recipe_id"] = other["id"]
+                    row["record"]["recipe_id"] = other["recipe_key"]
+                    models["sha256"] = digest(encode(models["rows"]))
+                    events = document["tables"]["promotion_event"]
+                    for event in events["rows"]:
+                        for side in ("before", "after"):
+                            state = event["record"][side]
+                            for field in ("champion", "rollback"):
+                                payload = state[field]
+                                if payload and payload["release_id"] == row["release_key"]:
+                                    payload["recipe_id"] = other["recipe_key"]
+                    events["sha256"] = digest(encode(events["rows"]))
+                    document["audit"]["promotion_event"] = audit_seal(events["rows"]).model_dump()
+
+                # A model whose payload and row agree with each other but
+                # belong to the other registry scope must not validate.
+                cases.append(reseal(snapshot, cross_scope_model))
                 for case in cases:
                     with pytest.raises(ValueError):
                         restore_fixture(

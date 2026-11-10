@@ -500,8 +500,22 @@ def test_populated_chain_validates_with_uuid_foreign_keys_and_key_scoped_states(
                     "dataset_manifest_sha256": manifest_digest,
                     "class_map_sha256": "c" * 64,
                 },
-                "checkpoints": [{"sha256": "a" * 64, "evaluation_run_id": "eval-1"}],
-                "selected": {"evaluation_run_id": "eval-1"},
+                "checkpoints": [
+                    {
+                        "epoch": 0,
+                        "sha256": "a" * 64,
+                        "validation_map": 0.5,
+                        "evaluation_run_id": "eval-1",
+                        "role": "development",
+                    }
+                ],
+                "selected": {
+                    "epoch": 0,
+                    "sha256": "a" * 64,
+                    "validation_map": 0.5,
+                    "evaluation_run_id": "eval-1",
+                    "role": "development",
+                },
             },
         }
     ]
@@ -563,3 +577,133 @@ def test_populated_chain_validates_with_uuid_foreign_keys_and_key_scoped_states(
         }
     ]
     check_chains(tables)
+
+
+def _lineage_tables():
+    """Populated chain with an appended evaluation linked to the champion."""
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["evaluation_run"].rows = [
+        {
+            "id": f"e{i}",
+            "run_key": run_id,
+            "training_run_id": "t",
+            "variant_id": "v",
+            "record": {
+                "run_id": run_id,
+                "weights_sha256": "a" * 64,
+                "policy": {"interpolation": "linear"},
+            },
+        }
+        for i, run_id in enumerate(["eval-1", "eval-2"])
+    ]
+    checkpoint = {
+        "epoch": 0,
+        "sha256": "a" * 64,
+        "validation_map": 0.5,
+        "evaluation_run_id": "eval-1",
+        "role": "development",
+    }
+    tables["training_run"].rows = [
+        {
+            "id": "t",
+            "run_key": "train-1",
+            "variant_id": "v",
+            "record": {
+                "request": {"run_id": "train-1"},
+                "checkpoints": [checkpoint],
+                "selected": dict(checkpoint),
+            },
+        }
+    ]
+    model_record = _model_record(evaluation_run_ids=["eval-1"])
+    tables["model_release"].rows = [
+        {
+            "id": "m",
+            "release_key": "model",
+            "training_run_id": "t",
+            "project_id": "p",
+            "recipe_id": "r",
+            "record": model_record,
+        }
+    ]
+    payload_record = dict(model_record, evaluation_run_ids=["eval-1", "eval-2"])
+    tables["model_evaluation"].rows = [
+        {"model_id": "m", "evaluation_id": "e0"},
+        {"model_id": "m", "evaluation_id": "e1"},
+    ]
+    tables["promotion_event"].rows = [
+        {
+            "project_id": "p",
+            "recipe_id": "r",
+            "revision": 1,
+            "action": "promote",
+            "record": {
+                "before": _registry_state(0),
+                "after": _registry_state(1, champion=dict(payload_record)),
+                "evaluation_key": "eval-2",
+                "incumbent_evaluation_key": None,
+            },
+        }
+    ]
+    return tables
+
+
+def test_appended_evaluation_link_deletion_fails_validation():
+    tables = _lineage_tables()
+    check_evaluation_lineage(tables)
+    # Drop only the appended evaluation's link; its row and payloads remain.
+    tables["model_evaluation"].rows = [{"model_id": "m", "evaluation_id": "e0"}]
+    with pytest.raises(ValueError, match="not linked to the model release"):
+        check_evaluation_lineage(tables)
+
+
+def test_registry_payload_scope_mismatch_fails_validation():
+    tables = _lineage_tables()
+    # Payload/record agree with each other but belong to another registry.
+    tables["model_release"].rows[0]["record"]["recipe_id"] = "other-recipe"
+    tables["promotion_event"].rows[0]["record"]["after"]["champion"]["recipe_id"] = "other-recipe"
+    with pytest.raises(ValueError, match="scope mismatch"):
+        check_evaluation_lineage(tables)
+
+
+def test_registry_payload_model_row_foreign_key_scope_mismatch_fails():
+    tables = _lineage_tables()
+    tables["project"].rows = [{"id": "p", "project_key": "p"}]
+    tables["preprocessing_recipe"].rows = [
+        {"id": "r", "recipe_key": "r", "policy": {}},
+        {"id": "other", "recipe_key": "other-recipe", "policy": {}},
+    ]
+    # Row FK points at the other recipe while payload/record say "r".
+    tables["model_release"].rows[0]["recipe_id"] = "other"
+    with pytest.raises(ValueError, match="scope mismatch"):
+        check_evaluation_lineage(tables)
+
+
+def test_selected_checkpoint_hash_tamper_fails_validation():
+    tables = _lineage_tables()
+    tables["training_run"].rows[0]["record"]["selected"]["sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="selected checkpoint"):
+        check_evaluation_lineage(tables)
+
+
+def test_selected_checkpoint_must_be_deterministic_winner():
+    tables = _lineage_tables()
+    record = tables["training_run"].rows[0]["record"]
+    # A higher-scoring checkpoint exists but is not selected.
+    record["checkpoints"].append(
+        {
+            "epoch": 1,
+            "sha256": "b" * 64,
+            "validation_map": 0.9,
+            "evaluation_run_id": "eval-2",
+            "role": "development",
+        }
+    )
+    record["checkpoints"][1]["sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="selected checkpoint"):
+        check_evaluation_lineage(tables)
+    # Selecting the winner (and the tie-break earliest epoch) passes.
+    record["checkpoints"][0]["validation_map"] = 0.9
+    record["selected"] = dict(record["checkpoints"][0])
+    check_evaluation_lineage(tables)
