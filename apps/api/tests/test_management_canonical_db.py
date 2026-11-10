@@ -7577,6 +7577,9 @@ def test_configuration_snapshot_competing_revisions_are_serialized(database, sam
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(run, range(2)))
+    accepted = [result for result in results if not isinstance(result, str)]
+    assert len(accepted) == (2 if same_key else 1)
+    assert all(result.revision == payload.expected_revision + 1 for result in accepted)
     if same_key:
         assert results[0] == results[1]
     else:

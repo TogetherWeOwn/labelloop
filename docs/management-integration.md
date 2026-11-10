@@ -200,13 +200,32 @@ those capabilities in live project policy. Later edits leave immutable history i
 but invalidate current setup. No new table, migration, dependency, production grant,
 object I/O or default mounting is introduced.
 
-Seven pure contract/preparation tests cover profile ordering, project ownership,
+Eight pure contract/preparation tests cover profile ordering, project ownership,
 bounds, checkpoint/argument/postprocessing digest sensitivity, strict authority-field
-refusal, JSON-native independent copies and fail-closed incomplete evidence. Twelve
-new disposable DB cases commission exact replay, current setup/source/profile pins,
-immutable historical records after edits, unchanged freeze refusal, three stale-pin /
-version cases, nonadmin refusal, audit-grant rollback and competing revisions. They
-await exact-head Actions; no new-head DB or full acceptance result is claimed.
+refusal, JSON-native independent copies, fail-closed incomplete evidence and explicit
+transaction-context propagation. Twelve disposable DB cases commission exact replay,
+current setup/source/profile pins, immutable historical records after edits, unchanged
+freeze refusal, three stale-pin / version cases, nonadmin refusal, audit-grant rollback
+and competing revisions. Race assertions require actual successful resources, not
+merely two identical failure strings.
+
+Initial snapshot head `9cbed9d03691b3a6634163d8fb7a5570ec0ec7fc`
+[failed Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42826943831):
+[6 management DB failures / 882 passed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42826943831/job/129866706010).
+All six stop at the same transaction-context mismatch: preparation holds canonical
+project/source locks under READ COMMITTED, but its composed project-detail read
+selects the snapshot-only pack-verification path. Ledger/CPU cases did not run;
+artifact upload failed downstream. [1,955 unit cases / 989 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42826943831/job/129866706706),
+remaining CI jobs, CodeQL and gitleaks passed. This is partial evidence, not a
+configuration-publication or full-bootstrap pass.
+
+The repair passes the existing source-lock context through project details to both
+setup-approval and reference reads. Normal authorized reads still default to the
+SELECT-only repeatable snapshot; mutation callers retain the existing project/source
+lock requirement. Neither pack-verifier isolation guard changes. Unit regressions
+failed before repair and passed after it; real DB/rollback/race verification of the
+repair remains pending exact-head Actions. No executable publication/freeze clearance,
+schema/client, history, migration, grant, dependency or admission change is made.
 
 ### Approved setup summary (opt-in, not publication)
 

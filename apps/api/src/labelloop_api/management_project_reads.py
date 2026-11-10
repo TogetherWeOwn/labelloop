@@ -257,8 +257,10 @@ def source_policy_draft(
 
 
 def project_detail(
-    connection: Connection, project_row, revision: int, workspace_id
+    connection: Connection, project_row, revision: int, workspace_id, *, lock_sources=False
 ) -> ProjectDetail:
+    # Normal callers own a repeatable read snapshot. Mutation callers instead
+    # hold the project lock and must retain source locking through evidence reads.
     ontology = connection.execute(
         select(ontology_release)
         .where(ontology_release.c.project_id == project_row.id)
@@ -298,7 +300,9 @@ def project_detail(
     published_classes = (
         {item["stable_id"]: item for item in published["classes"]} if published else {}
     )
-    approvals = read_setup_approvals(connection, project_row, workspace_id)
+    approvals = read_setup_approvals(
+        connection, project_row, workspace_id, lock_sources=lock_sources
+    )
     pins = {
         step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
         for step, value in (
@@ -311,7 +315,7 @@ def project_detail(
     }
     if published is not None:
         pins["classes"] = draft_sha256(published)
-    references = read_references(connection, project_row, workspace_id)
+    references = read_references(connection, project_row, workspace_id, lock_sources=lock_sources)
     sources = source_groups(connection, project_row.id)
     versions = {"ontology": str(ontology.version), "ontology_id": ontology.ontology_key}
     if sources.assignment_version is not None:

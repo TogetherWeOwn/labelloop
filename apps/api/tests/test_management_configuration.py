@@ -1,7 +1,9 @@
 """Configuration preparation contracts; no database, object or ML I/O."""
 
 import json
+from contextlib import ExitStack
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -100,7 +102,9 @@ class ConfigurationSnapshotTests(TestCase):
         )
         with (
             patch("labelloop_api.management_configuration.read_setup_approvals") as approvals,
-            patch("labelloop_api.management_configuration.project_detail", return_value=detail),
+            patch(
+                "labelloop_api.management_configuration.project_detail", return_value=detail
+            ) as projection,
             patch(
                 "labelloop_api.management_configuration.load_grouping",
                 return_value=([source] * assets, {"internal": assignment}, [], {}),
@@ -110,8 +114,68 @@ class ConfigurationSnapshotTests(TestCase):
                 Mock(), owned, uuid4(), 7, profile_snapshots(profiles, project_id)
             )
             self.assertTrue(approvals.call_args.kwargs["lock_sources"])
+            self.assertEqual(projection.call_args.kwargs, {"lock_sources": True})
             self.assertTrue(grouping.call_args.kwargs["lock_sources"])
         return result, owned
+
+    def test_project_projection_forwards_locked_mutation_context_and_defaults_to_snapshot(self):
+        from labelloop_api.management_details import SourceGroupsRead
+        from labelloop_api.management_project_reads import project_detail
+
+        owned = SimpleNamespace(
+            id=uuid4(),
+            scope="Visible packages",
+            domain="Packaging",
+            access_policy={
+                "source_permitted_use": "Licence-clean fixture",
+                "external_llm_providers_allowed": [],
+                "annotation_guide": "Visible extents",
+            },
+        )
+        ontology = SimpleNamespace(
+            ontology_key="ontology-1",
+            version=1,
+            classes=[{"stable_id": "package", "name": "Package", "definition": "A package"}],
+            class_map={"package": 0},
+        )
+        sources = SourceGroupsRead(
+            images=1,
+            groups=1,
+            metadata_keys=None,
+            pending_pairs=[],
+            split_counts={"train": 1, "val": 0, "test": 0},
+            assignment_version="assignment-1",
+        )
+        for lock_sources in (False, True):
+            with self.subTest(lock_sources=lock_sources), ExitStack() as stack:
+                connection = Mock()
+                connection.execute.return_value.one_or_none.return_value = ontology
+                connection.execute.return_value.all.return_value = [
+                    SimpleNamespace(created_at=datetime(2026, 1, 1, tzinfo=UTC))
+                ]
+                mocks = {
+                    name: stack.enter_context(
+                        patch(f"labelloop_api.management_project_reads.{name}", return_value=value)
+                    )
+                    for name, value in {
+                        "scope_draft": None,
+                        "guide_draft": None,
+                        "class_catalog_draft": None,
+                        "source_policy_draft": None,
+                        "published_catalog_content": None,
+                        "read_setup_approvals": [],
+                        "read_references": None,
+                        "source_groups": sources,
+                    }.items()
+                }
+                # Omit the keyword for normal reads: the default must remain read-only.
+                options = {"lock_sources": True} if lock_sources else {}
+                detail = project_detail(connection, owned, 7, "workspace", **options)
+                self.assertIsNone(detail.setup_summary_sha256)
+                for name in ("read_setup_approvals", "read_references"):
+                    mocks[name].assert_called_once_with(
+                        connection, owned, "workspace", lock_sources=lock_sources
+                    )
 
     def test_preparation_copies_only_named_facts_with_no_runtime_or_quality_grant(self):
         snapshot, owned = self.prepare()

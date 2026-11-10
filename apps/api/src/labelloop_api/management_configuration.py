@@ -60,7 +60,7 @@ def prepare_configuration(connection, owned, workspace_id, revision, profiles):
     # Lock canonical source evidence before the composed reads. Human annotation
     # writers synchronize on these rows, while setup/grouping shares the project lock.
     read_setup_approvals(connection, owned, workspace_id, lock_sources=True)
-    detail = project_detail(connection, owned, revision, workspace_id)
+    detail = project_detail(connection, owned, revision, workspace_id, lock_sources=True)
     if detail.setup_summary_sha256 is None:
         refuse("missing_evidence")
     assets, by_asset, _, _ = load_grouping(
