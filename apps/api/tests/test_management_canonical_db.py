@@ -7200,12 +7200,23 @@ def test_class_scope_guide_approvals_compose_and_projection_needs_only_select(da
     assert counts(owner, created.id) == (0, 0, 8)
 
 
-def anchor_pack_inputs(service, owner):
+def anchor_pack_inputs(service, owner, *, setup_step=None):
     from labelloop_api.management_reference_pack import AnchorPackPlan
 
     created, asset, source, enrollment = reference_inputs(
         service, owner, complete=False, split="train"
     )
+    if setup_step is not None:
+        saver, draft = {
+            "scope": (
+                save_scope,
+                scope_payload(2).model_copy(update={"scope": "Visible packages"}),
+            ),
+            "guide": (save_guide, guide_payload(2)),
+            "sources": (save_sources, source_policy_payload(2)),
+        }[setup_step]
+        saved = saver(service, created.id, draft)
+        enrollment = enrollment.model_copy(update={"expected_revision": saved.revision})
     enroll(service, created.id, enrollment)
     objects = [{"object_id": "anchor-box", "class_id": "package", "box": [1, 1, 11, 9]}]
     with owner.begin() as connection:
@@ -7257,7 +7268,7 @@ def anchor_pack_inputs(service, owner):
         service,
         created.id,
         ReferenceAccept(
-            expected_revision=3,
+            expected_revision=enrollment.expected_revision + 1,
             reference_id=reference.id,
             base_ontology_id=enrollment.base_ontology_id,
             assignment_version=enrollment.assignment_version,
@@ -7634,6 +7645,57 @@ def test_anchor_pack_publication_persists_attributed_snapshot_and_replay(databas
         ).scalar_one()
     assert "auto_accept_qualification" not in saved_policy
     assert saved_policy["management_setup_approvals"] == {}
+
+
+@pytest.mark.parametrize("step", ["scope", "guide", "sources"])
+def test_anchor_publication_prevents_restored_setup_approval_from_becoming_current(database, step):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner, setup_step=step)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    payload = step_approval(service, created.id, step)
+    approved = approve_step(service, created.id, payload)
+    assert reads.read_project(Reader(), created.id).approved_steps == [step]
+    with owner.connect() as connection:
+        old_approvals = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()["management_setup_approvals"]
+    published = publish_pack(service, created.id, plan, revision=approved.revision)
+    assert reads.read_project(Reader(), created.id).approved_steps == []
+    with owner.begin() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(access_policy={**policy, "management_setup_approvals": old_approvals})
+        )
+    before = counts(owner, created.id)
+    # Retry acknowledgment is historical, never renewed approval authority.
+    assert approve_step(service, created.id, payload) == approved
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        approve_step(
+            service,
+            created.id,
+            payload.model_copy(update={"expected_revision": published.revision}),
+            key="refuse-restored-approval",
+        )
+    assert counts(owner, created.id) == before
+    with owner.begin() as connection:
+        connection.execute(
+            project.update().where(project.c.id == created.id).values(access_policy=policy)
+        )
+    fresh = approve_step(
+        service, created.id, step_approval(service, created.id, step), key="fresh-approval"
+    )
+    assert fresh.revision == published.revision + 1
+    assert reads.read_project(Reader(), created.id).approved_steps == [step]
+    # Replaying publication must not invalidate a genuinely later approval.
+    assert publish_pack(service, created.id, plan, revision=approved.revision) == published
+    assert reads.read_project(Reader(), created.id).approved_steps == [step]
+    assert len(pack_receipts(owner, created.id)) == 1
 
 
 def test_anchor_pack_publication_versions_do_not_rewrite_prior_snapshot(database):

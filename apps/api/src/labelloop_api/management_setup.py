@@ -22,6 +22,7 @@ INVALIDATING_OPERATIONS = (
     "accept_reference",
     "revalidate_reference",
     "withdraw_reference",
+    "publish_anchor_pack",
 )
 
 

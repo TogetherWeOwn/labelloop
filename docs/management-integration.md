@@ -103,6 +103,27 @@ not HTTP producer acceptance. Default mounting, effective project publication,
 production role provisioning, operational dispatch and registry composition remain
 incomplete; real admission retains its exact-consuming-head Security gate.
 
+### Anchor-publication approval invalidation
+
+Exact head `66d8a2b6ddb4a1c565bc6e6649c8175284f15fcf` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42800627598):
+[833 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42800627598/job/129776946586),
+[1,916 unit tests with 934 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42800627598/job/129776946444),
+and the remaining CI, CodeQL and gitleaks checks. This verifies the typed
+anchor-publication operation, not complete setup or production integration.
+
+Subsequent source inspection found that publication cleared setup approvals but
+was absent from the approval reader's invalidating-event query. Restoring an old
+policy could therefore revive an approval predating the publication. The query
+now includes `management.publish_anchor_pack`; receipt history, not a mutable
+policy marker alone, determines whether approval remains current. A focused
+query regression failed before the correction. Three new disposable PostgreSQL
+cases exercise scope/guide/source approvals, historical retry acknowledgment,
+restored-policy refusal, fresh approval and later publication replay without
+invalidating that fresh approval. Their exact-head Actions results are pending.
+No freeze guard is relaxed and no project publication, retrieval, admission,
+runtime grants, worker startup or default mounting is enabled by this repair.
+
 ### Disposable authentication-role contract
 
 The composition fixture exercises the delivered `AuthStore` without changing its
