@@ -171,13 +171,20 @@ def require_fresh(
         raise ValueError("stale assignment pin")
     if plan.annotation_revision != annotation_revision:
         raise ValueError("stale annotation revision pin")
-    if recipe_policy is not None and recipe_policy != asdict(plan.recipe):
-        raise ValueError("stale recipe pin")
+    if recipe_policy is not None:
+        # A DB JSON policy is list-shaped (e.g. padding_color), while asdict
+        # is tuple-shaped; normalize both through JSON before comparing.
+        expected = json.loads(json.dumps(asdict(plan.recipe)))
+        if json.loads(json.dumps(recipe_policy)) != expected:
+            raise ValueError("stale recipe pin")
 
 
 def ontology_release_hash(classes: list[dict], class_map: dict[str, int]) -> str:
+    # Canonical ordering: CanonicalDatasetRelease.ontology_hash serializes
+    # classes sorted by stable_id; match it so unchanged ontologies hash equal.
+    ordered = sorted(classes, key=lambda item: item["stable_id"])
     encoded = json.dumps(
-        {"class_map": class_map, "classes": classes},
+        {"class_map": class_map, "classes": ordered},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -216,11 +223,18 @@ def load_current_pins(connection: Connection, *, asset_id: str) -> dict:
         .mappings()
         .first()
     )
+    # Multiple assignment_version rows may exist per asset; the newest by
+    # created_at (tie-broken by assignment_version) is authoritative, so a
+    # plan pinned to a superseded version cannot pass freshness by row order.
     assignment = (
         connection.execute(
-            select(source_split_assignment.c.assignment_version).where(
-                source_split_assignment.c.asset_id == asset_id
+            select(source_split_assignment.c.assignment_version)
+            .where(source_split_assignment.c.asset_id == asset_id)
+            .order_by(
+                source_split_assignment.c.created_at.desc(),
+                source_split_assignment.c.assignment_version.desc(),
             )
+            .limit(1)
         )
         .mappings()
         .first()
@@ -267,6 +281,8 @@ def freeze_recipe_plan(
     validate_plan_geometry(plan)
     if plan.frozen:
         raise ValueError("historical frozen preview is not an editable plan")
+    if recipe_key != plan.recipe.recipe_id:
+        raise ValueError("recipe_key must match the plan recipe identity")
     try:
         with connection.begin_nested():
             existing = (
@@ -289,10 +305,16 @@ def freeze_recipe_plan(
                 annotation_revision=pins["annotation_revision"],
                 recipe_policy=expected_recipe_policy,
             )
+            # The crop rides inside the stored policy JSON so a published
+            # ROI never collapses into an identical row with another ROI:
+            # the record keeps the exact rectangle (digest covers it too).
+            policy = json.loads(json.dumps(asdict(plan.recipe)))
+            if plan.crop is not None:
+                policy["crop"] = json.loads(json.dumps(asdict(plan.crop)))
             connection.execute(
                 insert(preprocessing_recipe).values(
                     recipe_key=recipe_key,
-                    policy=json.loads(json.dumps(asdict(plan.recipe))),
+                    policy=policy,
                     immutable=True,
                 )
             )

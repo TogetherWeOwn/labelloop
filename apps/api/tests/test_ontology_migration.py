@@ -97,7 +97,7 @@ def test_missing_and_ambiguous_mappings_are_rejected(old_ids, new_ids, steps, ma
         validate_catalog_migration(old, new, steps)
 
 
-def _migration_connection(ontology_id=b"oid", *, stale=False, conflict=False):
+def _migration_connection(ontology_id="oid", *, stale=False, conflict=False):
     connection = MagicMock()
     results = []
 
@@ -108,6 +108,7 @@ def _migration_connection(ontology_id=b"oid", *, stale=False, conflict=False):
         if "ontology_release" in sql and "INSERT" in sql:
             if conflict:
                 raise IntegrityError("duplicate", None, Exception("duplicate"))
+            result.scalar_one.return_value = ontology_id
             return result
         if "SELECT" in sql:
             result.mappings.return_value.one.return_value = {
@@ -135,10 +136,30 @@ def test_publish_appends_new_version_and_keeps_history():
         expected_current_version=1,
     )
     assert candidate.version == 2
+    # Published identity is the inserted row's UUID, not the version number.
+    assert candidate.ontology_id == "oid"
     inserts = [sql for sql, _ in results if "INSERT INTO ontology_release" in sql]
     updates = [sql for sql, _ in results if "UPDATE" in sql or "DELETE" in sql]
     assert len(inserts) == 1
     assert not updates
+
+
+def test_publish_with_multiple_existing_releases():
+    # v1 + v2 rows already present: the latest (v2) must load, not
+    # MultipleResultsFound on .one().
+    connection, results = _migration_connection()
+    candidate = publish_ontology_version(
+        connection,
+        project_id="project",
+        new_version=3,
+        new_classes=_classes("cat"),
+        new_class_map={"cat": 0},
+        steps=(ClassMigration(("cat",), ("cat",), "retain"),),
+        expected_current_version=1,
+    )
+    assert candidate.version == 3
+    load_sql = [sql for sql, _ in results if "SELECT" in sql and "INSERT" not in sql][0]
+    assert "LIMIT" in load_sql
 
 
 def test_stale_version_rolls_back_without_insert():

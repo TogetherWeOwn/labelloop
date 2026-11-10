@@ -1,5 +1,7 @@
 """Editable recipe plans: pins, ROI geometry and frozen publication."""
 
+import json
+from dataclasses import asdict
 from unittest.mock import MagicMock
 
 import pytest
@@ -167,7 +169,7 @@ def test_editable_crop_and_frozen_publication():
     plan = with_crop(_freeze_plan(), Crop(0, 0, 320, 320))
     assert plan.crop == Crop(0, 0, 320, 320)
     connection = _freeze_connection(plan)
-    digest = freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
+    digest = freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
     assert digest == plan_digest(plan)
     inserts = [sql for sql in connection.sqls if "INSERT INTO preprocessing_recipe" in sql]
     assert len(inserts) == 1
@@ -177,17 +179,64 @@ def test_freeze_revalidates_pins_and_refuses_stale_plan():
     plan = _freeze_plan()
     connection = _freeze_connection(plan, revision=4)  # annotation moved on
     with pytest.raises(ValueError, match="stale"):
-        freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
+        freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
     assert not any("INSERT" in sql for sql in connection.sqls)
 
 
 def test_concurrent_publication_conflict_is_refused():
     plan = _freeze_plan()
-    connection = _freeze_connection(plan, existing={"recipe_key": "roi-320-v1"})
+    connection = _freeze_connection(plan, existing={"recipe_key": RECIPE.recipe_id})
     with pytest.raises(ValueError, match="already published"):
-        freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
+        freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
 
     connection = _freeze_connection(plan, conflict=True)
     with pytest.raises(ValueError, match="already published"):
+        freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
+        freeze_recipe_plan(connection, _plan(), recipe_key=RECIPE.recipe_id)
+
+
+def test_freeze_refuses_recipe_key_mismatch_and_crop_collisions():
+    plan = with_crop(_freeze_plan(), Crop(0, 0, 320, 320))
+    connection = _freeze_connection(plan)
+    with pytest.raises(ValueError, match="recipe_key must match"):
         freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
-        freeze_recipe_plan(connection, _plan(), recipe_key="roi-320-v1")
+    assert not any("INSERT" in sql for sql in connection.sqls)
+    # A second ROI over the same recipe_id must fail loud, never publish an
+    # identical row silently.
+    connection = _freeze_connection(plan, existing={"recipe_key": RECIPE.recipe_id})
+    with pytest.raises(ValueError, match="already published"):
+        freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
+
+
+def test_json_loaded_policy_matches_tuple_recipe():
+    # DB JSON policies hold lists; asdict holds tuples — no false staleness.
+    policy = json.loads(json.dumps(asdict(RECIPE)))
+    assert policy != asdict(RECIPE)  # tuple vs list shape difference
+    require_fresh(
+        _freeze_plan(),
+        recipe_policy=policy,
+        **_fresh(ontology_hash=_freeze_plan().ontology_hash),
+    )
+
+
+def test_ontology_hash_matches_canonical_order():
+    classes = [
+        {"stable_id": "dog", "name": "dog", "definition": "def"},
+        {"stable_id": "cat", "name": "cat", "definition": "def"},
+    ]
+    reordered = [classes[1], classes[0]]
+    assert ontology_release_hash(classes, {"cat": 0, "dog": 1}) == ontology_release_hash(
+        reordered, {"cat": 0, "dog": 1}
+    )
+
+
+def test_assignment_query_is_deterministic_and_limit_one():
+    from labelloop_api.recipe_planning import load_current_pins
+
+    plan = _freeze_plan()
+    connection = _freeze_connection(plan)
+    pins = load_current_pins(connection, asset_id=plan.asset_id)
+    assert pins["assignment_version"] == plan.assignment_version
+    assignment_sql = [s for s in connection.sqls if "source_split_assignment" in s][0]
+    assert "ORDER BY" in assignment_sql and "LIMIT" in assignment_sql
+    assert "created_at" in assignment_sql

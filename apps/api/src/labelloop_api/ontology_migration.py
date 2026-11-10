@@ -175,7 +175,7 @@ def load_ontology(
         statement = statement.where(ontology_release.c.version == version)
     try:
         row = (
-            connection.execute(statement.order_by(ontology_release.c.version.desc()))
+            connection.execute(statement.order_by(ontology_release.c.version.desc()).limit(1))
             .mappings()
             .one()
         )
@@ -256,20 +256,24 @@ def publish_ontology_version(
                 class_map=dict(new_class_map),
             )
             validate_catalog_migration(current, candidate, steps)
-            project_uuid = connection.execute(
-                select(ontology_release.c.project_id).where(
-                    ontology_release.c.project_id == project_id
-                )
-            ).scalar_one()
-            connection.execute(
-                insert(ontology_release).values(
+            project_uuid = current.project_id
+            inserted_id = connection.execute(
+                insert(ontology_release)
+                .values(
                     ontology_key=f"{project_id}:v{new_version}",
                     project_id=project_uuid,
                     version=new_version,
                     classes=[asdict(item) for item in new_classes],
                     class_map=dict(new_class_map),
                 )
-            )
+                .returning(ontology_release.c.id)
+            ).scalar_one()
     except IntegrityError as error:
         raise ValueError("ontology version already exists") from error
-    return candidate
+    return OntologyRelease(
+        ontology_id=str(inserted_id),
+        project_id=project_id,
+        version=new_version,
+        classes=new_classes,
+        class_map=dict(new_class_map),
+    )
