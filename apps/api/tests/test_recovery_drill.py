@@ -142,6 +142,20 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
                     document["audit"]["promotion_event"] = audit_seal(table["rows"]).model_dump()
 
                 cases.append(reseal(snapshot, truncate_events))
+
+                def empty_events(document):
+                    table = document["tables"]["promotion_event"]
+                    table["rows"] = []
+                    table["sha256"] = digest(encode(table["rows"]))
+                    document["audit"]["promotion_event"] = audit_seal(table["rows"]).model_dump()
+                    heads = document["tables"]["registry_head"]
+                    for row in heads["rows"]:
+                        row["revision"] = 0
+                    heads["sha256"] = digest(encode(heads["rows"]))
+
+                # A fully deleted promotion history must not validate even when
+                # the head revision is resealed to zero with pointers intact.
+                cases.append(reseal(snapshot, empty_events))
                 for case in cases:
                     with pytest.raises(ValueError):
                         restore_fixture(
@@ -157,6 +171,7 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
             restore_seconds = time.monotonic() - restore_start
             with target.begin() as connection:
                 release = load_canonical_release(connection, fixture.release.release_id)
+                assert release.assignment == fixture.release.assignment
                 for recipe, manifest in manifests.items():
                     regenerated = tmp_path / "after" / recipe
                     policy = manifest["recipe"] | {

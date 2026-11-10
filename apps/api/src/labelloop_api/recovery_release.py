@@ -54,14 +54,21 @@ def load_canonical_release(connection: sa.Connection, release_key: str) -> Canon
         raise ValueError("release has no restored source split assignment")
     if len({(row["seed"], row["algorithm"], row["locked"]) for row in splits}) != 1:
         raise ValueError("inconsistent restored split policy")
+    # Split reasons and splits are group-level identity: every asset in a group
+    # must agree, and the rehydrated assignment must key reasons by group.
+    group_facts: dict[str, tuple[str, str]] = {}
+    for row in splits:
+        fact = (row["split"], row["reason"])
+        if group_facts.setdefault(row["group_id"], fact) != fact:
+            raise ValueError("inconsistent restored split policy within a group")
     assignment = SourceSplitAssignment(
         assignment_version=release["assignment_version"],
         asset_splits={r["asset_key"]: r["split"] for r in splits},
-        group_splits={r["group_id"]: r["split"] for r in splits},
+        group_splits={group: fact[0] for group, fact in group_facts.items()},
         group_ids={r["asset_key"]: r["group_id"] for r in splits},
         seed=splits[0]["seed"],
         algorithm=splits[0]["algorithm"],
-        reasons={r["asset_key"]: r["reason"] for r in splits},
+        reasons={group: fact[1] for group, fact in group_facts.items()},
         locked=splits[0]["locked"],
     )
     samples = []

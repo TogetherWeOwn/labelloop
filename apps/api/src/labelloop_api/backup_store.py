@@ -260,6 +260,12 @@ def check_chains(tables: dict[str, TableInventory]) -> None:
         chain = events.get((head["project_id"], head["recipe_id"]), [])
         if head["revision"] != len(chain):
             raise ValueError("registry head is missing audit events")
+        if not chain:
+            # A head with no audit events must be the untouched initial state;
+            # otherwise a deleted promotion history would validate silently.
+            if head["champion_id"] is not None or head["rollback_id"] is not None:
+                raise ValueError("registry head points at models without audit events")
+            continue
         if chain:
             state = chain[-1]["record"]["after"]
             for field, payload in (("champion_id", "champion"), ("rollback_id", "rollback")):
