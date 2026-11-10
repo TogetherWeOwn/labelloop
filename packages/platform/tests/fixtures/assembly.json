@@ -1,0 +1,27 @@
+{
+  "provenance": "Licence-clean synthetic producer readback and HTTP response, derived from plan v0.3 and pinned ultralytics/sdk 8af3921 OpenAPI 0.1.107. Not live traffic. Sync, connection, fenced store and billing normalization are fixture-only.",
+  "release": {
+    "project_id": "fixture-project-id",
+    "workspace_id": "workspace-1",
+    "owner": "fixture-owner",
+    "dataset_id": "fixture-dataset",
+    "dataset_slug": "release-7-full",
+    "release_id": "release-7",
+    "recipe_id": "full-letterbox-320-v1",
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "class_map_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "split_assignment_version": "split-1",
+    "platform_content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "start_response": {
+    "modelId": "fixture-model",
+    "status": "starting",
+    "gpuType": "rtx-4090",
+    "estimatedCost": {"pricePerHour": 0.69, "gpuMemoryGb": 24},
+    "billing": {
+      "estimatedCostCents": 17.25,
+      "estimatedCostDisplay": "$0.17",
+      "balanceCents": 1000
+    }
+  }
+}
