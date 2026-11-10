@@ -249,10 +249,51 @@ Pure contract tests cover full receipt mutation/refusal, bounds/uniqueness and
 isolation/lock-context propagation. Eighteen added disposable Actions DB cases
 cover SELECT-only grants, explicit versions/digests, ownership/principal refusal,
 changed setup/profiles, replay without renewal and corrupt/duplicate receipts,
-including rehashed false authority. Their exact-head verification is pending.
-This is internal verification, not a public snapshot endpoint, effective project
-release, runtime-profile consumer or freeze clearance. No jobs, workers, retrieval,
-admission, default mounting, promotion targets or autonomous spending are enabled.
+including rehashed false authority. Exact verifier head
+`9aff9d7af87c44fcce878feb8709ef00bd0596d0` passed
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42834423864), including
+[906 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42834423864/job/129892790488),
+CodeQL, gitleaks and remaining CI. This verifies current snapshots, not complete
+bootstrap, executable publication or the opt-in consumer below.
+
+### Opt-in training configuration consumption
+
+Trusted assembly can supply immutable `ConfigurationTrainingBinding` tuples to
+`CanonicalManagementOperations` / `CanonicalManagementTraining`. Each binding selects
+one project and an explicit snapshot version/digest. Configured mode must cover every
+profile project exactly once; malformed, duplicate, mutable or partial bindings refuse
+at construction. Empty bindings retain the existing unbound fixture/adapter path and
+make no configuration-publication claim. Public profile reads remain server declarations,
+not proof that their setup is current or executable.
+
+For a **new** configured training submission, the existing producer first authorizes
+and locks the owned project and verifies fenced compiler publication. In that same
+READ COMMITTED caller transaction it rechecks the selected snapshot against current
+setup receipts, source-locked evidence, grouping and all trusted project profiles.
+It also checks compiled ontology/assignment and each emitted source hash/group/split
+against that snapshot. The verified project/version/digest/setup-summary provenance
+is included in the existing immutable queue input and attributed training receipt.
+No separate enqueue, connection, store, runtime pointer or scheduler is introduced.
+Historical exact retries return their original intent before current configuration
+resolution; they neither renew stale setup nor enqueue again. Workers retain native
+immutable-input/receipt equality and historical request validation rather than resolving
+changed deployment profiles during resume.
+
+Seven pure cases exercise binding immutability/coverage, current-evidence forwarding,
+lineage refusal, pre-enqueue failure, queue/receipt provenance and facade forwarding.
+Eleven new disposable DB cases commission the real locked verifier with current/stale
+setup and profile evidence, explicit version and compiler membership substitutions,
+and real training-producer missing-snapshot refusal / historical replay at both sizes.
+**Those new cases await exact-head Actions.** The successful locked membership case
+uses a constructed manifest projection, not a compiled variant; the positive enqueue
+wiring case uses mocks. Successful configuration-bound HTTP-to-CPU training is not yet
+proved: effective project publication and its unchanged freeze gate remain prerequisites.
+Existing CPU acceptance uses the unbound fixture path and is not such evidence.
+
+This is a restricted opt-in profile/provenance consumer, not an executable project
+release or freeze clearance. No schema/client/table/migration/dependency/grant changes,
+real admission, default mounting, worker startup, provider dispatch, retrieval,
+qualification, promotion targets or autonomous spend are enabled.
 
 ### Approved setup summary (opt-in, not publication)
 

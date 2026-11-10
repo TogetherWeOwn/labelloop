@@ -7747,6 +7747,108 @@ def test_current_configuration_refuses_corrupt_receipt_even_with_rehashed_snapsh
     assert counts(owner, created.id) == before
 
 
+@pytest.mark.parametrize(
+    "change",
+    [None, "guide", "profile", "version", "ontology", "assignment", "source", "group", "split"],
+)
+def test_training_configuration_consumes_current_evidence_under_project_and_source_locks(
+    database, change
+):
+    from labelloop_api.management_configuration import (
+        ConfigurationTrainingBinding,
+        training_configuration,
+    )
+
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    result = publish_configuration(publisher, payload)
+    pin = configuration_pin(owner, created.id)
+    snapshot = publisher.read_current(Reader(), pin)
+    binding = ConfigurationTrainingBinding(UUID(created.id), pin.version, pin.snapshot_sha256)
+    profiles = publisher.profiles
+    manifest = {
+        "ontology_id": snapshot["versions"]["ontology_id"],
+        "split_assignment_version": snapshot["versions"]["assignment"],
+        "samples": [
+            {
+                "asset_id": item["asset_id"],
+                "source_sha256": item["sha256"],
+                "group_id": item["group_id"],
+                "split": item["split"],
+            }
+            for item in snapshot["grouping"]
+        ],
+    }
+    if change == "guide":
+        save_step_draft(service, created.id, "guide", result.revision, key="changed-training-guide")
+    elif change == "profile":
+        profiles = (replace(profiles[0], epochs=2), profiles[1])
+    elif change == "version":
+        binding = replace(binding, version="missing")
+    elif change == "ontology":
+        manifest["ontology_id"] = "other"
+    elif change == "assignment":
+        manifest["split_assignment_version"] = "other"
+    elif change is not None:
+        field = {"source": "source_sha256", "group": "group_id", "split": "split"}[change]
+        manifest["samples"][0][field] = "other"
+    before = initial_grouping_snapshot(owner, created.id)
+    with service.engine.begin() as connection:
+        owned = service.lock_project(connection, created.id)
+        if change is not None:
+            with pytest.raises(ManagementFailure, match="missing_evidence"):
+                training_configuration(
+                    connection, owned, service.workspace_id, profiles, binding, manifest
+                )
+        else:
+            assert training_configuration(
+                connection, owned, service.workspace_id, profiles, binding, manifest
+            ) == {
+                "project_id": created.id,
+                **pin.model_dump(mode="json"),
+                "setup_summary_sha256": snapshot["setup_summary_sha256"],
+            }
+    assert initial_grouping_snapshot(owner, created.id) == before
+    # This lower-level membership check is not a new frozen release or queued training.
+    assert training_jobs(owner, created.id) == []
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read_freeze_plan(Reader(), created.id)
+        .payload
+        is None
+    )
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_configuration_bound_training_refuses_missing_snapshot_before_enqueue_and_preserves_replay(
+    database, compilation, compiler_worker, recipe
+):
+    from labelloop_api.management_configuration import ConfigurationTrainingBinding
+
+    service, owner, _ = database
+    training, created, compiled = prepared_training(database, compilation, compiler_worker, recipe)
+    bound = replace(
+        training,
+        configurations=(ConfigurationTrainingBinding(UUID(created.id), "missing", "1" * 64),),
+    )
+    before = counts(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        training_request(bound, compiled.resource.id)
+    assert training_jobs(owner, created.id) == []
+    assert training_receipts(owner, compiled.resource.id) == []
+    assert counts(owner, created.id) == before
+    # The fixture-only unbound producer can acknowledge its prior authorized intent;
+    # enabling a binding later must not enqueue again or renew configuration authority.
+    accepted = training_request(training, compiled.resource.id)
+    assert training_request(bound, compiled.resource.id) == accepted
+    assert "configuration" not in training_jobs(owner, created.id)[0].input
+    assert (
+        len(training_jobs(owner, created.id))
+        == len(training_receipts(owner, compiled.resource.id))
+        == 1
+    )
+
+
 def test_complete_setup_pack_requires_revision_after_all_draft_and_catalog_writes(database):
     service, owner, _ = database
     created, _, _, plan = anchor_pack_inputs(service, owner, setup_step="all")

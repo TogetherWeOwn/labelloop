@@ -11,6 +11,7 @@ from labelloop_worker_core.jobs import JobStore
 from .management_canonical import CanonicalManagementMutations, refuse
 from .management_compilation import CanonicalManagementCompilation
 from .management_compile_worker import CompilationObjects
+from .management_configuration import ConfigurationTrainingBinding
 from .management_contracts import (
     AssetIngest,
     EvaluationStart,
@@ -56,6 +57,7 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
     profiles: tuple[ApprovedTrainingProfile, ...] = ()
     protocols: tuple[ApprovedDevelopmentProtocol, ...] = ()
     grouping_objects: CompilationObjects | None = None
+    configurations: tuple[ConfigurationTrainingBinding, ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -71,7 +73,9 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         return CanonicalManagementReads(self.engine, self.workspace_id)
 
     def _training(self) -> CanonicalManagementTraining:
-        return CanonicalManagementTraining(self, JobStore.enqueue_in_transaction, self.profiles)
+        return CanonicalManagementTraining(
+            self, JobStore.enqueue_in_transaction, self.profiles, self.configurations
+        )
 
     def _evaluation(self) -> CanonicalManagementEvaluation:
         return CanonicalManagementEvaluation(self, JobStore.enqueue_in_transaction, self.protocols)

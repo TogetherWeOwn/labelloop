@@ -1,7 +1,7 @@
 """Internal attributed configuration snapshots, not executable release clearance.
 
-Only trusted server profiles are accepted. No route, provider, job, freeze gate or
-current-release pointer consumes these snapshots yet; quality targets stay null.
+Only trusted server profiles are accepted. Opt-in training submission can require
+current snapshot provenance; no freeze or current-release clearance is granted.
 """
 
 import json
@@ -179,11 +179,14 @@ def verify_configuration_receipt(receipt, owned, workspace_id, revision, pin, sn
         refuse("missing_evidence")
 
 
-def read_current_configuration(connection, owned, workspace_id, revision, profiles, pin):
-    """Internal SELECT-only verification; not an executable release or runtime grant."""
+def read_current_configuration(
+    connection, owned, workspace_id, revision, profiles, pin, *, lock_sources=False
+):
+    """Verify current evidence in a read snapshot or the caller's locked mutation."""
     if str(owned.workspace_id) != str(workspace_id):
         refuse("not_found")
-    if connection.get_isolation_level() != "REPEATABLE READ":
+    required_isolation = "READ COMMITTED" if lock_sources else "REPEATABLE READ"
+    if connection.get_isolation_level() != required_isolation:
         refuse("management_unavailable")
     receipts = connection.execute(
         select(canonical_event)
@@ -207,12 +210,65 @@ def read_current_configuration(connection, owned, workspace_id, revision, profil
             refuse("missing_evidence")
         receipt = receipts[versions.index(pin.version)]
         snapshot = prepare_configuration(
-            connection, owned, workspace_id, revision, profiles, lock_sources=False
+            connection, owned, workspace_id, revision, profiles, lock_sources=lock_sources
         )
         verify_configuration_receipt(receipt, owned, workspace_id, revision, pin, snapshot)
         return snapshot
     except (KeyError, TypeError, ValueError):
         refuse("missing_evidence")
+
+
+@dataclass(frozen=True)
+class ConfigurationTrainingBinding:
+    project_id: UUID
+    version: str
+    snapshot_sha256: str
+
+    def __post_init__(self):
+        if not isinstance(self.project_id, UUID):
+            raise ValueError("configuration binding requires a canonical project UUID")
+        self.pin()
+
+    def pin(self):
+        return ConfigurationSnapshotPin(version=self.version, snapshot_sha256=self.snapshot_sha256)
+
+
+def training_configuration(connection, owned, workspace_id, profiles, binding, manifest):
+    """Called only after the training producer locks the owned project, before enqueue."""
+    if owned.id != binding.project_id:
+        refuse("missing_evidence")
+    rows = CanonicalManagementReads(connection.engine, workspace_id).project_rows()
+    revision = connection.execute(select(rows.c.revision).where(rows.c.id == owned.id)).scalar_one()
+    snapshot = read_current_configuration(
+        connection,
+        owned,
+        workspace_id,
+        revision,
+        profile_snapshots(tuple(p for p in profiles if p.project_id == owned.id), owned.id),
+        binding.pin(),
+        lock_sources=True,
+    )
+    try:
+        groups = {item["asset_id"]: item for item in snapshot["grouping"]}
+        if (
+            manifest["ontology_id"] != snapshot["versions"]["ontology_id"]
+            or manifest["split_assignment_version"] != snapshot["versions"]["assignment"]
+            or not manifest["samples"]
+            or any(
+                sample["source_sha256"] != groups[sample["asset_id"]]["sha256"]
+                or sample["group_id"] != groups[sample["asset_id"]]["group_id"]
+                or sample["split"] != groups[sample["asset_id"]]["split"]
+                for sample in manifest["samples"]
+            )
+        ):
+            refuse("missing_evidence")
+    except (KeyError, TypeError):
+        refuse("missing_evidence")
+    return {
+        "project_id": str(owned.id),
+        **binding.pin().model_dump(mode="json"),
+        "setup_summary_sha256": snapshot["setup_summary_sha256"],
+    }
 
 
 @dataclass(frozen=True)

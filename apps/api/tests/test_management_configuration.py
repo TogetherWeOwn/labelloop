@@ -332,6 +332,21 @@ class ConfigurationSnapshotTests(TestCase):
         connection.get_isolation_level.return_value = "READ COMMITTED"
         with self.assertRaisesRegex(ManagementFailure, "management_unavailable"):
             read_current_configuration(connection, owned, owned.workspace_id, 8, [], pin)
+        with patch(
+            "labelloop_api.management_configuration.prepare_configuration", return_value=snapshot
+        ) as prepare:
+            self.assertEqual(
+                read_current_configuration(
+                    connection, owned, owned.workspace_id, 8, [], pin, lock_sources=True
+                ),
+                snapshot,
+            )
+            self.assertEqual(prepare.call_args.kwargs, {"lock_sources": True})
+        connection.get_isolation_level.return_value = "REPEATABLE READ"
+        with self.assertRaisesRegex(ManagementFailure, "management_unavailable"):
+            read_current_configuration(
+                connection, owned, owned.workspace_id, 8, [], pin, lock_sources=True
+            )
 
     def test_request_never_accepts_runtime_or_quality_authority(self):
         base = dict(

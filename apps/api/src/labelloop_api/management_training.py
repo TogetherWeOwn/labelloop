@@ -7,6 +7,7 @@ No model is loaded, checkpoint fetched, worker started or route mounted here.
 import hashlib
 from dataclasses import asdict, dataclass
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import psycopg
@@ -30,6 +31,9 @@ from .schema import (
     project,
     yolo_dataset_variant,
 )
+
+if TYPE_CHECKING:
+    from .management_configuration import ConfigurationTrainingBinding
 
 
 @dataclass(frozen=True)
@@ -178,8 +182,11 @@ class CanonicalManagementTraining:
     mutations: CanonicalManagementMutations
     enqueue: TransactionalEnqueue
     profiles: tuple[ApprovedTrainingProfile, ...]
+    configurations: tuple["ConfigurationTrainingBinding", ...] = ()
 
     def __post_init__(self) -> None:
+        from .management_configuration import ConfigurationTrainingBinding
+
         identities = {(profile.project_id, profile.id) for profile in self.profiles}
         if (
             not isinstance(self.profiles, tuple)
@@ -187,6 +194,19 @@ class CanonicalManagementTraining:
             or len(identities) != len(self.profiles)
         ):
             raise ValueError("training profiles must be bounded and uniquely project-scoped")
+        if (
+            not isinstance(self.configurations, tuple)
+            or len(self.configurations) > 1000
+            or any(
+                not isinstance(item, ConfigurationTrainingBinding) for item in self.configurations
+            )
+        ):
+            raise ValueError("training configurations require immutable bounded bindings")
+        projects = {item.project_id for item in self.configurations}
+        if len(projects) != len(self.configurations) or (
+            self.configurations and projects != {item.project_id for item in self.profiles}
+        ):
+            raise ValueError("training configuration bindings must cover each profile project once")
 
     def list_training_profiles(
         self, actor: ManagementPrincipal, project_id: str
@@ -284,6 +304,14 @@ class CanonicalManagementTraining:
                 )
             except (KeyError, TypeError, ValueError):
                 refuse("missing_evidence")
+            configuration = None
+            if self.configurations:
+                from .management_configuration import training_configuration
+
+                binding = next(item for item in self.configurations if item.project_id == owned.id)
+                configuration = training_configuration(
+                    connection, owned, mutations.workspace_id, self.profiles, binding, manifest
+                )
             run_id = str(uuid4())
             request = profile.request(run_id, variant.release_key, manifest, manifest_sha256)
             inputs = {
@@ -297,6 +325,8 @@ class CanonicalManagementTraining:
                 "request": asdict(request),
                 "requested_by": actor.id,
             }
+            if configuration is not None:
+                inputs["configuration"] = configuration
             operation_key = (
                 "management-train:"
                 + hashlib.sha256(
