@@ -150,7 +150,12 @@ def predict_samples(
     class_ids: tuple[str, ...],
     policy: InferencePolicy,
     shapes: list,
+    *,
+    confidence: float | None = None,
 ) -> tuple[DerivedPredictions, ...]:
+    threshold = min(0.001, policy.conf) if confidence is None else confidence
+    if not 0 <= threshold <= policy.conf:
+        raise ValueError("candidate threshold must not exceed the deployment threshold")
     model = YOLO(str(weights))
     stride = int(model.model.stride.max())
 
@@ -163,7 +168,7 @@ def predict_samples(
         for sample in samples:
             results = model.predict(
                 source=str(root / sample["image_path"]),
-                **(policy.arguments() | {"conf": min(0.001, policy.conf)}),
+                **(policy.arguments() | {"conf": threshold}),
                 device="cpu",
                 batch=1,
                 verbose=False,

@@ -1,25 +1,31 @@
 # labelloop v1 screen designs
 
-These are the specs the M3 web UI is built from (plan §13.1, §15 M3 and M5). Build only what is here. If something you need is missing, ask the UX Designer on your card rather than inventing it.
+These are the specs the review and v1 management UI is built from ([plan §13.1](../plan.md#131-main-screens) and [§15](../plan.md#15-implementation-milestones)). Design readiness before M3 implementation does not mean every screen ships in M3. Build only what is here. If something you need is missing, ask the UX Designer on your card rather than inventing it.
 
 **Design system:** [TogetherWeOwn/two-design-kit](https://github.com/TogetherWeOwn/two-design-kit), Ember Hours theme, **v0.3.0 or later**. That release adds the workbench tokens (label provenance, image well, box overlay sizes), components **J1–J22**, layout patterns **P6/P7** and the tool-copy rules in voice.md §7. Until v0.3.0 is tagged, the additions are in kit PR [#7](https://github.com/TogetherWeOwn/two-design-kit/pull/7), stacked on [#8](https://github.com/TogetherWeOwn/two-design-kit/pull/8) (the 24 px box-handle target exception, accessibility.md §4). Vendor `dist/css/tokens.css` and `dist/ts/tokens.ts` as the kit README describes. Use tokens only: no raw colours, sizes or durations. Component ids (A1, J4, …) refer to the kit's `docs/components.md`.
 
 ## Screens
 
-Build in this order. The review screen comes first.
+The review screen comes first. The column below describes shipping scope, not when the designs must be ready.
 
-| # | Screen | Spec | Mockups (1280) | Milestone |
+| # | Screen | Spec | Mockups (1280) | Shipping scope / additions |
 |---|---|---|---|---|
 | 01 | Image review | [01-image-review.md](screens/01-image-review.md) | `review`, `review-draw`, `review-audit`, `review-ready` | M3 |
-| 02 | New project | [02-new-project.md](screens/02-new-project.md) | `new-project` | M3 |
-| 03 | Dataset releases | [03-dataset-releases.md](screens/03-dataset-releases.md) | `releases` | M3 |
-| 04 | Size and crop recipes | [04-size-and-crop-recipes.md](screens/04-size-and-crop-recipes.md) | `recipes` | M3 |
-| 05 | Training runs | [05-training-runs.md](screens/05-training-runs.md) | `runs` | M3 (local) · M4 (Platform) |
-| 06 | Evaluation | [06-evaluation.md](screens/06-evaluation.md) | `evaluation` | M3 |
-| 07 | Model registry | [07-model-registry.md](screens/07-model-registry.md) | `models` | M3 · M5 (canary, drift) |
+| 02 | New project | [02-new-project.md](screens/02-new-project.md) | `new-project` | v1 management |
+| 03 | Dataset releases | [03-dataset-releases.md](screens/03-dataset-releases.md) | `releases` | v1 management |
+| 04 | Size and crop recipes | [04-size-and-crop-recipes.md](screens/04-size-and-crop-recipes.md) | `recipes` | v1 management |
+| 05 | Training runs | [05-training-runs.md](screens/05-training-runs.md) | `runs` | v1 management (local) · M4 (Platform) |
+| 06 | Evaluation | [06-evaluation.md](screens/06-evaluation.md) | `evaluation` | v1 management |
+| 07 | Model registry | [07-model-registry.md](screens/07-model-registry.md) | `models` | v1 management · M5 (canary, drift) |
 | 08 | Connections | [08-connections.md](screens/08-connections.md) | `connections` | M4 |
 | 09 | Costs | [09-costs.md](screens/09-costs.md) | `costs` | M3 (LLM ledger) · M5 |
 | 10 | Audit log | [10-audit-log.md](screens/10-audit-log.md) | `audit` | M5 |
+
+### Design readiness and shipping gates
+
+The designs for screens 02–07 were prepared for M3 readiness, as required before UI implementation by [plan §18](../plan.md#18-decisions-taken-in-v03-and-open-items-v03). Their base management UI ships with v1 management, not as part of the M3 review slice. M3 remains the shared shell, sign-in and roles, Image review (01), and the shared Costs surface for the LLM ledger, alongside the review and LLM work in [plan §15](../plan.md#15-implementation-milestones).
+
+The full base management screens must ship before declaring v1 complete, but do not add exit gates to M3–M6. Authenticated management routes must nevertheless be available before demonstrating the new-project workflow in M6 acceptance check 22 ([plan §16](../plan.md#16-required-acceptance-checks)); route readiness is not a claim that all management screens are complete. The existing M4 Platform additions, M5 canary/drift additions, Costs and Audit log scope, and milestone acceptance checks remain unchanged. This separates design readiness from delivery sequencing without changing the screen contracts in [plan §13](../plan.md#13-application-interface-and-internal-contracts).
 
 Each mockup has `mockups/png/<name>-1280.png` (1280 × 800 viewport) and `<name>-390-full.png` (390 wide, full page); review mockups also have `<name>-1280-tall.png` so the whole inspector shows. Fixture names, numbers and the shelf image are invented.
 

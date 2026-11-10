@@ -30,7 +30,26 @@ PROCESSING = {
 }
 
 
+RUNTIME = {
+    "pillow": "13.0.0",
+    "libjpeg_turbo": "3.2.0",
+    "jpeg_compatibility": "6.2",
+}
+
+
+def check_runtime_toolchain() -> None:
+    assert pillow_version == RUNTIME["pillow"], "Pillow does not match runtime pin"
+    assert features.version("libjpeg_turbo") == RUNTIME["libjpeg_turbo"], (
+        "libjpeg-turbo does not match runtime pin"
+    )
+    assert features.version_codec("jpg") == RUNTIME["jpeg_compatibility"], (
+        "JPEG codec does not match runtime pin"
+    )
+    assert sys.version_info[:2] == (3, 12), "Python does not match runtime pin"
+
+
 def check_toolchain(manifest: dict[str, object], domain: str) -> None:
+    """Provisioning must still reproduce the original processing environment."""
     assert manifest["processing"] == PROCESSING, f"{domain}: processing record differs"
     assert pillow_version == PROCESSING["pillow"], "Pillow does not match manifest"
     libjpeg_turbo = features.version("libjpeg_turbo")
@@ -55,6 +74,7 @@ def main() -> None:
         fixture_root = Path(sys.argv[1])
     else:
         fixture_root = Path(__file__).resolve().parents[1] / "fixtures"
+    check_runtime_toolchain()
     total_bytes = 0
     image_count = 0
     for domain in ("commons-office-keyboards", "cc0-interface"):
@@ -63,7 +83,7 @@ def main() -> None:
         drift = manifest.get("original_changed_upstream", [])
         assert isinstance(drift, list) and len(drift) == len(set(drift))
         assert set(drift) <= {item["file"] for item in manifest["images"]}
-        check_toolchain(manifest, domain)
+        assert manifest["processing"] == PROCESSING, f"{domain}: processing record differs"
         images = (root / "images").glob("*.jpg")
         actual = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in images}
         expected = {item["file"]: item["sha256"] for item in manifest["images"]}

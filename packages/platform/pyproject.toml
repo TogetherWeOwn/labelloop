@@ -3,7 +3,7 @@ name = "labelloop-platform"
 version = "0.0.0"
 description = "Ultralytics Platform adapter boundary"
 requires-python = ">=3.12,<3.13"
-dependencies = ["ultralytics-platform==0.1.107"]
+dependencies = ["labelloop-core", "ultralytics-platform==0.1.107"]
 
 [build-system]
 requires = ["hatchling"]

@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 
 from .evaluation import EvaluationReport
+from .qualification import QualificationContext
 from .training import ULTRALYTICS_VERSION, InferencePolicy, require_digest
 
 
@@ -115,6 +116,7 @@ class RegistryState:
         *,
         expected_revision: int,
         incumbent_report: EvaluationReport | None = None,
+        qualification: QualificationContext | None = None,
     ) -> "RegistryState":
         if expected_revision != self.revision:
             raise ValueError("stale registry revision")
@@ -144,6 +146,9 @@ class RegistryState:
                 after = metrics.map50_95
                 if before is None or after is None or after + policy.max_regression < before:
                     raise ValueError("unacceptable per-class regression")
+        if qualification is None:
+            raise ValueError("promotion requires trusted qualification evidence")
+        qualification.require_qualified(candidate, report, incumbent_report, policy)
         return RegistryState(
             self.project_id, self.recipe_id, self.revision + 1, candidate, self.champion
         )
