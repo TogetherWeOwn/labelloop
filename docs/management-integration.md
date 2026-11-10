@@ -1106,8 +1106,46 @@ jobs, retain replay and cross-lane refusals and record dispatch evidence. Four n
 disposable DB cases require foreign-workspace, wrong-lane, unreceipted and duplicate
 receipt refusals with no native job claim or canonical mutation. New unit contracts
 cover the fixed factory/dependency wiring, bounded reads and identity mismatches.
-These changed DB/CPU cases require exact-head Actions verification; this is not
-operational installation, database-enforced workspace isolation or qualification.
+Exact `18167d3f5da7626fd5a56fae4df0579a0783688b` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42869474513):
+[943 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42869474513/job/130016608534),
+[2,004 unit cases with 1,044 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42869474513/job/130016608401),
+remaining CI, CodeQL and gitleaks. The
+[retained artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42869474513/artifacts/13790170507)
+confirms both separated-role CPU cohorts, 32 permission refusals per cohort, explicit
+owned-job dispatch and cross-lane refusal. Both sizes have four validation sources
+and four nonempty ONNX comparisons, matching checkpoint/export hashes and static
+signatures. Both have zero recall: execution/equivalence, not model quality or
+independent gold. This verifies dispatch and the preceding grouping/configuration
+HTTP slice, not operational installation, database-enforced workspace isolation,
+production provisioning or qualification.
+
+### Bounded content-object transport (opt-in, not installed)
+
+`management_objects.BoundedMinioObjects` implements the existing worker object
+port using an explicitly supplied MinIO client, bucket and per-object byte limit
+(up to 256 MiB). Construction performs no I/O and resolves no credentials or
+endpoints. Trusted deployment code can supply it to the existing dispatchers or
+grouping reader; nothing selects it automatically. The existing `MinioStore` and
+default entry points are unchanged. Upload authority is not implicitly granted
+to the API or to a read-only grouping capability.
+
+Every key must be a lowercase SHA-256 content key with the matching prefix. Reads
+request at most 1 MiB at a time and consume at most the configured limit plus one
+sentinel byte before refusal, even without a Content-Length. Short reads continue
+until EOF; truncated or mismatched content refuses by digest. Responses close and
+release their connection on success and failure, including a close error. Uploads
+validate bytes, size and digest before I/O and use binary content type for compiler,
+checkpoint and ONNX artifacts rather than marking them as JPEGs. No custom retry,
+URL fetch, bucket creation, policy/grant mutation or object deletion is introduced.
+
+The limit bounds returned transport bytes, not total process RSS, SDK-internal
+buffers, request duration or aggregate job storage. Native SDK timeouts and deployment
+resource limits remain required; worker-stage aggregate bounds are unchanged. Unit
+contracts cover chunk/boundary/EOF/digest/key/input refusals, cleanup and no retry.
+They use a synthetic MinIO response, not a live storage service. Exact-head Actions
+verification of this new adapter is pending; live installation, object IAM, runtime
+provisioning, mounting and real admission remain separately gated.
 
 ## Canonical summary reads (partial, unmounted)
 
