@@ -90,13 +90,19 @@ provisioned least-privilege roles. These factories neither inspect nor establish
 SQL/storage IAM isolation and never read deployment credentials or select endpoints.
 
 The canonical mutation boundary and all three worker publication boundaries reuse
-one effective audit-write query. It checks table UPDATE/DELETE/TRUNCATE and UPDATE
-on any audit column before mutation/publication; column grants must not pass as an
-append-only runtime. Four unit query/wiring regressions and disposable PostgreSQL
-cases cover payload/attribution column grants, table writes, unchanged failed
-publication state and recovery after revocation. Effective grant execution awaits
-exact-head Actions. This is a narrow refusal guard, not a complete role, membership,
-DDL, storage-IAM or credential audit, and does not provision or alter any live grant.
+one effective audit-write query. It checks table UPDATE/DELETE/TRUNCATE, UPDATE
+on any audit column and effective audit-table ownership before mutation/publication.
+Revoking DML privileges from an owner does not remove its ability to alter table
+protections or regrant privileges. `pg_has_role(current_user, relowner, 'USAGE')`
+rejects direct ownership and immediately inherited owner authority, even when both
+DML privilege checks are false. Four unit query/wiring regressions and disposable
+PostgreSQL cases cover column/table grants, direct/inherited ownership with revoked
+DML, unchanged refused publication state and mutation recovery after restoration.
+Ownership tests restore the original owner and restricted fixture grants in `finally`;
+they run only against disposable Actions PostgreSQL. Exact-head Actions must verify
+the new ownership controls. This remains a narrow refusal guard, not a complete role,
+SET ROLE membership, DDL, storage-IAM or credential audit. It does not provision or
+alter any live grant; deployment must still enforce independent least privilege.
 
 The checked-in Compose stack remains local development scaffolding: it shares
 bootstrap database/storage settings, starts the default unmounted API, and parks

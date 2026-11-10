@@ -22,6 +22,8 @@ class AuditCapabilityTests(TestCase):
         self.assertIn("has_any_column_privilege(current_user", sql)
         self.assertIn("'UPDATE'", sql)
         self.assertIn(" OR ", sql)
+        self.assertIn("pg_has_role(current_user, relowner, 'USAGE')", sql)
+        self.assertIn("FROM pg_class WHERE oid = 'canonical_event'::regclass", sql)
 
     def test_canonical_guard_checks_table_and_column_authority_before_locking(self):
         connection = MagicMock()
