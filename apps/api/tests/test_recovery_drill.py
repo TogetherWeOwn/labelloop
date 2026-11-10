@@ -241,6 +241,17 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
                 # deterministic selection / model weights must not validate.
                 cases.append(reseal(snapshot, tamper_selected_checkpoint))
 
+                def tamper_checkpoint_score(document):
+                    table = document["tables"]["training_run"]
+                    record = table["rows"][0]["record"]
+                    record["checkpoints"][0]["validation_map"] = 0.0
+                    record["selected"]["validation_map"] = 0.0
+                    table["sha256"] = digest(encode(table["rows"]))
+
+                # A checkpoint score that disagrees with its evaluation
+                # report must not validate, even when resealed.
+                cases.append(reseal(snapshot, tamper_checkpoint_score))
+
                 def cross_scope_model(document):
                     other = next(
                         row

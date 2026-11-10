@@ -529,6 +529,7 @@ def test_populated_chain_validates_with_uuid_foreign_keys_and_key_scoped_states(
                 "run_id": "eval-1",
                 "weights_sha256": "a" * 64,
                 "policy": {"interpolation": "linear"},
+                "overall": {"map50_95": 0.5},
             },
         }
     ]
@@ -593,6 +594,7 @@ def _lineage_tables():
                 "run_id": run_id,
                 "weights_sha256": "a" * 64,
                 "policy": {"interpolation": "linear"},
+                "overall": {"map50_95": 0.5 if run_id == "eval-1" else 0.9},
             },
         }
         for i, run_id in enumerate(["eval-1", "eval-2"])
@@ -687,6 +689,17 @@ def test_selected_checkpoint_hash_tamper_fails_validation():
         check_evaluation_lineage(tables)
 
 
+def test_checkpoint_score_tamper_fails_validation():
+    tables = _lineage_tables()
+    # Tamper only the checkpoint score; the evaluation report still carries
+    # the true score, so the selection winner is no longer trustworthy.
+    record = tables["training_run"].rows[0]["record"]
+    record["checkpoints"][0]["validation_map"] = 0.9
+    record["selected"]["validation_map"] = 0.9
+    with pytest.raises(ValueError, match="score mismatch"):
+        check_evaluation_lineage(tables)
+
+
 def test_selected_checkpoint_must_be_deterministic_winner():
     tables = _lineage_tables()
     record = tables["training_run"].rows[0]["record"]
@@ -706,4 +719,6 @@ def test_selected_checkpoint_must_be_deterministic_winner():
     # Selecting the winner (and the tie-break earliest epoch) passes.
     record["checkpoints"][0]["validation_map"] = 0.9
     record["selected"] = dict(record["checkpoints"][0])
+    for row in tables["evaluation_run"].rows:
+        row["record"]["overall"]["map50_95"] = 0.9
     check_evaluation_lineage(tables)

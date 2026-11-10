@@ -371,6 +371,8 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
             evidence = _nested(evaluation, "record")
             if evidence.get("weights_sha256") != checkpoint.get("sha256"):
                 raise ValueError("checkpoint evaluation artifact mismatch")
+            if _nested(evidence, "overall").get("map50_95") != checkpoint.get("validation_map"):
+                raise ValueError("checkpoint evaluation score mismatch")
             seen.append(checkpoint.get("evaluation_run_id"))
         selected = _nested(record, "selected")
         # Reuse the TrainingResult selected-checkpoint invariant: the selected
