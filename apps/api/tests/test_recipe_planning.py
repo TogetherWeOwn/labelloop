@@ -124,7 +124,7 @@ def _freeze_plan(**changes):
     return _plan(**values)
 
 
-def _freeze_connection(plan, *, existing=None, conflict=False, revision=3):
+def _freeze_connection(plan, *, existing=None, conflict=False, revision=3, assignment_rows=None):
     """Dispatching mock: pin rows must match the plan or freeze must refuse."""
     connection = MagicMock()
     sqls = []
@@ -151,9 +151,18 @@ def _freeze_connection(plan, *, existing=None, conflict=False, revision=3):
                 "version": plan.ontology_version,
             }
         elif "FROM source_split_assignment" in sql:
-            result.mappings.return_value.first.return_value = {
-                "assignment_version": plan.assignment_version,
-            }
+            rows = (
+                assignment_rows
+                if assignment_rows is not None
+                else [
+                    {
+                        "assignment_version": plan.assignment_version,
+                        "created_at": "2026-11-10T00:00:00",
+                    }
+                ]
+            )
+            result.mappings.return_value.all.return_value = rows
+            result.mappings.return_value.first.return_value = rows[0] if rows else None
         elif "FROM annotation_revision" in sql:
             result.mappings.return_value.first.return_value = {"revision": revision}
         elif "FROM preprocessing_recipe" in sql:
@@ -254,7 +263,7 @@ def test_ontology_hash_matches_canonical_order():
     )
 
 
-def test_assignment_query_is_deterministic_and_limit_one():
+def test_assignment_query_orders_by_newest_first():
     from labelloop_api.recipe_planning import load_current_pins
 
     plan = _freeze_plan()
@@ -262,5 +271,29 @@ def test_assignment_query_is_deterministic_and_limit_one():
     pins = load_current_pins(connection, asset_id=plan.asset_id)
     assert pins["assignment_version"] == plan.assignment_version
     assignment_sql = [s for s in connection.sqls if "source_split_assignment" in s][0]
-    assert "ORDER BY" in assignment_sql and "LIMIT" in assignment_sql
+    assert "ORDER BY" in assignment_sql
     assert "created_at" in assignment_sql
+
+
+def test_assignment_tie_at_maximal_created_at_fails_loud():
+    # Two assignment_version rows written in one transaction share
+    # created_at (Postgres now() is the transaction timestamp) and the
+    # versions are hash-derived, so the legacy hash-max tie-break could
+    # select the superseded version and a stale pin would pass freshness.
+    from labelloop_api.recipe_planning import load_current_pins
+
+    plan = _freeze_plan()
+    tied = [
+        {"assignment_version": "split-v1", "created_at": "2026-11-10T00:00:00"},
+        {"assignment_version": "split-v2", "created_at": "2026-11-10T00:00:00"},
+    ]
+    connection = _freeze_connection(plan, assignment_rows=tied)
+    with pytest.raises(ValueError, match="ambiguous"):
+        load_current_pins(connection, asset_id=plan.asset_id)
+
+    # The tie also blocks freeze (no INSERT must happen).
+    plan = _freeze_plan()
+    connection = _freeze_connection(plan, assignment_rows=tied)
+    with pytest.raises(ValueError, match="ambiguous"):
+        freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
+    assert not any("INSERT" in sql for sql in connection.sqls)

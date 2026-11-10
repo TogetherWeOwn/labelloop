@@ -224,21 +224,45 @@ def load_current_pins(connection: Connection, *, asset_id: str) -> dict:
         .first()
     )
     # Multiple assignment_version rows may exist per asset; the newest by
-    # created_at (tie-broken by assignment_version) is authoritative, so a
-    # plan pinned to a superseded version cannot pass freshness by row order.
-    assignment = (
+    # created_at is authoritative, so a plan pinned to a superseded version
+    # cannot pass freshness by row order. Postgres now() is the transaction
+    # timestamp, so two versions written in one transaction share created_at
+    # and assignment_version values are hash-derived (grouping.py) — the
+    # hash-max tie-break cannot order them, so an ambiguous maximal
+    # created_at fails loud below instead of silently selecting a stale pin.
+    # Missing canonical field for the integrator: source_split_assignment
+    # has no monotonic assignment generation / authoritative current pointer
+    # (no column or table added here, per the no-second-store rule); until
+    # the schema provides one, tied maximal timestamps stay ambiguous.
+    assignment_rows = (
         connection.execute(
-            select(source_split_assignment.c.assignment_version)
+            select(
+                source_split_assignment.c.assignment_version,
+                source_split_assignment.c.created_at,
+            )
             .where(source_split_assignment.c.asset_id == asset_id)
             .order_by(
                 source_split_assignment.c.created_at.desc(),
                 source_split_assignment.c.assignment_version.desc(),
             )
-            .limit(1)
         )
         .mappings()
-        .first()
+        .all()
     )
+    assignment = None
+    if assignment_rows:
+        maximal_created_at = assignment_rows[0]["created_at"]
+        tied_versions = {
+            row["assignment_version"]
+            for row in assignment_rows
+            if row["created_at"] == maximal_created_at
+        }
+        if len(tied_versions) > 1:
+            raise ValueError(
+                "ambiguous split assignment: tie on maximal created_at "
+                f"for asset {asset_id!r} ({sorted(tied_versions)!r})"
+            )
+        assignment = {"assignment_version": next(iter(tied_versions))}
     revision_row = (
         connection.execute(
             select(annotation_revision.c.revision)
