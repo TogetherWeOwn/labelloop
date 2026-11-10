@@ -77,12 +77,13 @@ class ConfigurationSnapshotTests(TestCase):
                     before, draft_sha256({"profiles": profile_snapshots(updated, project_id)})
                 )
 
-    def prepare(self, *, summary="1" * 64, assets=1):
+    def prepare(self, *, summary="1" * 64, assets=1, lock_sources=True):
         from labelloop_api.management_configuration import prepare_configuration
 
         project_id, profiles = self.profiles()
         owned = SimpleNamespace(
             id=project_id,
+            workspace_id=uuid4(),
             access_policy={
                 "management_setup_approvals": {"scope": {"draft_sha256": "2" * 64}},
                 "management_scope_draft": {"scope": "Packages"},
@@ -110,12 +111,20 @@ class ConfigurationSnapshotTests(TestCase):
                 return_value=([source] * assets, {"internal": assignment}, [], {}),
             ) as grouping,
         ):
-            result = prepare_configuration(
-                Mock(), owned, uuid4(), 7, profile_snapshots(profiles, project_id)
+            connection = Mock()
+            connection.get_isolation_level.return_value = (
+                "READ COMMITTED" if lock_sources else "REPEATABLE READ"
             )
-            self.assertTrue(approvals.call_args.kwargs["lock_sources"])
-            self.assertEqual(projection.call_args.kwargs, {"lock_sources": True})
-            self.assertTrue(grouping.call_args.kwargs["lock_sources"])
+            result = prepare_configuration(
+                connection,
+                owned,
+                owned.workspace_id,
+                7,
+                profile_snapshots(profiles, project_id),
+                lock_sources=lock_sources,
+            )
+            for reader in (approvals, projection, grouping):
+                self.assertEqual(reader.call_args.kwargs, {"lock_sources": lock_sources})
         return result, owned
 
     def test_project_projection_forwards_locked_mutation_context_and_defaults_to_snapshot(self):
@@ -195,6 +204,134 @@ class ConfigurationSnapshotTests(TestCase):
         for kwargs in ({"summary": None}, {"assets": 0}, {"assets": 1001}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ManagementFailure):
                 self.prepare(**kwargs)
+
+    def receipt(self):
+        from labelloop_api.management_configuration import ConfigurationSnapshotPin
+        from labelloop_api.management_contracts import Resource
+        from labelloop_api.management_ports import MutationContext
+
+        snapshot, owned = self.prepare(lock_sources=False)
+        request = ConfigurationSnapshotPublish(
+            expected_revision=7,
+            version="v1",
+            setup_summary_sha256=snapshot["setup_summary_sha256"],
+            reason="Reviewed configuration",
+        )
+        context = MutationContext.bind(
+            SimpleNamespace(id="admin"),
+            "config",
+            "publish_configuration_snapshot",
+            str(owned.id),
+            request,
+        )
+        digest = draft_sha256(snapshot)
+        receipt = SimpleNamespace(
+            event_type="management.publish_configuration_snapshot",
+            aggregate_id=str(owned.id),
+            actor_kind="human",
+            actor_id="admin",
+            expected_revision=7,
+            payload={
+                "workspace_id": str(owned.workspace_id),
+                "idempotency_key": "config",
+                "fingerprint": context.fingerprint,
+                "aggregate_revision": 8,
+                "result": Resource(
+                    id=str(owned.id),
+                    project_id=str(owned.id),
+                    kind="project",
+                    revision=8,
+                    state="draft",
+                ).model_dump(mode="json"),
+                "evidence": {
+                    "version": "v1",
+                    "reason": request.reason,
+                    "snapshot": snapshot,
+                    "snapshot_sha256": digest,
+                },
+            },
+        )
+        return (
+            receipt,
+            owned,
+            ConfigurationSnapshotPin(version="v1", snapshot_sha256=digest),
+            snapshot,
+        )
+
+    def test_receipt_verifier_requires_current_full_snapshot_and_attribution(self):
+        from copy import deepcopy
+
+        from labelloop_api.management_configuration import verify_configuration_receipt
+        from labelloop_api.management_ports import ManagementFailure
+
+        receipt, owned, pin, snapshot = self.receipt()
+        verify_configuration_receipt(receipt, owned, owned.workspace_id, 8, pin, snapshot)
+        for field, value in (
+            ("actor_kind", "worker"),
+            ("actor_id", ""),
+            ("actor_id", "other"),
+            ("event_type", "management.create_project"),
+            ("aggregate_id", str(uuid4())),
+            ("expected_revision", True),
+            ("expected_revision", 8),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaises(ManagementFailure):
+                changed = deepcopy(receipt)
+                setattr(changed, field, value)
+                verify_configuration_receipt(changed, owned, owned.workspace_id, 8, pin, snapshot)
+        for path, value in (
+            (("workspace_id",), "foreign"),
+            (("aggregate_revision",), True),
+            (("fingerprint",), "f" * 64),
+            (("idempotency_key",), ""),
+            (("result", "state"), "ready"),
+            (("result", "revision"), 9),
+            (("evidence", "version"), "v2"),
+            (("evidence", "reason"), "Changed"),
+            (("evidence", "snapshot_sha256"), "f" * 64),
+            (("evidence", "snapshot", "automatic_acceptance"), True),
+        ):
+            changed = deepcopy(receipt)
+            target = changed.payload
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.subTest(path=path), self.assertRaises(ManagementFailure):
+                verify_configuration_receipt(changed, owned, owned.workspace_id, 8, pin, snapshot)
+        with self.assertRaises(ManagementFailure):
+            verify_configuration_receipt(receipt, owned, owned.workspace_id, 7, pin, snapshot)
+        changed = deepcopy(snapshot)
+        changed["training_profiles"][0]["seed"] += 1
+        with self.assertRaises(ManagementFailure):
+            verify_configuration_receipt(receipt, owned, owned.workspace_id, 8, pin, changed)
+
+    def test_current_reader_refuses_missing_duplicate_malformed_and_unbounded_history(self):
+        from copy import deepcopy
+
+        from labelloop_api.management_configuration import read_current_configuration
+        from labelloop_api.management_ports import ManagementFailure
+
+        receipt, owned, pin, snapshot = self.receipt()
+        connection = Mock()
+        connection.get_isolation_level.return_value = "REPEATABLE READ"
+        malformed = deepcopy(receipt)
+        malformed.payload = {}
+        for rows in ([], [receipt, receipt], [malformed], [receipt] * 1001):
+            connection.execute.return_value.all.return_value = rows
+            with self.subTest(count=len(rows)), self.assertRaises(ManagementFailure):
+                read_current_configuration(connection, owned, owned.workspace_id, 8, [], pin)
+        connection.execute.return_value.all.return_value = [receipt]
+        with patch(
+            "labelloop_api.management_configuration.prepare_configuration", return_value=snapshot
+        ) as prepare:
+            self.assertEqual(
+                read_current_configuration(connection, owned, owned.workspace_id, 8, [], pin),
+                snapshot,
+            )
+            self.assertEqual(prepare.call_args.kwargs, {"lock_sources": False})
+        connection.get_isolation_level.return_value = "READ COMMITTED"
+        with self.assertRaisesRegex(ManagementFailure, "management_unavailable"):
+            read_current_configuration(connection, owned, owned.workspace_id, 8, [], pin)
 
     def test_request_never_accepts_runtime_or_quality_authority(self):
         base = dict(

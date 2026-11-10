@@ -7587,6 +7587,166 @@ def test_configuration_snapshot_competing_revisions_are_serialized(database, sam
     assert len(configuration_receipts(owner, created.id)) == 1
 
 
+def configuration_pin(owner, project_id):
+    from labelloop_api.management_configuration import ConfigurationSnapshotPin
+
+    (receipt,) = configuration_receipts(owner, project_id)
+    return ConfigurationSnapshotPin(
+        version=receipt.payload["evidence"]["version"],
+        snapshot_sha256=receipt.payload["evidence"]["snapshot_sha256"],
+    )
+
+
+def test_current_configuration_is_receipt_verified_select_only_without_clearance(database):
+    from labelloop_api.management_configuration import ConfigurationSnapshotPin
+
+    service, owner, role = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publisher.read_current(
+            Reader(), ConfigurationSnapshotPin(version="v1", snapshot_sha256="1" * 64)
+        )
+    publication = publish_configuration(publisher, payload)
+    pin = configuration_pin(owner, created.id)
+    expected = configuration_receipts(owner, created.id)[0].payload["evidence"]["snapshot"]
+    assert publisher.read_current(Actor(), pin) == expected
+    # A later immutable version does not erase the explicitly selected older one.
+    publish_configuration(
+        publisher,
+        payload.model_copy(update={"expected_revision": publication.revision, "version": "v2"}),
+        key="configuration-v2",
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    assert publisher.read_current(Reader(), pin) == expected
+    assert initial_grouping_snapshot(owner, created.id) == before
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.published_release_id is None
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read_freeze_plan(Reader(), created.id)
+        .payload
+        is None
+    )
+    assert expected["runtime_binding"] is None and expected["promotion_targets"] is None
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="worker"), Actor(id=""), Actor(role="service")])
+def test_current_configuration_refuses_nonhuman_readers(database, actor):
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    publish_configuration(publisher, payload)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        publisher.read_current(actor, configuration_pin(owner, created.id))
+
+
+@pytest.mark.parametrize("failure", ["version", "digest", "workspace"])
+def test_current_configuration_requires_exact_pin_and_owned_project(database, failure):
+    from dataclasses import replace
+
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    publish_configuration(publisher, payload)
+    pin = configuration_pin(owner, created.id)
+    if failure == "workspace":
+        publisher = replace(publisher, mutations=replace(service, workspace_id=uuid4()))
+    else:
+        pin = pin.model_copy(
+            update={"version": "missing"} if failure == "version" else {"snapshot_sha256": "f" * 64}
+        )
+    with pytest.raises(
+        ManagementFailure, match="not_found" if failure == "workspace" else "missing_evidence"
+    ):
+        publisher.read_current(Reader(), pin)
+
+
+@pytest.mark.parametrize("change", ["guide", "sources", "profile"])
+def test_current_configuration_rechecks_setup_and_trusted_profiles_without_renewal(
+    database, change
+):
+    from dataclasses import replace
+
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    result = publish_configuration(publisher, payload)
+    pin = configuration_pin(owner, created.id)
+    if change == "profile":
+        publisher = replace(
+            publisher, profiles=(replace(publisher.profiles[0], epochs=2), publisher.profiles[1])
+        )
+    else:
+        save_step_draft(service, created.id, change, result.revision, key="changed-configuration")
+    before = initial_grouping_snapshot(owner, created.id)
+    assert publish_configuration(publisher, payload) == result
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publisher.read_current(Reader(), pin)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["duplicate", "worker", "workspace", "digest", "snapshot", "fingerprint", "result", "revision"],
+)
+def test_current_configuration_refuses_corrupt_receipt_even_with_rehashed_snapshot(
+    database, failure
+):
+    from copy import deepcopy
+
+    from labelloop_api.management_setup import draft_sha256
+
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    publish_configuration(publisher, payload)
+    pin = configuration_pin(owner, created.id)
+    (receipt,) = configuration_receipts(owner, created.id)
+    saved = deepcopy(receipt.payload)
+    with owner.begin() as connection:
+        if failure == "duplicate":
+            connection.execute(
+                insert(canonical_event).values(
+                    event_type=receipt.event_type,
+                    aggregate_id=receipt.aggregate_id,
+                    expected_revision=receipt.expected_revision,
+                    actor_kind=receipt.actor_kind,
+                    actor_id=receipt.actor_id,
+                    payload=saved,
+                )
+            )
+        else:
+            changes = {}
+            if failure == "worker":
+                changes["actor_kind"] = "worker"
+            elif failure == "workspace":
+                saved["workspace_id"] = str(uuid4())
+            elif failure == "digest":
+                saved["evidence"]["snapshot_sha256"] = "f" * 64
+            elif failure == "snapshot":
+                saved["evidence"]["snapshot"]["automatic_acceptance"] = True
+                digest = draft_sha256(saved["evidence"]["snapshot"])
+                saved["evidence"]["snapshot_sha256"] = digest
+                pin = pin.model_copy(update={"snapshot_sha256": digest})
+            elif failure == "fingerprint":
+                saved["fingerprint"] = "f" * 64
+            elif failure == "result":
+                saved["result"]["project_id"] = str(uuid4())
+            else:
+                saved["aggregate_revision"] += 1
+            connection.execute(
+                canonical_event.update()
+                .where(canonical_event.c.id == receipt.id)
+                .values(payload=saved, **changes)
+            )
+    before = counts(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publisher.read_current(Reader(), pin)
+    assert counts(owner, created.id) == before
+
+
 def test_complete_setup_pack_requires_revision_after_all_draft_and_catalog_writes(database):
     service, owner, _ = database
     created, _, _, plan = anchor_pack_inputs(service, owner, setup_step="all")

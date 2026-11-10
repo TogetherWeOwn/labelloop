@@ -6,23 +6,31 @@ current-release pointer consumes these snapshots yet; quality targets stay null.
 
 import json
 from dataclasses import asdict, dataclass, replace
+from types import SimpleNamespace
 from typing import Annotated
 from uuid import UUID
 
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import String, cast, select, text
 
 from labelloop_compiler.compiler import resolve_recipe
 from labelloop_core.json_records import canonical_json
 from labelloop_core.training import InferencePolicy
 
 from .management_canonical import CanonicalManagementMutations, refuse
-from .management_contracts import Digest, Identifier, Mutation, Resource
+from .management_contracts import Contract, Digest, Identifier, Mutation, Resource
 from .management_grouping import load_grouping
+from .management_ports import MutationContext
 from .management_project_reads import project_detail
+from .management_reads import CanonicalManagementReads, authorize_reader
 from .management_setup import draft_sha256, read_setup_approvals
 from .management_training import ApprovedTrainingProfile
-from .schema import canonical_event
+from .schema import canonical_event, project
+
+
+class ConfigurationSnapshotPin(Contract):
+    version: Identifier
+    snapshot_sha256: Digest
 
 
 class ConfigurationSnapshotPublish(Mutation):
@@ -56,15 +64,20 @@ def profile_snapshots(profiles, project_id):
     return json.loads(canonical_json(sorted(result, key=lambda item: item["id"])))
 
 
-def prepare_configuration(connection, owned, workspace_id, revision, profiles):
-    # Lock canonical source evidence before the composed reads. Human annotation
-    # writers synchronize on these rows, while setup/grouping shares the project lock.
-    read_setup_approvals(connection, owned, workspace_id, lock_sources=True)
-    detail = project_detail(connection, owned, revision, workspace_id, lock_sources=True)
+def prepare_configuration(
+    connection, owned, workspace_id, revision, profiles, *, lock_sources=True
+):
+    # Mutation callers hold the project lock and lock sources before composed reads.
+    # SELECT-only callers instead retain one repeatable snapshot throughout.
+    required_isolation = "READ COMMITTED" if lock_sources else "REPEATABLE READ"
+    if connection.get_isolation_level() != required_isolation:
+        refuse("management_unavailable")
+    read_setup_approvals(connection, owned, workspace_id, lock_sources=lock_sources)
+    detail = project_detail(connection, owned, revision, workspace_id, lock_sources=lock_sources)
     if detail.setup_summary_sha256 is None:
         refuse("missing_evidence")
     assets, by_asset, _, _ = load_grouping(
-        connection, owned, detail.versions["assignment"], lock_sources=True
+        connection, owned, detail.versions["assignment"], lock_sources=lock_sources
     )
     if not 1 <= len(assets) <= 1000:
         refuse("management_unavailable")
@@ -112,6 +125,96 @@ def prepare_configuration(connection, owned, workspace_id, revision, profiles):
     return json.loads(encoded)
 
 
+def verify_configuration_receipt(receipt, owned, workspace_id, revision, pin, snapshot):
+    """Stored hashes are claims; compare the complete receipt with current evidence."""
+    try:
+        payload = receipt.payload
+        evidence = payload["evidence"]
+        request = ConfigurationSnapshotPublish(
+            expected_revision=receipt.expected_revision,
+            version=evidence["version"],
+            setup_summary_sha256=snapshot["setup_summary_sha256"],
+            reason=evidence["reason"],
+        )
+        context = MutationContext.bind(
+            SimpleNamespace(id=receipt.actor_id),
+            payload["idempotency_key"],
+            "publish_configuration_snapshot",
+            str(owned.id),
+            request,
+        )
+        result = Resource.model_validate(payload["result"])
+        saved = canonical_json(evidence["snapshot"])
+        if (
+            receipt.event_type != "management.publish_configuration_snapshot"
+            or receipt.aggregate_id != str(owned.id)
+            or receipt.actor_kind != "human"
+            or not isinstance(receipt.actor_id, str)
+            or not receipt.actor_id
+            or str(owned.workspace_id) != str(workspace_id)
+            or payload["workspace_id"] != str(workspace_id)
+            or not isinstance(payload["idempotency_key"], str)
+            or not payload["idempotency_key"]
+            or payload["fingerprint"] != context.fingerprint
+            or type(receipt.expected_revision) is not int
+            or receipt.expected_revision < 1
+            or type(payload["aggregate_revision"]) is not int
+            or payload["aggregate_revision"] != receipt.expected_revision + 1
+            or type(revision) is not int
+            or revision < payload["aggregate_revision"]
+            or result.id != str(owned.id)
+            or result.project_id != str(owned.id)
+            or result.kind != "project"
+            or result.state != "draft"
+            or result.revision != payload["aggregate_revision"]
+            or evidence["version"] != pin.version
+            or len(saved) > 2_000_000
+            or evidence["snapshot_sha256"] != pin.snapshot_sha256
+            or draft_sha256(evidence["snapshot"]) != pin.snapshot_sha256
+            or draft_sha256(snapshot) != pin.snapshot_sha256
+            or saved != canonical_json(snapshot)
+        ):
+            refuse("missing_evidence")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        refuse("missing_evidence")
+
+
+def read_current_configuration(connection, owned, workspace_id, revision, profiles, pin):
+    """Internal SELECT-only verification; not an executable release or runtime grant."""
+    if str(owned.workspace_id) != str(workspace_id):
+        refuse("not_found")
+    if connection.get_isolation_level() != "REPEATABLE READ":
+        refuse("management_unavailable")
+    receipts = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(owned.id),
+            canonical_event.c.event_type == "management.publish_configuration_snapshot",
+        )
+        .limit(1001)
+    ).all()
+    if len(receipts) > 1000:
+        refuse("management_unavailable")
+    try:
+        versions = [
+            ConfigurationSnapshotPin(
+                version=row.payload["evidence"]["version"],
+                snapshot_sha256=row.payload["evidence"]["snapshot_sha256"],
+            ).version
+            for row in receipts
+        ]
+        if len(set(versions)) != len(versions) or versions.count(pin.version) != 1:
+            refuse("missing_evidence")
+        receipt = receipts[versions.index(pin.version)]
+        snapshot = prepare_configuration(
+            connection, owned, workspace_id, revision, profiles, lock_sources=False
+        )
+        verify_configuration_receipt(receipt, owned, workspace_id, revision, pin, snapshot)
+        return snapshot
+    except (KeyError, TypeError, ValueError):
+        refuse("missing_evidence")
+
+
 @dataclass(frozen=True)
 class CanonicalConfigurationSnapshots:
     mutations: CanonicalManagementMutations
@@ -122,6 +225,32 @@ class CanonicalConfigurationSnapshots:
         if not isinstance(self.project_id, UUID):
             raise ValueError("configuration needs a canonical project UUID")
         profile_snapshots(self.profiles, self.project_id)
+
+    def read_current(self, actor, pin):
+        authorize_reader(actor)
+        pin = ConfigurationSnapshotPin.model_validate(pin.model_dump(mode="json"))
+        service = self.mutations
+        owned = CanonicalManagementReads(service.engine, service.workspace_id).project_rows()
+        with service.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(project, owned.c.revision.label("management_revision"))
+                    .join(owned, project.c.id == owned.c.id)
+                    .where(cast(project.c.id, String) == str(self.project_id))
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                return read_current_configuration(
+                    connection,
+                    row,
+                    service.workspace_id,
+                    row.management_revision,
+                    profile_snapshots(self.profiles, self.project_id),
+                    pin,
+                )
 
     def publish(self, actor, context, payload):
         service = self.mutations

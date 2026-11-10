@@ -223,9 +223,36 @@ The repair passes the existing source-lock context through project details to bo
 setup-approval and reference reads. Normal authorized reads still default to the
 SELECT-only repeatable snapshot; mutation callers retain the existing project/source
 lock requirement. Neither pack-verifier isolation guard changes. Unit regressions
-failed before repair and passed after it; real DB/rollback/race verification of the
-repair remains pending exact-head Actions. No executable publication/freeze clearance,
-schema/client, history, migration, grant, dependency or admission change is made.
+failed before repair and passed after it. Exact repair head
+`3f94f4d1663cd745e092bda0449e3b290864c4b2`
+[passed Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42830205836),
+including [888 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42830205836/job/129878024109).
+CodeQL, gitleaks and remaining CI jobs passed. This verifies snapshot publication,
+not full bootstrap or the current-verification extension below. No executable
+publication/freeze clearance, schema/client, history, migration, grant, dependency
+or admission change is made.
+
+`CanonicalConfigurationSnapshots.read_current` now accepts an explicit immutable
+version and snapshot digest at the internal authorized boundary. It reads owned
+project/revision, bounded unique version history, current five-step setup/source
+and grouping evidence, and the current trusted server profiles in one SELECT-only
+REPEATABLE READ transaction. Preparation retains its READ COMMITTED/source-lock
+path for mutation callers; snapshot readers never take those locks. Verification
+checks human attribution, workspace/project/result/revision, reconstructed request
+fingerprint, stored digest, canonical JSON bytes and freshly prepared current
+content. A rehashed stored claim is not current evidence. Missing, malformed,
+ambiguous, stale or mismatched records fail closed; historical mutation replay
+never renews them. Explicit older versions remain readable only when all their
+pinned facts are still current.
+
+Pure contract tests cover full receipt mutation/refusal, bounds/uniqueness and
+isolation/lock-context propagation. Eighteen added disposable Actions DB cases
+cover SELECT-only grants, explicit versions/digests, ownership/principal refusal,
+changed setup/profiles, replay without renewal and corrupt/duplicate receipts,
+including rehashed false authority. Their exact-head verification is pending.
+This is internal verification, not a public snapshot endpoint, effective project
+release, runtime-profile consumer or freeze clearance. No jobs, workers, retrieval,
+admission, default mounting, promotion targets or autonomous spending are enabled.
 
 ### Approved setup summary (opt-in, not publication)
 
