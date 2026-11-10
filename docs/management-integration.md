@@ -1269,6 +1269,47 @@ completion precommit invisibility. ML artifacts remain explicitly synthetic.
 No schema/client, migration, grant, scheduler, default mount or real-admission
 change is made. Full mounted HTTP acceptance and specialist gates remain open.
 
+## Initial grouping publication (internal, not mounted)
+
+`CanonicalInitialGrouping` consumes the existing original-raster collector and
+canonical mutation authority in one project-locked transaction. The strict internal
+request pins project revision, current ontology, receipt-verified source-policy
+intent digest and exact source/annotation membership. Source-row locks synchronize
+with review writers before annotation pins/counts are read. No request selects a
+split, threshold, seed, model, storage key or eligibility state.
+
+Core grouping supplies exact-hash/pHash relations. Conservative transitive closure
+also includes attributed ingest `source_group` declarations and every persisted
+owned relation. An internal synthetic session key feeds those components back to
+core's unchanged seeded class-count allocator; it is not stored as observed source
+metadata. The new immutable assignment version pins raster observations, current
+annotation counts, declaration/edge identity, thresholds, seed, algorithm and
+Pillow/JPEG/NumPy versions. Automatic relations, locked train/validation assignments,
+setup/automatic-acceptance invalidation and an attributed retry receipt commit
+atomically. Empty observed counts do not assert completeness or verified background.
+
+This is deliberately **first publication only**: any assignment history, reference
+row, persisted borderline evidence or newly computed review-band pair refuses.
+There is no regrouping, holdout reassignment, quarantine bypass, final-test creation,
+review-pair discovery/publication, metadata-value producer, embedding producer or
+full project publication. Source-policy metadata-key intent remains distinct from
+actual observations (`observed_metadata_keys` is empty); declared ingest groups are
+still mandatory conservative constraints. Fewer than two independent groups refuse.
+The adapter admits at most 256 sources, the collector's per-raster byte/pixel caps
+and 64 MiB aggregate returned bytes; the trusted object reader still returns one
+whole object before byte-size validation, not a hard streaming-memory bound.
+
+Nine covering pure cases pass locally, including actual normalized fixture rasters,
+transitive constraints, core stratification parity, deterministic ordering, exact/
+pHash preservation, malformed pins and borderline/independence refusal. Twenty-five
+new disposable Actions DB cases are commissioned, not passed: atomic publication,
+replay/races, ownership/context/principal refusals, four missing-grant rollbacks,
+source-lock synchronization, historical/foreign-edge/pixel/byte-budget refusals and
+stale approval restoration. The existing DB role already has the necessary grants;
+no production grant, schema, migration, dependency, generated contract, HTTP operation,
+default mount, admission or startup change is introduced. External consumption waits
+for verification and explicit trusted-reader composition.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

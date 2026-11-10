@@ -10600,3 +10600,383 @@ def test_review_writer_and_freeze_share_source_row_synchronization(database):
         with pytest.raises(ManagementFailure, match="revision_conflict"):
             pending.result(timeout=15)
     assert release_count(owner, created.id) == 0
+
+
+def initial_grouping_inputs(service, owner, *, duplicate=False):
+    import random
+    from types import SimpleNamespace
+
+    from labelloop_api.management_grouping_publication import (
+        CanonicalInitialGrouping,
+        InitialSourceGrouping,
+    )
+    from labelloop_api.management_setup import draft_sha256
+
+    created = create(service)
+    keys = []
+    for index in range(4):
+        rng = random.Random(0 if duplicate and index == 1 else index)
+        image = Image.frombytes("RGB", (48, 32), rng.randbytes(48 * 32 * 3))
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        asset = ingest(
+            service,
+            created.id,
+            AssetIngest(
+                expected_revision=index + 1,
+                original_base64=base64.b64encode(output.getvalue()).decode(),
+                source_group="shared" if index < 2 else f"capture-{index}",
+            ),
+            key=f"initial-source-{index}",
+        )
+        keys.append(asset.id)
+    saved = save_sources(service, created.id, source_policy_payload(5))
+    with owner.connect() as connection:
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).one()
+    payload = InitialSourceGrouping(
+        expected_revision=saved.revision,
+        ontology_id=ontology.ontology_key,
+        source_policy_sha256=draft_sha256(
+            source_policy_payload().model_dump(exclude={"expected_revision"})
+        ),
+        annotation_revisions={key: 1 for key in keys},
+    )
+    objects = SimpleNamespace(
+        read=lambda key: service.store.root.joinpath(*key.split("/")).read_bytes()
+    )
+    return created, payload, CanonicalInitialGrouping(service, objects)
+
+
+def publish_grouping(adapter, project_id, payload, actor=None, key="initial-grouping"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "publish_initial_grouping", project_id, payload)
+    return adapter.publish(actor, context, payload)
+
+
+def initial_grouping_snapshot(owner, project_id):
+    with owner.connect() as connection:
+        assets = select(source_asset.c.id).where(source_asset.c.project_id == project_id)
+        assignments = connection.execute(
+            select(source_split_assignment).where(source_split_assignment.c.asset_id.in_(assets))
+        ).all()
+        relations = connection.execute(
+            select(similarity_relation).where(similarity_relation.c.left_asset_id.in_(assets))
+        ).all()
+        receipts = connection.execute(
+            select(canonical_event).where(canonical_event.c.aggregate_id == project_id)
+        ).all()
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == project_id)
+        ).scalar_one()
+        return assignments, relations, receipts, policy
+
+
+def test_initial_grouping_publishes_locked_constraints_atomically_and_replays(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    keys = list(payload.annotation_revisions)
+    with owner.begin() as connection:
+        assets = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                select(source_asset).where(source_asset.c.project_id == created.id)
+            )
+        }
+        connection.execute(
+            insert(similarity_relation).values(
+                left_asset_id=assets[keys[1]],
+                right_asset_id=assets[keys[2]],
+                reason="metadata",
+                evidence="sequence",
+                algorithm_version="fixture-existing",
+            )
+        )
+    saved = publish_grouping(adapter, created.id, payload)
+    after = initial_grouping_snapshot(owner, created.id)
+    assignments, _, events, _ = after
+    assert saved.state == "draft" and saved.revision == payload.expected_revision + 1
+    assert len(assignments) == 4 and all(row.locked for row in assignments)
+    assert len({row.assignment_version for row in assignments}) == 1
+    assert len({row.group_id for row in assignments}) == 2
+    assert {row.split for row in assignments} == {"train", "val"}
+    by_id = {row.asset_id: row for row in assignments}
+    assert len({by_id[assets[key]].group_id for key in keys[:3]}) == 1
+    receipt = next(row for row in events if row.event_type == "management.publish_initial_grouping")
+    assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+    evidence = receipt.payload["evidence"]
+    assert evidence["annotation_revisions"] == payload.annotation_revisions
+    assert evidence["source_policy_sha256"] == payload.source_policy_sha256
+    assert evidence["thresholds"]["embedding_model"] == "none-v1"
+    assert evidence["phash_algorithm"] == "phash-dct64-v1" and evidence["toolchain"]
+    assert all(row["embedding"] == [] and row["metadata"] == {} for row in evidence["sources"])
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.sources.assignment_version == assignments[0].assignment_version
+    assert detail.sources.groups == 2
+    assert publish_grouping(adapter, created.id, payload) == saved
+    assert initial_grouping_snapshot(owner, created.id) == after
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        publish_grouping(adapter, created.id, payload.model_copy(update={"ontology_id": "changed"}))
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_grouping(
+            adapter,
+            created.id,
+            payload.model_copy(update={"expected_revision": saved.revision}),
+            key="no-regroup",
+        )
+    assert initial_grouping_snapshot(owner, created.id) == after
+
+
+@pytest.mark.parametrize("change", ["revision", "ontology", "policy", "annotation", "membership"])
+def test_initial_grouping_pins_refuse_before_object_access(database, change):
+    from types import SimpleNamespace
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    changes = {
+        "revision": {"expected_revision": 0},
+        "ontology": {"ontology_id": "absent"},
+        "policy": {"source_policy_sha256": "f" * 64},
+        "annotation": {"annotation_revisions": dict.fromkeys(payload.annotation_revisions, 0)},
+        "membership": {"annotation_revisions": {"foreign": 1}},
+    }[change]
+    before = initial_grouping_snapshot(owner, created.id)
+
+    def unexpected(key):
+        raise AssertionError("refusal must precede object access")
+
+    adapter = replace(adapter, objects=SimpleNamespace(read=unexpected))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_grouping(adapter, created.id, payload.model_copy(update=changes))
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize(
+    "grant", ["source_split_assignment", "similarity_relation", "canonical_event", "project"]
+)
+def test_initial_grouping_missing_grant_rolls_back_and_retries(database, grant):
+    service, owner, role = database
+    created, payload, adapter = initial_grouping_inputs(service, owner, duplicate=True)
+    before = initial_grouping_snapshot(owner, created.id)
+    privilege = "UPDATE (access_policy)" if grant == "project" else "INSERT"
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} ON {grant} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        publish_grouping(adapter, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} ON {grant} TO "{role}"'))
+    assert publish_grouping(adapter, created.id, payload).revision == payload.expected_revision + 1
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_initial_grouping_serializes_retries_and_competing_publications(database, same_key):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait()
+        try:
+            return publish_grouping(
+                adapter, created.id, payload, key="same" if same_key else f"grouping-{index}"
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, range(2)))
+    expected = payload.expected_revision + 1
+    assert (
+        outcomes == [expected, expected]
+        if same_key
+        else sorted(outcomes, key=str) == sorted([expected, "revision_conflict"], key=str)
+    )
+    assignments, _, events, _ = initial_grouping_snapshot(owner, created.id)
+    assert len(assignments) == 4
+    assert sum(row.event_type == "management.publish_initial_grouping" for row in events) == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["pending_pair", "resolved_pair", "history", "foreign_edge", "corrupt_pixels", "single_group"],
+)
+def test_initial_grouping_cannot_bypass_history_or_missing_evidence(database, change):
+    from types import SimpleNamespace
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    with owner.begin() as connection:
+        assets = connection.execute(
+            select(source_asset)
+            .where(source_asset.c.project_id == created.id)
+            .order_by(source_asset.c.asset_key)
+        ).all()
+        if change in {"pending_pair", "resolved_pair"}:
+            connection.execute(
+                insert(borderline_review).values(
+                    left_asset_id=assets[0].id,
+                    right_asset_id=assets[1].id,
+                    metric="phash",
+                    value="10",
+                    algorithm_version="fixture",
+                    review_state="pending" if change == "pending_pair" else "unrelated",
+                )
+            )
+        elif change == "history":
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version="historical",
+                    asset_id=assets[0].id,
+                    group_id="old",
+                    split="test",
+                    seed=1,
+                    algorithm="fixture",
+                    thresholds={},
+                    reason="holdout",
+                    locked=False,
+                )
+            )
+        elif change == "foreign_edge":
+            other = create(service, key="other-project")
+            foreign = ingest(service, other.id, key="other-image")
+            foreign_id = connection.execute(
+                select(source_asset.c.id).where(source_asset.c.asset_key == foreign.id)
+            ).scalar_one()
+            connection.execute(
+                insert(similarity_relation).values(
+                    left_asset_id=assets[0].id,
+                    right_asset_id=foreign_id,
+                    reason="phash",
+                    evidence="1",
+                    algorithm_version="fixture",
+                )
+            )
+        elif change == "single_group":
+            for other in assets[1:]:
+                connection.execute(
+                    insert(similarity_relation).values(
+                        left_asset_id=assets[0].id,
+                        right_asset_id=other.id,
+                        reason="metadata",
+                        evidence="session",
+                        algorithm_version="fixture",
+                    )
+                )
+    if change == "corrupt_pixels":
+        adapter = replace(
+            adapter, objects=SimpleNamespace(read=lambda key: b"not the canonical raster")
+        )
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_grouping(adapter, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("actor", [Reader(), Actor(kind="model"), Actor(role="worker-ml")])
+def test_initial_grouping_refuses_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        publish_grouping(adapter, created.id, payload, actor=actor)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+def test_initial_grouping_invalidates_receipt_approvals_and_automatic_acceptance(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    approve = SetupStepApprove(
+        expected_revision=payload.expected_revision,
+        step="sources",
+        draft_sha256=payload.source_policy_sha256,
+        reason="Grouping policy intent reviewed",
+    )
+    context = MutationContext.bind(
+        Actor(), "approve-source-intent", "approve_setup_step", created.id, approve
+    )
+    approved = service.approve_setup_step(Actor(), context, approve)
+    with owner.begin() as connection:
+        old_policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(access_policy={**old_policy, "auto_accept_qualification": {"id": "old"}})
+        )
+    publish_grouping(
+        adapter, created.id, payload.model_copy(update={"expected_revision": approved.revision})
+    )
+    policy = initial_grouping_snapshot(owner, created.id)[3]
+    assert policy["management_setup_approvals"] == {} and "auto_accept_qualification" not in policy
+    with owner.begin() as connection:
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(
+                access_policy={
+                    **policy,
+                    "management_setup_approvals": old_policy["management_setup_approvals"],
+                }
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+
+
+def test_initial_grouping_checks_workspace_and_context_before_replay(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    publish_grouping(adapter, created.id, payload)
+    before = initial_grouping_snapshot(owner, created.id)
+    foreign = replace(adapter, canonical=replace(service, workspace_id=uuid4()))
+    with pytest.raises(ManagementFailure, match="not_found"):
+        publish_grouping(foreign, created.id, payload)
+    context = MutationContext.bind(
+        Actor(), "initial-grouping", "publish_initial_grouping", created.id, payload
+    )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        adapter.publish(Actor(), replace(context, actor_id="forged"), payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+def test_initial_grouping_rechecks_annotation_pins_after_source_lock(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with owner.begin() as connection:
+            asset = connection.execute(
+                select(source_asset)
+                .where(source_asset.c.asset_key == next(iter(payload.annotation_revisions)))
+                .with_for_update()
+            ).one()
+            pending = pool.submit(publish_grouping, adapter, created.id, payload)
+            append_review(
+                connection,
+                asset_id=asset.asset_key,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=1,
+                approval_state="proposed",
+                review_tier="human_reviewed",
+                scope_completeness="unreviewed",
+                objects=[],
+            )
+        with pytest.raises(ManagementFailure, match="revision_conflict"):
+            pending.result(timeout=15)
+    assert initial_grouping_snapshot(owner, created.id)[0] == []
+
+
+def test_initial_grouping_obeys_aggregate_byte_budget_without_publication(database, monkeypatch):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    monkeypatch.setattr("labelloop_api.management_grouping_publication.MAX_TOTAL_BYTES", 1)
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="management_unavailable"):
+        publish_grouping(adapter, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
