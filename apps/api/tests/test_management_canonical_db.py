@@ -9,6 +9,7 @@ import io
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import UTC
 from threading import Barrier
 from uuid import UUID, uuid4
 
@@ -301,7 +302,15 @@ def test_training_detail_is_read_only_and_exposes_only_pinned_arguments(
     assert detail.checkpoints == list(result.checkpoints)
     assert detail.retention.before == detail.retention.after == 0
     assert detail.retention.dropped_object_ids == detail.mismatches == []
-    assert detail.reason is None and detail.updated_at
+    with owner.connect() as connection:
+        completed_at = connection.execute(
+            select(canonical_event.c.created_at).where(
+                canonical_event.c.event_type == "management.training_completed",
+                canonical_event.c.aggregate_id == accepted.resource.id,
+            )
+        ).scalar_one()
+    assert detail.reason is None
+    assert detail.updated_at == completed_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     encoded = detail.model_dump_json()
     assert all(key not in encoded for key in ("provider_path", "/private/", "checkpoint_keys"))
     assert training_publication_state(owner, accepted) == before

@@ -23,7 +23,7 @@ from .schema import canonical_event
 
 def training_detail(connection, row, workspace_id: UUID) -> TrainingDetail:
     receipts = connection.execute(
-        select(canonical_event.c.payload, canonical_event.c.occurred_at).where(
+        select(canonical_event.c.payload, canonical_event.c.created_at).where(
             canonical_event.c.event_type == "management.training_completed",
             canonical_event.c.aggregate_id == row.run_key,
             canonical_event.c.actor_kind == "system",
