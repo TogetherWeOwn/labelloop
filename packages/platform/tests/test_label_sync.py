@@ -66,9 +66,10 @@ class Transport:
         assert image_id == self.before.image_id
         return self.after if self.writes else self.before
 
-    def replace_labels(self, image_id, body):
+    def replace_labels(self, image_id, body, *, operation_id):
         assert self.journal.state.phase == "in_flight"
         assert self.journal.state.baseline == self.before
+        assert operation_id == self.journal.state.operation_id
         self.writes.append((image_id, body))
         if self.lost_response:
             raise TimeoutError("provider response must not be logged")

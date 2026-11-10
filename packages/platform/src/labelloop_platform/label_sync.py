@@ -128,7 +128,9 @@ class WriterCoordinator(Protocol):
 
 class LabelTransport(Protocol):
     def read_image(self, image_id: str) -> ImageSnapshot: ...
-    def replace_labels(self, image_id: str, body: dict[str, Any]) -> None: ...
+    # operation_id is the durable replacement ID; the foundation requires a
+    # stable write-intent ID for every mutation, so it must be carried here.
+    def replace_labels(self, image_id: str, body: dict[str, Any], *, operation_id: str) -> None: ...
 
 
 def replace_once(
@@ -177,7 +179,9 @@ def replace_once(
         )
     else:
         try:
-            transport.replace_labels(before.baseline.image_id, before.body())
+            transport.replace_labels(
+                before.baseline.image_id, before.body(), operation_id=before.operation_id
+            )
             result = prepared.recover(transport.read_image(before.baseline.image_id))
         except Exception:
             result = replace(

@@ -4,6 +4,7 @@ Scripted `PlatformPort`/`StoragePort` fakes replay synthetic recorded
 exchanges. No network, no credentials, no provider text in durable records.
 """
 
+import hashlib
 import json
 from dataclasses import replace
 
@@ -58,9 +59,13 @@ class ScriptedStorage:
         self.transfers_calls.append(("PUT", target, content))
         return self.transfers.pop(("PUT", target.url))
 
-    def get(self, target):
+    def get(self, target, *, max_bytes=None):
         self.transfers_calls.append(("GET", target, None))
-        return self.transfers.pop(("GET", target.url))
+        result = self.transfers.pop(("GET", target.url))
+        if max_bytes is not None and len(result.content) > max_bytes:
+            # Mimic the bounded-transfer abort of the real storage binding.
+            return StorageResult(Outcome.TRANSPORT_ERROR)
+        return result
 
 
 @pytest.fixture
@@ -143,12 +148,16 @@ def test_full_release_sync_over_foundation_ports(bound_intent):
     assert final.job_id == "job-1"
     operations = [request.operation for request in port.requests]
     assert operations == [Operation.CREATE_DATASET, Operation.SIGNED_UPLOAD, Operation.INGEST]
-    # Persisted intent precedes every dispatch, and IDs are unique per mutation.
+    # Persisted intent precedes every dispatch; wire IDs are stable digests of
+    # the dispatch identity and satisfy the foundation's ID alphabet.
     assert [request.operation_id for request in port.requests] == [
-        "sync-1:create_dataset:1",
-        "sync-1:sign_archive:3",
-        "sync-1:ingest_archive:7",
+        hashlib.sha256(b"sync-1:create_dataset:1").hexdigest(),
+        hashlib.sha256(b"sync-1:sign_archive:3").hexdigest(),
+        hashlib.sha256(b"sync-1:ingest_archive:7").hexdigest(),
     ]
+    assert all(request.operation_id.replace("-", "").isalnum() for request in port.requests)
+    # SIGN carries the archive size the pinned contract requires.
+    assert port.requests[1].body["totalBytes"] == len(ARCHIVE)
     # Storage transfer carries only returned headers, never a Platform bearer.
     method, target, content = storage.transfers_calls[0]
     assert method == "PUT"
@@ -207,9 +216,23 @@ def test_rejected_create_is_terminal_and_never_replayed(bound_intent):
     assert len(port.requests) == 1
 
 
-def test_rate_limited_create_is_uncertain_never_replayed(bound_intent):
+def test_locally_throttled_create_defers_without_dispatch(bound_intent):
+    # A status-less RATE_LIMITED is the foundation's local throttle reserve:
+    # proven undispatched, so one dispatch defers back to NEW (prepare again).
     journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
     port = ScriptedPort([PlatformResult(Outcome.RATE_LIMITED, retry_at=60.0)])
+    storage = ScriptedStorage({})
+    transport = _adapter(port, storage)
+    state = dispatch_once(journal, transport, "sync-1", now=0)
+    assert state.phase.value == "new"
+    assert state.pending is None
+    assert len(port.requests) == 1
+
+
+def test_remote_429_create_is_uncertain_never_replayed(bound_intent):
+    # A remote 429 carries an HTTP status: it may already have been processed.
+    journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
+    port = ScriptedPort([PlatformResult(Outcome.RATE_LIMITED, 429, retry_at=60.0)])
     storage = ScriptedStorage({})
     final = drive_release_sync(journal, port, storage)
     assert final.phase.value == "uncertain"
@@ -329,6 +352,7 @@ def test_label_replacement_end_to_end_over_foundation():
     ]
     patch = port.requests[1]
     assert patch.path == {"imageId": IMAGE_ID}
+    assert patch.operation_id == "fix-1"
     assert set(patch.body) == {"labels"}
 
 
@@ -501,7 +525,10 @@ def test_saved_export_capture_reconcile_and_freeze_over_foundation(bound_intent)
                             "name": "train.jpg",
                             "imageUrl": "https://storage.example/train-catalog",
                         }
-                    ]
+                    ],
+                    "hasMore": False,
+                    "classes": ["Object A", "Object B"],
+                    "errorCount": 0,
                 },
             ),
             PlatformResult(
@@ -519,7 +546,10 @@ def test_saved_export_capture_reconcile_and_freeze_over_foundation(bound_intent)
                             "name": "val.jpg",
                             "imageUrl": "https://storage.example/val-catalog",
                         }
-                    ]
+                    ],
+                    "hasMore": False,
+                    "classes": ["Object A", "Object B"],
+                    "errorCount": 0,
                 },
             ),
             PlatformResult(
@@ -580,3 +610,211 @@ def test_saved_export_capture_reconcile_and_freeze_over_foundation(bound_intent)
     journal.state = journal.state.freeze(mapping)
     assert journal.state.phase == Phase.FROZEN
     assert journal.state.frozen == mapping
+
+
+def test_sign_response_without_headers_uses_empty_instructions(bound_intent):
+    from labelloop_platform.release_sync import Phase
+
+    journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
+    port = ScriptedPort(
+        [
+            PlatformResult(
+                Outcome.SUCCEEDED,
+                201,
+                {"id": "dataset-1", "owner": OWNER, "dataset": SLUG, "region": "us"},
+            ),
+            PlatformResult(
+                Outcome.SUCCEEDED,
+                200,
+                {
+                    "sessionId": "session-1",
+                    "uploadUrl": "https://storage.example/fixture-upload",
+                    "expiresAt": "2030-01-01T00:00:00Z",
+                },
+            ),
+        ]
+    )
+    storage = ScriptedStorage(
+        {("PUT", "https://storage.example/fixture-upload"): StorageResult(Outcome.SUCCEEDED, 200)}
+    )
+    transport = _adapter(port, storage)
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    assert journal.state.phase == Phase.SIGNED
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    assert journal.state.phase == Phase.UPLOADED
+    assert storage.transfers_calls[0] == ("PUT", storage.transfers_calls[0][1], ARCHIVE)
+    assert storage.transfers_calls[0][1].headers == {}
+
+
+def test_rejected_412_put_retires_session(bound_intent):
+    # A StoragePort may report the create-only violation as REJECTED + 412;
+    # the adapter must still retire the session, not mark the release failed.
+    from labelloop_platform.release_sync import Phase
+
+    journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
+    port = ScriptedPort(
+        [
+            PlatformResult(
+                Outcome.SUCCEEDED,
+                201,
+                {"id": "dataset-1", "owner": OWNER, "dataset": SLUG, "region": "us"},
+            ),
+            sign_result(),
+        ]
+    )
+    storage = ScriptedStorage(
+        {("PUT", "https://storage.example/fixture-upload"): StorageResult(Outcome.REJECTED, 412)}
+    )
+    transport = _adapter(port, storage)
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    journal.state = dispatch_once(journal, transport, "sync-1", now=0)
+    assert journal.state.phase == Phase.DATASET
+    assert journal.state.retired_sessions == ("session-1",)
+    assert not transport._targets
+
+
+def test_archive_mismatch_aborts_before_any_dispatch(bound_intent):
+    port = ScriptedPort([])
+    transport = FoundationReleaseTransport(port, ScriptedStorage({}), b"different-bytes")
+    state = ReleaseSync(bound_intent, OWNER, SLUG)
+    _, command = state.prepare(0)
+    with pytest.raises(SyncConflict):
+        transport.execute(command)
+    assert port.requests == []
+
+
+def _page(images, has_more, cursor=None):
+    data = {
+        "images": images,
+        "hasMore": has_more,
+        "classes": ["Object A", "Object B"],
+        "errorCount": 0,
+    }
+    if cursor is not None:
+        data["nextCursor"] = cursor
+    return PlatformResult(Outcome.SUCCEEDED, 200, data)
+
+
+def _export_source(pages, read_results=()):
+    record = {
+        "id": "dataset-1",
+        "owner": OWNER,
+        "dataset": SLUG,
+        "visibility": "private",
+        "task": "detect",
+        "status": "ready",
+        "classNames": ["Object A", "Object B"],
+        "versions": [],
+    }
+    port = ScriptedPort(
+        [
+            PlatformResult(Outcome.SUCCEEDED, 200, {"dataset": record}),
+            PlatformResult(
+                Outcome.SUCCEEDED,
+                200,
+                {"downloadUrl": "https://storage.example/export.ndjson", "version": 7},
+            ),
+            *pages,
+            *read_results,
+        ]
+    )
+    return port
+
+
+def test_image_lookup_follows_pagination_to_later_exact_match():
+    from labelloop_platform.sync_transport import FoundationSavedExportSource as Source
+
+    pixels = _png(320, 320, (17, 59, 101))
+    port = _export_source(
+        [
+            _page(
+                [
+                    {
+                        "id": "other-1",
+                        "name": "sample-1.jpg",
+                        "imageUrl": "https://storage.example/a",
+                    }
+                ],
+                True,
+                "cursor-2",
+            ),
+            _page(
+                [
+                    {
+                        "id": "image-late",
+                        "name": "sample-2.jpg",
+                        "imageUrl": "https://storage.example/late",
+                    }
+                ],
+                False,
+            ),
+        ],
+        [
+            PlatformResult(
+                Outcome.SUCCEEDED, 200, _catalogue_wire("sample-2.jpg", "image-late", "train", [])
+            )
+        ],
+    )
+    storage = ScriptedStorage(
+        {
+            ("GET", "https://storage.example/export.ndjson"): StorageResult(
+                Outcome.SUCCEEDED, 200, content=b"{}"
+            ),
+            ("GET", "https://storage.example/late"): StorageResult(
+                Outcome.SUCCEEDED, 200, content=pixels
+            ),
+        }
+    )
+    source = Source(port, storage, decode_dimensions=_decode_dimensions)
+    source.saved_export(OWNER, SLUG, 7)
+    snapshot = source.image_by_filename("dataset-1", "sample-2.jpg")
+    assert snapshot.image_id == "image-late"
+    cursors = [r.query.get("cursor") for r in port.requests if r.operation == Operation.LIST_IMAGES]
+    assert cursors == [None, "cursor-2"]
+
+
+def test_image_lookup_duplicate_across_pages_is_ambiguous():
+    from labelloop_platform.sync_transport import FoundationSavedExportSource as Source
+
+    port = _export_source(
+        [
+            _page(
+                [{"id": "dup-1", "name": "same.jpg", "imageUrl": "https://storage.example/a"}],
+                True,
+                "cursor-2",
+            ),
+            _page(
+                [{"id": "dup-2", "name": "same.jpg", "imageUrl": "https://storage.example/b"}],
+                False,
+            ),
+        ]
+    )
+    storage = ScriptedStorage(
+        {
+            ("GET", "https://storage.example/export.ndjson"): StorageResult(
+                Outcome.SUCCEEDED, 200, content=b"{}"
+            )
+        }
+    )
+    source = Source(port, storage, decode_dimensions=_decode_dimensions)
+    source.saved_export(OWNER, SLUG, 7)
+    with pytest.raises(SyncConflict):
+        source.image_by_filename("dataset-1", "same.jpg")
+
+
+def test_oversize_export_aborts_at_bounded_transfer():
+    from labelloop_platform.sync_transport import FoundationSavedExportSource as Source
+
+    port = _export_source([])
+    storage = ScriptedStorage(
+        {
+            ("GET", "https://storage.example/export.ndjson"): StorageResult(
+                Outcome.SUCCEEDED, 200, content=b"x" * 100
+            )
+        }
+    )
+    source = Source(port, storage, decode_dimensions=_decode_dimensions, max_export_bytes=8)
+    with pytest.raises(SyncConflict):
+        source.saved_export(OWNER, SLUG, 7)

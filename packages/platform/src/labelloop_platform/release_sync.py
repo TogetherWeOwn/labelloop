@@ -1,5 +1,6 @@
 """Durable release upload transitions, independent of transport and job scheduling."""
 
+import hashlib
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Protocol
@@ -64,6 +65,9 @@ class MutationOutcome:
     dataset_id: str | None = None
     session: UploadSession | None = None
     job_id: str | None = None
+    # Advisory resume time (monotonic process clock) for proven-undispatched
+    # deferrals; a process restart simply retries immediately, never wrongly.
+    retry_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +130,12 @@ class ReleaseSync:
             payload = self.intent.ingest_body(self.session.session_id)
         else:
             raise SyncConflict("no mutation allowed; reconcile the persisted outcome first")
+        # The foundation rejects non-[A-Za-z0-9_-] operation IDs before dispatch.
+        # Derive a stable, bounded, collision-resistant wire ID from the full
+        # dispatch identity instead: same intent/action/sequence, same ID.
+        dispatch_id = hashlib.sha256(
+            f"{self.intent.operation_id}:{action}:{self.sequence + 1}".encode()
+        ).hexdigest()
         command = SyncCommand(
             action,
             self.intent.operation_id,
@@ -133,7 +143,7 @@ class ReleaseSync:
             self.slug,
             self.dataset_id,
             canonical_json(payload),
-            f"{self.intent.operation_id}:{action}:{self.sequence + 1}",
+            dispatch_id,
         )
         return replace(
             self,
@@ -151,6 +161,17 @@ class ReleaseSync:
             sequence=self.sequence + 1,
             history=(*self.history, f"outcome:{command.action}:{outcome.kind}"),
         )
+        if outcome.kind == "deferred":
+            # Proven undispatched (local throttle reserve, before wire): safe
+            # to prepare the same action again, never a replay of a mutation
+            # that may already have landed.
+            pre_phase = {
+                Action.CREATE: Phase.NEW,
+                Action.SIGN: Phase.DATASET,
+                Action.PUT: Phase.SIGNED,
+                Action.INGEST: Phase.UPLOADED,
+            }[command.action]
+            return replace(result, phase=pre_phase, pending=None)
         if outcome.kind == "uncertain":
             return replace(result, phase=Phase.UNCERTAIN)
         if outcome.kind == "failed":
@@ -285,8 +306,9 @@ class ReleaseTransport(Protocol):
     """Adapter owns validated routes, archive bytes and ephemeral signed-target tickets.
 
     A signed-target ticket is never authority to select an endpoint or an archive.
-    PUT sends only returned storage headers; never a Platform bearer. SIGN derives
-    totalBytes from the hash-verified archive. No automatic mutation retries.
+    PUT sends only returned storage headers; never a Platform bearer. The adapter
+    binds the archive digest before the first mutation and derives SIGN
+    totalBytes from those same verified bytes. No automatic mutation retries.
     """
 
     def execute(self, command: SyncCommand) -> MutationOutcome: ...

@@ -62,11 +62,17 @@ def _expires_at(value: Any) -> float:
         raise SyncConflict("signed session expiry is malformed") from None
 
 
-def _failure(outcome: Outcome) -> MutationOutcome:
-    if outcome in {Outcome.REJECTED, Outcome.MALFORMED}:
+def _failure(result: PlatformResult) -> MutationOutcome:
+    if result.outcome in {Outcome.REJECTED, Outcome.MALFORMED}:
         return MutationOutcome("failed")
-    # RATE_LIMITED/UNAVAILABLE/TRANSPORT_ERROR/PAID_PAUSED all mean the
-    # mutation must not be replayed; uncertain forces reconciliation.
+    if result.outcome == Outcome.RATE_LIMITED and result.status_code is None:
+        # The foundation's local throttle reserve returns before wire dispatch
+        # (no HTTP status exists): proven undispatched, so the state machine
+        # may prepare the same action again. A remote 429 carries a status and
+        # stays uncertain below; it may already have been processed.
+        return MutationOutcome("deferred", retry_at=result.retry_at)
+    # UNAVAILABLE/TRANSPORT_ERROR/PAID_PAUSED and remote RATE_LIMITED all mean
+    # the mutation must not be replayed; uncertain forces reconciliation.
     return MutationOutcome("uncertain")
 
 
@@ -86,21 +92,33 @@ class FoundationReleaseTransport(ReleaseTransport):
         payload = json.loads(command.payload_json)
         if not isinstance(payload, dict):
             raise SyncConflict("mutation payload is not an object")
-        if payload.get("archiveSha256", self.archive_sha256) != self.archive_sha256:
-            raise SyncConflict("upload target is for different archive bytes")
         if command.action == Action.PUT:
+            if payload.get("archiveSha256") != self.archive_sha256:
+                raise SyncConflict("upload target is for different archive bytes")
             return self._put(command)
+        # Bind the archive identity before the FIRST mutation: a mismatched
+        # CREATE is rejected before dispatch, so SIGN/INGEST never mutate on
+        # bytes the intent does not name. Later actions need no archive field.
+        if command.action == Action.CREATE:
+            metadata = payload.get("metadata")
+            archive = metadata.get("labelloopArchive") if isinstance(metadata, dict) else None
+            if archive != self.archive_sha256:
+                raise SyncConflict("release archive identity differs from upload bytes")
+        body = payload
+        if command.action == Action.SIGN:
+            # Both pinned signed-upload branches require a positive totalBytes.
+            body = {**payload, "totalBytes": len(self._archive)}
         request = PlatformRequest(
             _OPERATIONS[command.action],
             operation_id=command.dispatch_id,
             path={"owner": command.owner, "dataset": command.slug}
             if command.action == Action.INGEST
             else {},
-            body=payload,
+            body=body,
         )
         result = self._port.execute(request)
         if result.outcome != Outcome.SUCCEEDED:
-            return _failure(result.outcome)
+            return _failure(result)
         return self._success(command, result)
 
     def _success(self, command: SyncCommand, result: PlatformResult) -> MutationOutcome:
@@ -115,7 +133,9 @@ class FoundationReleaseTransport(ReleaseTransport):
         if command.action == Action.SIGN:
             session_id = data.get("sessionId")
             upload_url = data.get("uploadUrl")
-            headers = data.get("headers")
+            # The pinned response requires only sessionId/uploadUrl/expiresAt;
+            # headers are optional, so absence means "no extra instructions".
+            headers = data.get("headers", {})
             if not isinstance(session_id, str) or not session_id:
                 raise SyncConflict("signed session lacks an ID")
             if not isinstance(upload_url, str) or not upload_url or not isinstance(headers, dict):
@@ -146,14 +166,17 @@ class FoundationReleaseTransport(ReleaseTransport):
         if received.outcome == Outcome.SUCCEEDED:
             del self._targets[session_id]
             return MutationOutcome("ok")
-        if received.outcome == Outcome.REJECTED:
-            self._targets.pop(session_id, None)
-            return MutationOutcome("failed")
+        # Check 412 before the REJECTED mapping: some StoragePort bindings
+        # report the create-only violation as REJECTED, and the state machine
+        # must still retire the session and sign a fresh target.
         if received.status_code == 412:
             # Create-only violation: the state machine retires this session, and
             # the ephemeral target is discarded so it can never be replayed.
             self._targets.pop(session_id, None)
             return MutationOutcome("precondition_failed")
+        if received.outcome == Outcome.REJECTED:
+            self._targets.pop(session_id, None)
+            return MutationOutcome("failed")
         return MutationOutcome("uncertain")
 
     def drop_target(self, session_id: str) -> None:
@@ -225,17 +248,25 @@ class FoundationLabelTransport(LabelTransport):
             raise SyncConflict("image read did not succeed")
         return ImageSnapshot.from_wire(result.data)
 
-    def replace_labels(self, image_id: str, body: dict[str, Any]) -> None:
+    def replace_labels(self, image_id: str, body: dict[str, Any], *, operation_id: str) -> None:
         labels = body.get("labels")
         if not isinstance(labels, list):
             raise SyncConflict("label replacement needs the complete label set")
         result = self._port.execute(
             PlatformRequest(
-                Operation.REPLACE_LABELS, path={"imageId": image_id}, body={"labels": labels}
+                Operation.REPLACE_LABELS,
+                operation_id=operation_id,
+                path={"imageId": image_id},
+                body={"labels": labels},
             )
         )
         if result.outcome != Outcome.SUCCEEDED:
             raise SyncConflict("label replacement did not succeed; reconcile readback")
+
+
+# Bounded image-lookup budget: pages of 5000, so 10 pages covers every
+# reader-acceptable release (read_saved_export caps membership at 10000).
+_LIST_IMAGES_BUDGET_PAGES = 10
 
 
 class FoundationSavedExportSource(SavedExportSource):
@@ -247,10 +278,14 @@ class FoundationSavedExportSource(SavedExportSource):
         storage: StoragePort,
         *,
         decode_dimensions: Callable[[bytes], tuple[int, int]],
+        max_export_bytes: int = 16 * 1024 * 1024,
+        max_image_bytes: int = 32 * 1024 * 1024,
     ) -> None:
         self._port = port
         self._storage = storage
         self._decode = decode_dimensions
+        self._max_export_bytes = max_export_bytes
+        self._max_image_bytes = max_image_bytes
         # Bound by `saved_export` in the reader's call order: image lookups for
         # one frozen dataset are scoped to the record fetched for that export,
         # never to a caller- or model-selected slug.
@@ -276,26 +311,47 @@ class FoundationSavedExportSource(SavedExportSource):
             raise SyncConflict("saved export returned no download target")
         if type(returned) is not int:
             raise SyncConflict("saved export returned an invalid version")
-        content = self.download_image(download_url)
+        content = self.download_image(download_url, max_bytes=self._max_export_bytes)
         return SavedExport(dataset, returned, content)
 
     def image_by_filename(self, dataset_id: str, filename: str) -> ImageSnapshot:
         dataset = self._dataset_for_id(dataset_id)
-        listed = self._port.execute(
-            PlatformRequest(
-                Operation.LIST_IMAGES,
-                path={"owner": dataset["owner"], "dataset": dataset["dataset"]},
-                query={"search": filename, "includeImageUrls": "true", "limit": 5000},
+        # `search` is a substring match, not an exact selector: exhaust every
+        # page within a bounded budget so a later exact filename is found and
+        # a later duplicate still makes the identity ambiguous.
+        matches: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _page in range(_LIST_IMAGES_BUDGET_PAGES):
+            query: dict[str, Any] = {
+                "search": filename,
+                "includeImageUrls": "true",
+                "limit": 5000,
+            }
+            if cursor is not None:
+                query["cursor"] = cursor
+            listed = self._port.execute(
+                PlatformRequest(
+                    Operation.LIST_IMAGES,
+                    path={"owner": dataset["owner"], "dataset": dataset["dataset"]},
+                    query=query,
+                )
             )
-        )
-        if listed.outcome != Outcome.SUCCEEDED or not isinstance(listed.data, dict):
-            raise SyncConflict("image lookup did not succeed")
-        images = listed.data.get("images")
-        if not isinstance(images, list):
-            raise SyncConflict("image lookup returned no catalogue")
-        matches = [
-            item for item in images if isinstance(item, dict) and item.get("name") == filename
-        ]
+            if listed.outcome != Outcome.SUCCEEDED or not isinstance(listed.data, dict):
+                raise SyncConflict("image lookup did not succeed")
+            images = listed.data.get("images")
+            if not isinstance(images, list) or not isinstance(listed.data.get("hasMore"), bool):
+                raise SyncConflict("image lookup returned no catalogue")
+            matches.extend(
+                item for item in images if isinstance(item, dict) and item.get("name") == filename
+            )
+            if not listed.data["hasMore"]:
+                break
+            next_cursor = listed.data.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise SyncConflict("image lookup pagination is incomplete")
+            cursor = next_cursor
+        else:
+            raise SyncConflict("image lookup exceeds bounded pagination budget")
         if len(matches) != 1:
             raise SyncConflict("saved image identity is ambiguous")
         image_id = matches[0].get("id")
@@ -305,12 +361,17 @@ class FoundationSavedExportSource(SavedExportSource):
         image_url = matches[0].get("imageUrl")
         if not isinstance(image_url, str) or not image_url:
             raise SyncConflict("image lookup returned no content URL")
-        pixels = self.download_image(image_url)
+        pixels = self.download_image(image_url, max_bytes=self._max_image_bytes)
         width, height = self._decode(pixels)
         return replace(snapshot, content=ContentEvidence(sha256(pixels), width, height))
 
-    def download_image(self, url: str) -> bytes:
-        received = self._storage.get(StorageTarget(url))
+    def download_image(self, url: str, *, max_bytes: int | None = None) -> bytes:
+        # Default matches the bounded reader's image limit; callers pass the
+        # export limit for NDJSON downloads.
+        received = self._storage.get(
+            StorageTarget(url),
+            max_bytes=self._max_image_bytes if max_bytes is None else max_bytes,
+        )
         if received.outcome != Outcome.SUCCEEDED:
             raise SyncConflict("image download did not succeed")
         return received.content
