@@ -1,6 +1,8 @@
 """Source-bound anchor preparation; neither metadata approval nor pack publication."""
 
+from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -12,7 +14,9 @@ from labelloop_api.management_reference_pack import (
     AnchorPackPublish,
     assemble_anchor_pack,
     pack_snapshot,
+    verify_anchor_receipt,
 )
+from labelloop_api.management_references import reference_context_sha256
 from labelloop_core.domain import (
     ClassDefinition,
     DatasetObject,
@@ -139,6 +143,107 @@ class AnchorPackTests(TestCase):
         ):
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
                 AnchorPackPublish.model_validate({**raw, **changes})
+
+    def receipt_inputs(self):
+        scope, refs, revisions, plan = inputs()
+        pack = assemble_anchor_pack(scope, refs, revisions, plan)
+        snapshot, digest = pack_snapshot(pack)
+        project = SimpleNamespace(
+            id="project-1",
+            workspace_id="workspace-1",
+            scope="Packages",
+            domain="objects",
+            access_policy={},
+        )
+        receipt = SimpleNamespace(
+            event_type="management.publish_anchor_pack",
+            aggregate_id=project.id,
+            actor_kind="human",
+            actor_id="admin-1",
+            expected_revision=4,
+            payload={
+                "workspace_id": "workspace-1",
+                "aggregate_revision": 5,
+                "result": {
+                    "id": project.id,
+                    "project_id": project.id,
+                    "kind": "project",
+                    "revision": 5,
+                    "state": "draft",
+                },
+                "evidence": {
+                    "plan": plan.model_dump(mode="json"),
+                    "snapshot": snapshot,
+                    "snapshot_sha256": digest,
+                    "context_sha256": reference_context_sha256(project),
+                },
+            },
+        )
+        return receipt, project, pack
+
+    def test_publication_receipt_matches_fresh_pack_without_mutating_it(self):
+        receipt, project, pack = self.receipt_inputs()
+        before = deepcopy(receipt.payload)
+        verify_anchor_receipt(receipt, project, "workspace-1", pack)
+        self.assertEqual(receipt.payload, before)
+
+    def test_receipt_requires_owned_human_attribution(self):
+        receipt, project, pack = self.receipt_inputs()
+        for field, value in (
+            ("actor_kind", "worker"),
+            ("actor_id", ""),
+            ("aggregate_id", "foreign"),
+            ("event_type", "other"),
+        ):
+            changed = SimpleNamespace(**{**vars(receipt), field: value})
+            with self.subTest(field=field), self.assertRaises(ManagementFailure):
+                verify_anchor_receipt(changed, project, "workspace-1", pack)
+        with self.assertRaises(ManagementFailure):
+            verify_anchor_receipt(receipt, project, "foreign", pack)
+
+    def test_receipt_revision_and_result_claims_do_not_supply_authority(self):
+        receipt, project, pack = self.receipt_inputs()
+        for changes in (
+            {"aggregate_revision": True},
+            {"aggregate_revision": 6},
+            {"workspace_id": "foreign"},
+            {"result": {}},
+            {"result": {**receipt.payload["result"], "revision": 6}},
+            {"result": {**receipt.payload["result"], "state": "published"}},
+        ):
+            changed = deepcopy(receipt)
+            changed.payload.update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ManagementFailure):
+                verify_anchor_receipt(changed, project, "workspace-1", pack)
+
+    def test_receipt_rehashes_saved_snapshot_even_for_equal_python_values(self):
+        receipt, project, pack = self.receipt_inputs()
+        receipt.payload["evidence"]["snapshot"]["scope"]["ontology"]["version"] = True
+        self.assertEqual(receipt.payload["evidence"]["snapshot"], pack_snapshot(pack)[0])
+        with self.assertRaises(ManagementFailure):
+            verify_anchor_receipt(receipt, project, "workspace-1", pack)
+
+    def test_receipt_cannot_substitute_current_pack_or_digest(self):
+        receipt, project, pack = self.receipt_inputs()
+        changed = replace(pack, examples=(replace(pack.examples[0], utility=0.1),))
+        with self.assertRaises(ManagementFailure):
+            verify_anchor_receipt(receipt, project, "workspace-1", changed)
+        receipt.payload["evidence"]["snapshot_sha256"] = "0" * 64
+        with self.assertRaises(ManagementFailure):
+            verify_anchor_receipt(receipt, project, "workspace-1", pack)
+
+    def test_context_change_invalidates_historical_publication(self):
+        receipt, project, pack = self.receipt_inputs()
+        project.scope = "Other objects"
+        with self.assertRaises(ManagementFailure):
+            verify_anchor_receipt(receipt, project, "workspace-1", pack)
+
+    def test_malformed_receipt_fails_closed(self):
+        receipt, project, pack = self.receipt_inputs()
+        for payload in ({}, {"evidence": None}, None):
+            changed = SimpleNamespace(**{**vars(receipt), "payload": payload})
+            with self.subTest(payload=payload), self.assertRaises(ManagementFailure):
+                verify_anchor_receipt(changed, project, "workspace-1", pack)
 
     def test_metadata_approval_does_not_create_a_positive_instance(self):
         scope, refs, revisions, plan = inputs()

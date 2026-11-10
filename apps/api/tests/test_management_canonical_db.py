@@ -7593,6 +7593,228 @@ def test_anchor_pack_publication_serializes_competing_version_claims(database):
     assert len(pack_receipts(owner, created.id)) == 1
 
 
+def current_pack(service, project_id, plan):
+    from labelloop_api.management_reference_pack import read_current_anchor_pack
+
+    with service.engine.connect().execution_options(
+        isolation_level="REPEATABLE READ"
+    ) as connection:
+        with connection.begin():
+            connection.execute(text("SET TRANSACTION READ ONLY"))
+            row = connection.execute(select(project).where(project.c.id == project_id)).one()
+            return read_current_anchor_pack(
+                connection, row, service.workspace_id, plan.pack_id, plan.version
+            )
+
+
+def test_current_anchor_pack_is_receipt_verified_select_only(database):
+    service, owner, role = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    expected = prepare_pack(service, created.id, plan)
+    publish_pack(service, created.id, plan)
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    assert current_pack(service, created.id, plan) == expected
+    assert counts(owner, created.id) == before
+
+
+def test_current_anchor_pack_requires_publication_and_exact_version(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        current_pack(service, created.id, plan)
+    publish_pack(service, created.id, plan)
+    for changes in ({"pack_id": "absent"}, {"version": "absent"}):
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            current_pack(service, created.id, plan.model_copy(update=changes))
+    changed = plan.model_copy(update={"version": "v2"})
+    publish_pack(service, created.id, changed, revision=5, key="current-pack-v2")
+    assert current_pack(service, created.id, plan).version == "v1"
+    assert current_pack(service, created.id, changed).version == "v2"
+
+
+@pytest.mark.parametrize(
+    "change", ["rejected", "missing-completeness", "scope", "withdrawn", "assignment"]
+)
+def test_current_anchor_pack_rechecks_current_evidence_and_never_renews_on_replay(database, change):
+    service, owner, _ = database
+    created, asset, source, plan = anchor_pack_inputs(service, owner)
+    publication = publish_pack(service, created.id, plan)
+    if change == "withdrawn":
+        withdraw(
+            service,
+            created.id,
+            ReferenceWithdraw(
+                expected_revision=5,
+                reference_id=next(iter(plan.entries)),
+                reason="Retired pack anchor",
+            ),
+        )
+    else:
+        with owner.begin() as connection:
+            if change == "rejected":
+                append_review(
+                    connection,
+                    asset_id=asset.id,
+                    actor_kind="human",
+                    actor_id=Actor().id,
+                    expected_revision=3,
+                    approval_state="rejected",
+                    review_tier="human_reviewed",
+                    scope_completeness="unreviewed",
+                    objects=[],
+                )
+            elif change == "missing-completeness":
+                connection.execute(
+                    completeness_assessment.delete().where(
+                        completeness_assessment.c.asset_id == source.id
+                    )
+                )
+            elif change == "scope":
+                connection.execute(
+                    project.update().where(project.c.id == created.id).values(scope="Changed scope")
+                )
+            else:
+                assignment = connection.execute(
+                    select(source_split_assignment).where(
+                        source_split_assignment.c.asset_id == source.id
+                    )
+                ).one()
+                values = {
+                    key: value
+                    for key, value in assignment._mapping.items()
+                    if key not in {"id", "created_at"}
+                }
+                connection.execute(
+                    insert(source_split_assignment).values(
+                        **{**values, "assignment_version": "new-anchor-assignment"}
+                    )
+                )
+    before = counts(owner, created.id)
+    assert publish_pack(service, created.id, plan) == publication
+    with pytest.raises(ManagementFailure):
+        current_pack(service, created.id, plan)
+    assert counts(owner, created.id) == before
+    assert len(pack_receipts(owner, created.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "duplicate",
+        "worker",
+        "workspace",
+        "digest",
+        "snapshot",
+        "context",
+        "result",
+        "revision",
+        "plan",
+    ],
+)
+def test_current_anchor_pack_refuses_corrupt_or_ambiguous_receipt(database, failure):
+    from copy import deepcopy
+
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    (receipt,) = pack_receipts(owner, created.id)
+    payload = deepcopy(receipt.payload)
+    with owner.begin() as connection:
+        if failure == "duplicate":
+            connection.execute(
+                insert(canonical_event).values(
+                    event_type=receipt.event_type,
+                    aggregate_id=receipt.aggregate_id,
+                    expected_revision=receipt.expected_revision,
+                    actor_kind=receipt.actor_kind,
+                    actor_id=receipt.actor_id,
+                    payload=payload,
+                )
+            )
+        else:
+            changes = {}
+            if failure == "worker":
+                changes["actor_kind"] = "worker"
+            elif failure == "workspace":
+                payload["workspace_id"] = str(uuid4())
+            elif failure == "digest":
+                payload["evidence"]["snapshot_sha256"] = "0" * 64
+            elif failure == "snapshot":
+                payload["evidence"]["snapshot"]["examples"][0]["scene"] = "Forged scene"
+            elif failure == "context":
+                payload["evidence"]["context_sha256"] = "0" * 64
+            elif failure == "result":
+                payload["result"]["project_id"] = str(uuid4())
+            elif failure == "revision":
+                payload["aggregate_revision"] += 1
+            else:
+                payload["evidence"]["plan"] = {}
+            connection.execute(
+                canonical_event.update()
+                .where(
+                    canonical_event.c.aggregate_id == created.id,
+                    canonical_event.c.event_type == "management.publish_anchor_pack",
+                )
+                .values(payload=payload, **changes)
+            )
+    with pytest.raises(ManagementFailure):
+        current_pack(service, created.id, plan)
+
+
+def test_current_anchor_pack_keeps_one_snapshot_during_concurrent_withdrawal(database):
+    from labelloop_api.management_reference_pack import read_current_anchor_pack
+
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    with service.engine.connect().execution_options(
+        isolation_level="REPEATABLE READ"
+    ) as connection:
+        with connection.begin():
+            connection.execute(text("SET TRANSACTION READ ONLY"))
+            row = connection.execute(select(project).where(project.c.id == created.id)).one()
+            before = read_current_anchor_pack(
+                connection, row, service.workspace_id, plan.pack_id, plan.version
+            )
+            withdraw(
+                service,
+                created.id,
+                ReferenceWithdraw(
+                    expected_revision=5,
+                    reference_id=next(iter(plan.entries)),
+                    reason="Concurrent retirement",
+                ),
+            )
+            assert (
+                read_current_anchor_pack(
+                    connection, row, service.workspace_id, plan.pack_id, plan.version
+                )
+                == before
+            )
+    with pytest.raises(ManagementFailure):
+        current_pack(service, created.id, plan)
+
+
+def test_current_anchor_pack_refuses_foreign_workspace_and_read_committed(database):
+    from labelloop_api.management_reference_pack import read_current_anchor_pack
+
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        current_pack(replace(service, workspace_id=uuid4()), created.id, plan)
+    with service.engine.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        with pytest.raises(ManagementFailure, match="management_unavailable"):
+            read_current_anchor_pack(
+                connection, row, service.workspace_id, plan.pack_id, plan.version
+            )
+
+
 def reference_inputs(service, owner, **kwargs):
     created, asset, source, frozen = release_inputs(service, owner, **kwargs)
     payload = ReferenceEnroll(

@@ -1,8 +1,8 @@
-"""Internal anchor-pack preparation from current canonical evidence, not publication.
+"""Internal anchor-pack preparation and current publication verification.
 
-The caller owns authorization, the project lock and transaction. Read-only callers
-must use one repeatable snapshot and explicitly disable source locking. There is
-no object I/O, persisted pack, retrieval registration or setup-release authority.
+The caller owns authorization and the transaction. Read-only callers must use one
+repeatable snapshot and disable source locking. Publication is historical evidence,
+never retrieval registration or setup-release authority. No object I/O occurs here.
 """
 
 import hashlib
@@ -24,12 +24,12 @@ from labelloop_core.evidence import EvidenceScope, SourceAnnotationRevision
 from labelloop_core.geometry import Box
 from labelloop_core.references import MemoryExample, ReferencePack
 
-from .management_contracts import ManagementError, Mutation
+from .management_contracts import ManagementError, Mutation, Resource
 from .management_ports import ManagementFailure
-from .management_references import read_references
+from .management_references import read_references, reference_context_sha256
 from .management_release import revision_refusal
 from .revision_store import completeness_context_hash
-from .schema import annotation_revision, completeness_assessment, ontology_release
+from .schema import annotation_revision, canonical_event, completeness_assessment, ontology_release
 
 
 class AnchorPackEntry(BaseModel):
@@ -78,6 +78,82 @@ def pack_snapshot(pack: ReferencePack) -> tuple[dict, str]:
 
 def reject(code="missing_evidence"):
     raise ManagementFailure(ManagementError(detail=code))
+
+
+def verify_anchor_receipt(receipt, project_row, workspace_id, pack: ReferencePack) -> None:
+    """Compare a publication with freshly prepared evidence, not stored self-claims."""
+    try:
+        payload = receipt.payload
+        evidence = payload["evidence"]
+        result = Resource.model_validate(payload["result"])
+        snapshot, digest = pack_snapshot(pack)
+        saved = json.dumps(
+            evidence["snapshot"], sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+        if (
+            len(saved) > 2_000_000
+            or hashlib.sha256(saved).hexdigest() != digest
+            or str(project_row.workspace_id) != str(workspace_id)
+            or receipt.event_type != "management.publish_anchor_pack"
+            or receipt.aggregate_id != str(project_row.id)
+            or receipt.actor_kind != "human"
+            or not receipt.actor_id
+            or payload["workspace_id"] != str(workspace_id)
+            or type(receipt.expected_revision) is not int
+            or receipt.expected_revision < 1
+            or type(payload["aggregate_revision"]) is not int
+            or payload["aggregate_revision"] != receipt.expected_revision + 1
+            or result.id != str(project_row.id)
+            or result.project_id != str(project_row.id)
+            or result.kind != "project"
+            or result.state != "draft"
+            or result.revision != payload["aggregate_revision"]
+            or evidence["context_sha256"] != reference_context_sha256(project_row)
+            or evidence["snapshot_sha256"] != digest
+            or evidence["snapshot"] != snapshot
+        ):
+            reject()
+    except (KeyError, TypeError, ValueError, AttributeError):
+        reject()
+
+
+def read_current_anchor_pack(
+    connection: Connection, project_row, workspace_id, pack_id: str, version: str
+) -> ReferencePack:
+    """Internal only. Caller authorizes and supplies one repeatable read snapshot."""
+    if str(project_row.workspace_id) != str(workspace_id):
+        reject("not_found")
+    if connection.get_isolation_level() != "REPEATABLE READ":
+        reject("management_unavailable")
+    receipts = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type == "management.publish_anchor_pack",
+        )
+        .limit(1001)
+    ).all()
+    if len(receipts) > 1000:
+        reject("management_unavailable")
+    try:
+        selected = []
+        identities = set()
+        for receipt in receipts:
+            plan = AnchorPackPlan.model_validate(receipt.payload["evidence"]["plan"])
+            identity = (plan.pack_id, plan.version)
+            if identity in identities:
+                reject()
+            identities.add(identity)
+            if identity == (pack_id, version):
+                selected.append((receipt, plan))
+        if len(selected) != 1:
+            reject()
+        receipt, plan = selected[0]
+        pack = prepare_anchor_pack(connection, project_row, workspace_id, plan, lock_sources=False)
+        verify_anchor_receipt(receipt, project_row, workspace_id, pack)
+        return pack
+    except (KeyError, TypeError, ValueError):
+        reject()
 
 
 def assemble_anchor_pack(scope, references, revisions, plan: AnchorPackPlan) -> ReferencePack:

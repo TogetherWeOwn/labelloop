@@ -136,9 +136,25 @@ automatic-acceptance grant clear. The project remains draft.
 No API operation, retrieval binding, project release, freeze clearance, admission,
 worker startup or default mounting is added. Historical publication does not prove
 current eligibility after a later reference, annotation, grouping or context change.
-A receipt-verified current-pack reader and invalidation/revalidation checks remain
-required before bulk jobs may consume a published pack. Confusion negatives,
-automatic expansions, gold and cross-project imports remain unavailable here.
+`read_current_anchor_pack` is an internal-only, SELECT-only verifier requiring an
+explicit pack ID/version and one repeatable-read transaction. Its caller owns
+authorization and the owned project row; it is not a public detail or download port.
+The bounded publication history must have unique identities and valid plans. The
+selected receipt must match human attribution, workspace/project, revision/result,
+current reference context and the freshly prepared canonical pack. The verifier
+rehashes the saved JSON snapshot as well as recomputing current evidence; a matching
+stored digest alone cannot authorize altered content. Current reference lifecycle,
+annotation/completeness, ontology, source inventory and locked grouping are rechecked
+without locks or object I/O. Later revocation or changed evidence refuses consumption;
+it does not rewrite the historical publication. A historical retry still acknowledges
+the original receipt, never renews current eligibility, and cannot fall back to some
+other version. Unchanged explicitly pinned versions may coexist.
+
+This supplies current evidence validation, not automatic bulk-job binding, a public
+read/retrieval operation, setup approval or freeze clearance. A consuming transaction
+must own its snapshot and locking policy; a successful read is not a durable grant
+against future changes. Confusion negatives, automatic expansions, gold and
+cross-project imports remain unavailable here.
 
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.
