@@ -526,6 +526,51 @@ def test_later_ingest_admission() -> None:
     assert published.groups[new_key]
 
 
+def test_same_split_admission_changes_membership_without_quarantine() -> None:
+    # A new source joining a train group changes that group's membership but
+    # creates no training/holdout connection, so frozen releases (release-1)
+    # must not be quarantined.
+    fixture = Fixture(count=4)
+    new_key = "asset-04"
+    new_id = uuid.uuid4()
+    with fixture.engine.begin() as connection:
+        connection.execute(
+            insert(source_asset).values(
+                id=new_id,
+                asset_key=new_key,
+                project_id=fixture.project_id,
+                sha256="5" * 64,
+                object_key="sha256/55/" + "5" * 64,
+                width=100,
+                height=100,
+                exif_orientation=1,
+                source_uri="fixture",
+            )
+        )
+    train_index = next(
+        index for index, key in enumerate(fixture.keys) if fixture.seed_splits[key] == "train"
+    )
+    admitted = [
+        *observations(4),
+        TrustedObservation(
+            asset_id=new_key, sha256="5" * 64, phash=walsh(4), class_counts={"item": 1}
+        ),
+    ]
+    with fixture.engine.connect() as connection:
+        proposal = propose_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=admitted,
+            decisions=[decision(train_index, 4, "same_group")],
+            pins=pins_for(fixture),
+        )
+    assert proposal.changed_memberships != ()
+    assert proposal.cross_split_pairs == ()
+    assert proposal.split_transitions == ()
+    assert proposal.quarantined_releases == ()
+    assert proposal.requires_fresh_holdout is False
+
+
 def test_stale_pins_rejected() -> None:
     fixture = Fixture()
     with fixture.engine.connect() as connection:
@@ -683,6 +728,21 @@ def test_unchanged_memberships_preserve_splits_including_test_holdout() -> None:
     assert proposal.split_transitions == ()
     assert proposal.requires_fresh_holdout is False
     assert proposal.changed_memberships == ()
+
+
+def test_invalid_validation_fraction_rejected_even_with_locked_splits() -> None:
+    observations = [observation(index) for index in range(5)]
+    old_splits = {f"asset-{index:02d}": "train" for index in range(4)}
+    old_splits["asset-04"] = "val"
+    old_groups = {key: key for key in old_splits}
+    for fraction in (0.0, 1.0):
+        with pytest.raises(ValueError, match="validation_fraction"):
+            compute_proposal(
+                observations,
+                old_groups=old_groups,
+                old_splits=old_splits,
+                validation_fraction=fraction,
+            )
 
 
 def test_synthetic_session_tag_cannot_merge_unrelated_singleton() -> None:
@@ -960,7 +1020,7 @@ def test_return_to_historical_grouping_reuses_immutable_version() -> None:
             actor_id="integrator-1",
         )
     assert restored.assignment_version == a.assignment_version
-    assert restored.published is False
+    assert restored.published is True
     assert fixture.counts()["source_split_assignment"] == before["source_split_assignment"]
     with fixture.engine.connect() as connection:
         proposal = propose_regroup(
@@ -988,7 +1048,12 @@ class PgFixture:
 
         url = os.environ["DATABASE_URL"]
         self.engine = create_engine(url)
-        canonical_metadata.drop_all(self.engine)
+        # Reset via schema DROP CASCADE: plain metadata.drop_all fails on
+        # the forward FKs (training_run/evaluation_run -> yolo_dataset_variant)
+        # when the disposable database is reused across tests.
+        with self.engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
         canonical_metadata.create_all(self.engine)
         self.project_id = uuid.uuid4()
         self.ontology_id = uuid.uuid4()
@@ -1134,7 +1199,7 @@ def test_postgres_return_to_historical_version_respects_uniqueness() -> None:
                 actor_id="integrator-1",
             )
             assert restored.assignment_version == a.assignment_version
-            assert restored.published is False
+            assert restored.published is True
             rows = connection.execute(
                 select(source_split_assignment.c.assignment_version).where(
                     source_split_assignment.c.assignment_version == a.assignment_version

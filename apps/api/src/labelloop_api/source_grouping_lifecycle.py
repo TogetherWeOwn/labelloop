@@ -489,6 +489,11 @@ def compute_proposal(
     old_splits: Mapping[str, str] | None = None,
 ) -> ProposedGrouping:
     """Recompute the transitive closure over trusted evidence and decisions."""
+    if not 0 < validation_fraction < 1:
+        # Mirror the core assigner guard even when every split is locked and
+        # the fraction is never stratified: an out-of-range fraction must
+        # never reach a published assignment.
+        raise ValueError("validation_fraction must be strictly between 0 and 1")
     thresholds = thresholds or GroupingThresholds()
     validate_observations(
         observations,
@@ -905,12 +910,15 @@ def _affected_releases(
     *,
     project_id: uuid.UUID,
     old_version: str | None,
-    changed_assets: set[str],
     cross_assets: set[str],
 ) -> tuple[QuarantinedRelease, ...]:
+    # Quarantine is scoped to training/holdout contamination (cross-split
+    # pairs and eval-to-train transitions). A same-split membership change
+    # (e.g. a new source joining a train group) does not invalidate frozen
+    # releases, so changed membership alone never quarantines.
     if old_version is None:
         return ()
-    names = changed_assets | cross_assets
+    names = set(cross_assets)
     if not names:
         return ()
     # Relevant releases are those frozen under *any* historical assignment
@@ -997,17 +1005,13 @@ def _prepare(
         old_groups=old_groups,
         old_splits=old_splits,
     )
-    changed_assets = (
-        set().union(*proposal.changed_memberships) if proposal.changed_memberships else set()
-    )
     cross_assets = {asset for pair in proposal.cross_split_pairs for asset in pair}
     transition_assets = {asset for asset, _old, _new in proposal.split_transitions}
     quarantined = _affected_releases(
         connection,
         project_id=project_uuid,
         old_version=current_version,
-        changed_assets=changed_assets | transition_assets,
-        cross_assets=cross_assets,
+        cross_assets=cross_assets | transition_assets,
     )
     return ProposedGrouping(
         groups=proposal.groups,
@@ -1146,12 +1150,15 @@ def apply_regroup(
             )
             if audit_hook is not None:
                 audit_hook()
+            # published=True: the current assignment changed (B -> A), even
+            # though the rows were reused. False is reserved for the true
+            # version no-op above so callers do not miss a restoration.
             return PublishedGrouping(
                 assignment_version=proposal.new_assignment_version,
                 groups=proposal.groups,
                 quarantined_releases=proposal.quarantined_releases,
                 requires_fresh_holdout=proposal.requires_fresh_holdout,
-                published=False,
+                published=True,
             )
         existing_relations = {
             (row[0], row[1], row[2])
@@ -1264,7 +1271,10 @@ def apply_regroup(
                         "embedding_version": approved_embedding_version,
                         "seed": seed,
                         "validation_fraction": validation_fraction,
-                        "decisions": sorted(decision_hash(item) for item in decisions),
+                        # Effective decisions are the persisted set union the
+                        # incoming set; persisted_hashes already includes both
+                        # after the insert loop above.
+                        "decisions": sorted(persisted_hashes),
                     },
                     reason=proposal.assignment.reasons[group],
                     locked=True,
