@@ -65,8 +65,9 @@ class MutationOutcome:
     dataset_id: str | None = None
     session: UploadSession | None = None
     job_id: str | None = None
-    # Advisory resume time (monotonic process clock) for proven-undispatched
-    # deferrals; a process restart simply retries immediately, never wrongly.
+    # Advisory resume deadline (wall-clock epoch seconds) for proven-
+    # undispatched deferrals, converted by the adapter from the foundation's
+    # monotonic throttle reading so it shares prepare(now)'s wall domain.
     retry_at: float | None = None
 
 
@@ -82,6 +83,9 @@ class ReleaseSync:
     retired_sessions: tuple[str, ...] = ()
     job_id: str | None = None
     pending: SyncCommand | None = None
+    # Advisory resume deadline (wall-clock) for a throttled deferral; prepare
+    # refuses before it so a scheduler cannot hot-spin journal transitions.
+    retry_at: float | None = None
     history: tuple[str, ...] = ()
     frozen: FrozenReleaseMapping | None = None
 
@@ -90,6 +94,11 @@ class ReleaseSync:
 
         if not self.owner or not self.slug:
             raise SyncConflict("authorized owner and stable release slug are required")
+        if self.retry_at is not None and now < self.retry_at:
+            # A throttled deferral must not become a journal-writing hot spin:
+            # refuse before dispatch so the scheduler backs off until the
+            # recorded deadline. prepare raises before any journal CAS.
+            raise SyncConflict("throttled; resume after the recorded retry deadline")
         payload: dict[str, Any]
         if self.phase == Phase.NEW:
             action = Action.CREATE
@@ -150,6 +159,7 @@ class ReleaseSync:
             sequence=self.sequence + 1,
             phase=Phase.IN_FLIGHT,
             pending=command,
+            retry_at=None,
             history=(*self.history, f"intent:{action}"),
         ), command
 
@@ -171,7 +181,7 @@ class ReleaseSync:
                 Action.PUT: Phase.SIGNED,
                 Action.INGEST: Phase.UPLOADED,
             }[command.action]
-            return replace(result, phase=pre_phase, pending=None)
+            return replace(result, phase=pre_phase, pending=None, retry_at=outcome.retry_at)
         if outcome.kind == "uncertain":
             return replace(result, phase=Phase.UNCERTAIN)
         if outcome.kind == "failed":

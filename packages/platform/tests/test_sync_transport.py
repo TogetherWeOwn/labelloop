@@ -95,7 +95,11 @@ def drive_release_sync(journal, port, storage):
 
 
 def _adapter(port, storage):
-    return FoundationReleaseTransport(port, storage, ARCHIVE)
+    # Fake clocks share the tests' 0-based domain: a monotonic throttle
+    # deadline converts to the same wall value, never real epoch time.
+    return FoundationReleaseTransport(
+        port, storage, ARCHIVE, monotonic=lambda: 0.0, wall_clock=lambda: 0.0
+    )
 
 
 class Journal:
@@ -218,7 +222,8 @@ def test_rejected_create_is_terminal_and_never_replayed(bound_intent):
 
 def test_locally_throttled_create_defers_without_dispatch(bound_intent):
     # A status-less RATE_LIMITED is the foundation's local throttle reserve:
-    # proven undispatched, so one dispatch defers back to NEW (prepare again).
+    # proven undispatched, so one dispatch defers back to NEW, records the
+    # retry deadline, and refuses to prepare again before it.
     journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
     port = ScriptedPort([PlatformResult(Outcome.RATE_LIMITED, retry_at=60.0)])
     storage = ScriptedStorage({})
@@ -226,7 +231,21 @@ def test_locally_throttled_create_defers_without_dispatch(bound_intent):
     state = dispatch_once(journal, transport, "sync-1", now=0)
     assert state.phase.value == "new"
     assert state.pending is None
+    assert state.retry_at == 60.0
     assert len(port.requests) == 1
+    # Before the deadline, prepare refuses without touching the journal: a
+    # scheduler polling dispatch_once cannot spin journal transitions.
+    with pytest.raises(SyncConflict, match="throttled"):
+        state.prepare(30)
+    with pytest.raises(SyncConflict, match="throttled"):
+        dispatch_once(journal, transport, "sync-1", now=30)
+    assert len(port.requests) == 1
+    assert journal.state == state
+    # The deadline is a wall-clock instant, not a process clock: a restarted
+    # worker whose now has passed it dispatches again immediately.
+    resumed, _ = state.prepare(60)
+    assert resumed.phase.value == "in_flight"
+    assert resumed.retry_at is None
 
 
 def test_remote_429_create_is_uncertain_never_replayed(bound_intent):

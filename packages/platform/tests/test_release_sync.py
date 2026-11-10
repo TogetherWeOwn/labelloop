@@ -195,6 +195,25 @@ def test_cas_failure_prevents_parallel_mutation(intent):
     assert not transport.commands
 
 
+def test_throttled_deferral_records_deadline_and_gates_reprepare(intent):
+    journal = Journal(ReleaseSync(intent, "fixture", "release-7-full320"))
+    transport = Transport(journal, [MutationOutcome("deferred", retry_at=60.0)])
+    state = dispatch_once(journal, transport, "sync-1", now=0)
+    assert state.phase == Phase.NEW
+    assert state.pending is None
+    assert state.retry_at == 60.0
+    records = len(journal.records)
+    with pytest.raises(SyncConflict, match="throttled"):
+        dispatch_once(journal, transport, "sync-1", now=30)
+    # Refusal happens before any journal write: no hot-spin history growth.
+    assert len(journal.records) == records
+    assert len(transport.commands) == 1
+    resumed, command = state.prepare(60)
+    assert resumed.phase == Phase.IN_FLIGHT
+    assert resumed.pending == command
+    assert resumed.retry_at is None
+
+
 def test_failed_and_malformed_outcomes_are_not_retried(intent):
     for outcome, phase in [
         (MutationOutcome("failed"), Phase.FAILED),

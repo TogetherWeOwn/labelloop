@@ -16,6 +16,7 @@ fresh target; a retired session is never reloaded.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
@@ -62,15 +63,25 @@ def _expires_at(value: Any) -> float:
         raise SyncConflict("signed session expiry is malformed") from None
 
 
-def _failure(result: PlatformResult) -> MutationOutcome:
+def _failure(
+    result: PlatformResult,
+    monotonic: Callable[[], float] = time.monotonic,
+    wall_clock: Callable[[], float] = time.time,
+) -> MutationOutcome:
     if result.outcome in {Outcome.REJECTED, Outcome.MALFORMED}:
         return MutationOutcome("failed")
     if result.outcome == Outcome.RATE_LIMITED and result.status_code is None:
         # The foundation's local throttle reserve returns before wire dispatch
         # (no HTTP status exists): proven undispatched, so the state machine
         # may prepare the same action again. A remote 429 carries a status and
-        # stays uncertain below; it may already have been processed.
-        return MutationOutcome("deferred", retry_at=result.retry_at)
+        # stays uncertain below; it may already have been processed. The
+        # throttle deadline is monotonic; convert it to the wall domain the
+        # state machine's prepare(now) already uses for session expiry, so a
+        # persisted deadline stays meaningful across a process restart.
+        retry_at = None
+        if result.retry_at is not None:
+            retry_at = wall_clock() + max(0.0, result.retry_at - monotonic())
+        return MutationOutcome("deferred", retry_at=retry_at)
     # UNAVAILABLE/TRANSPORT_ERROR/PAID_PAUSED and remote RATE_LIMITED all mean
     # the mutation must not be replayed; uncertain forces reconciliation.
     return MutationOutcome("uncertain")
@@ -79,12 +90,22 @@ def _failure(result: PlatformResult) -> MutationOutcome:
 class FoundationReleaseTransport(ReleaseTransport):
     """Maps `SyncCommand` to foundation requests and a create-only storage PUT."""
 
-    def __init__(self, port: PlatformPort, storage: StoragePort, archive: bytes) -> None:
+    def __init__(
+        self,
+        port: PlatformPort,
+        storage: StoragePort,
+        archive: bytes,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+    ) -> None:
         if not archive:
             raise SyncConflict("release adapter needs the archive bytes")
         self._port = port
         self._storage = storage
         self._archive = archive
+        self._monotonic = monotonic
+        self._wall_clock = wall_clock
         self.archive_sha256 = sha256(archive)
         self._targets: dict[str, StorageTarget] = {}
 
@@ -118,7 +139,7 @@ class FoundationReleaseTransport(ReleaseTransport):
         )
         result = self._port.execute(request)
         if result.outcome != Outcome.SUCCEEDED:
-            return _failure(result)
+            return _failure(result, self._monotonic, self._wall_clock)
         return self._success(command, result)
 
     def _success(self, command: SyncCommand, result: PlatformResult) -> MutationOutcome:

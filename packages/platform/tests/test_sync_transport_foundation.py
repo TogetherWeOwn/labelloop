@@ -191,11 +191,20 @@ def test_locally_throttled_create_defers_over_real_foundation(bound_intent):
     # ever touching the wire, and the chain defers instead of stranding.
     throttle.defer(adapter._key_id, "default", 300.0)
     journal = Journal(ReleaseSync(bound_intent, OWNER, SLUG))
-    transport = FoundationReleaseTransport(adapter, _storage(Wire({})), ARCHIVE)
+    # Fake clocks share the throttle's 0-based domain, so the monotonic
+    # deadline converts to the same wall value a restarted worker would see.
+    transport = FoundationReleaseTransport(
+        adapter, _storage(Wire({})), ARCHIVE, monotonic=lambda: 0.0, wall_clock=lambda: 0.0
+    )
     state = dispatch_once(journal, transport, "sync-1", now=0)
     assert state.phase.value == "new"
     assert state.pending is None
+    assert state.retry_at == 300.0
     assert platform_wire.requests == []
+    # No re-dispatch before the deadline; dispatch resumes after it.
+    with pytest.raises(SyncConflict):
+        state.prepare(299.0)
+    assert state.prepare(300.0)[0].phase.value == "in_flight"
 
 
 def test_label_patch_carries_operation_id_over_real_foundation():
