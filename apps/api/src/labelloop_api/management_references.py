@@ -197,7 +197,7 @@ def accept_reference(
     connection: Connection, project_row, workspace_id, payload: ReferenceAccept
 ) -> ReferenceRead:
     # Require matching enrollment evidence, not a browser-supplied replacement.
-    references = read_references(connection, project_row, workspace_id) or []
+    references = read_references(connection, project_row, workspace_id, lock_sources=True) or []
     reference = next((item for item in references if item.id == payload.reference_id), None)
     if reference is None:
         reject("not_found")
@@ -224,7 +224,7 @@ def accept_reference(
 def revalidate_reference(
     connection: Connection, project_row, workspace_id, payload: ReferenceRevalidate
 ) -> tuple[ReferenceRead, dict]:
-    read_setup_approvals(connection, project_row, workspace_id)
+    read_setup_approvals(connection, project_row, workspace_id, lock_sources=True)
     history = _reference_history(connection, project_row, workspace_id)
     if (
         len(reference_receipts(connection, project_row, workspace_id, "revalidate_reference"))
@@ -403,9 +403,17 @@ def reference_lifecycle(
 
 
 def read_references(
+    connection: Connection, project_row, workspace_id, *, lock_sources=False
+) -> list[ReferenceRead] | None:
+    read_setup_approvals(connection, project_row, workspace_id, lock_sources=lock_sources)
+    return current_reference_evidence(connection, project_row, workspace_id)
+
+
+def current_reference_evidence(
     connection: Connection, project_row, workspace_id
 ) -> list[ReferenceRead] | None:
-    read_setup_approvals(connection, project_row, workspace_id)
+    # Evidence underlies setup approval, not vice versa. Keep this loader separate
+    # so verifying an evidence approval never recursively validates itself.
     history = _reference_history(connection, project_row, workspace_id)
     validation_cache = {}
     result = []

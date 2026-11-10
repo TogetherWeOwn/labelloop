@@ -83,6 +83,27 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('approves only the explicit published evidence identity and digest', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 5, step: 'evidence' as const, draft_sha256: 'a'.repeat(64),
+      anchor_pack: {
+        pack_id: 'anchors', version: 'v1', ontology_id: 'ontology',
+        assignment_version: 'assignment',
+      },
+      reason: 'Reviewed current source-bound human anchors',
+    };
+    await client.approveSetupStep({ project_id: 'project', 'idempotency-key': 'evidence-review', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/project/setup/approvals', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'evidence-review' },
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('publishes explicit anchor pins without sending approval or snapshot authority', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

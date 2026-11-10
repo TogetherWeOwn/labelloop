@@ -3779,9 +3779,60 @@
         "title": "ScopeDraft",
         "type": "object"
       },
+      "SetupAnchorPack": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "pack_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Pack Id",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "version",
+          "ontology_id",
+          "assignment_version"
+        ],
+        "title": "SetupAnchorPack",
+        "type": "object"
+      },
       "SetupStepApprove": {
         "additionalProperties": false,
         "properties": {
+          "anchor_pack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SetupAnchorPack"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "draft_sha256": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Draft Sha256",
@@ -3803,7 +3854,8 @@
               "scope",
               "guide",
               "classes",
-              "sources"
+              "sources",
+              "evidence"
             ],
             "title": "Step",
             "type": "string"

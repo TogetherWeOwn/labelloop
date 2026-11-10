@@ -5,7 +5,7 @@ import json
 
 from sqlalchemy import Connection, func, select
 
-from .management_contracts import ManagementError
+from .management_contracts import ManagementError, SetupAnchorPack
 from .management_ontology import read_catalog_publication
 from .management_ports import ManagementFailure
 from .schema import canonical_event
@@ -53,13 +53,39 @@ def published_catalog_content(connection: Connection, project_row, workspace_id)
     return receipt.payload["evidence"]["class_catalog"] if pending is None else None
 
 
-def read_setup_approvals(connection: Connection, project_row, workspace_id) -> list[str]:
+def evidence_pack_digest(connection, project_row, workspace_id, pin, *, lock_sources=False):
+    from .management_reference_pack import pack_snapshot, read_current_anchor_pack
+
+    try:
+        pin = SetupAnchorPack.model_validate(pin)
+        pack = read_current_anchor_pack(
+            connection,
+            project_row,
+            workspace_id,
+            pin.pack_id,
+            pin.version,
+            lock_sources=lock_sources,
+        )
+        if (
+            pack.scope.ontology.ontology_id != pin.ontology_id
+            or pack.scope.assignment.assignment_version != pin.assignment_version
+        ):
+            raise ValueError("pack scope mismatch")
+        return pack_snapshot(pack)[1]
+    except (TypeError, ValueError):
+        raise ManagementFailure(ManagementError(detail="missing_evidence")) from None
+
+
+def read_setup_approvals(
+    connection: Connection, project_row, workspace_id, *, lock_sources=False
+) -> list[str]:
     stored = project_row.access_policy.get("management_setup_approvals", {})
     if not isinstance(stored, dict) or not stored.keys() <= {
         "scope",
         "guide",
         "classes",
         "sources",
+        "evidence",
     }:
         raise ManagementFailure(ManagementError(detail="missing_evidence"))
     if not stored:
@@ -98,15 +124,24 @@ def read_setup_approvals(connection: Connection, project_row, workspace_id) -> l
                 else f"management_{step}_draft"
             )
         )
+        digest = draft_sha256(draft) if isinstance(draft, dict) else None
+        if step == "evidence" and receipt is not None:
+            digest = evidence_pack_digest(
+                connection,
+                project_row,
+                workspace_id,
+                receipt.payload["evidence"].get("anchor_pack"),
+                lock_sources=lock_sources,
+            )
         if (
-            not isinstance(draft, dict)
+            digest is None
             or receipt is None
             or invalidation is None
             or receipt.expected_revision <= invalidation
             or not isinstance(value, dict)
             or value
             != {
-                "draft_sha256": draft_sha256(draft),
+                "draft_sha256": digest,
                 "receipt_revision": receipt.expected_revision + 1,
             }
             or receipt.payload["evidence"]["draft_sha256"] != value["draft_sha256"]

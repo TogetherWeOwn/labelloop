@@ -143,9 +143,11 @@ project revision only, not the internal pack snapshot or usable retrieval author
 The mutation adds no snapshot GET, retrieval binding, project release, freeze clearance,
 admission, worker startup or default mounting. Historical publication does not prove
 current eligibility after a later reference, annotation, grouping or context change.
-`read_current_anchor_pack` is an internal-only, SELECT-only verifier requiring an
-explicit pack ID/version and one repeatable-read transaction. Its caller owns
-authorization and the owned project row; it is not a public detail or download port.
+`read_current_anchor_pack` is an internal-only verifier requiring an explicit pack
+ID/version. Read callers use one SELECT-only repeatable-read transaction; the
+canonical approval mutation instead owns the project lock and requests source locks
+under READ COMMITTED. Its caller owns authorization and the owned project row; it
+is not a public detail or download port.
 The bounded publication history must have unique identities and valid plans. The
 selected receipt must match human attribution, workspace/project, revision/result,
 current reference context and the freshly prepared canonical pack. The verifier
@@ -169,8 +171,25 @@ URIs, object keys, scene/tag declarations or retrieval/download authority cross 
 port. Missing publication, stale evidence or corrupt receipts refuse rather than
 return a historical or partially verified summary. Inaccessible projects are not found.
 
-This supplies current evidence validation and a bounded summary, not automatic
-bulk-job binding, retrieval, setup approval or freeze clearance. A consuming
+`approveSetupStep` also accepts `step: evidence` with an explicit `anchor_pack`:
+pack ID, version, ontology ID and assignment version. For this step only,
+`draft_sha256` is the verified summary's `snapshot_sha256`, not a browser-computed
+hash of metadata. Other steps reject pack pins; evidence refuses absent or partial
+pins. Unchanged old-step serialization preserves historical retry identities.
+The admin mutation locks the project and canonical sources in READ COMMITTED,
+reassembles current evidence and verifies the same publication before atomically
+saving the approval digest and attributed receipt. Reads recheck that receipt's
+explicit pack against current evidence inside their SELECT-only repeatable snapshot.
+Reference evidence validation is beneath setup approval, avoiding recursive approval
+self-validation; public reference/pack reads retain setup validation at their boundary.
+Later publication or setup/reference writes invalidate approvals; later source-label
+changes make the saved evidence approval fail closed without rewriting its history.
+Historical replay is acknowledgment, never renewal. Evidence approval remains draft
+intent: it grants no pilot qualification, bulk binding, project publication or freeze
+clearance. The default app and real admission remain disabled.
+
+This supplies current evidence validation and bounded approval, not automatic
+bulk-job binding, retrieval or freeze clearance. A consuming
 transaction must own its snapshot and locking policy; a successful read is not a
 durable grant against future changes. Confusion negatives, automatic expansions,
 gold and cross-project imports remain unavailable here.

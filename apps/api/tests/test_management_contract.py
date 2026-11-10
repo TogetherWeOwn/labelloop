@@ -141,6 +141,21 @@ MUTATIONS = [
     (
         "/projects/p/setup/approvals",
         "approve_setup_step",
+        {
+            **SETUP_APPROVAL,
+            "step": "evidence",
+            "anchor_pack": {
+                "pack_id": "anchors",
+                "version": "v1",
+                "ontology_id": "ontology-1",
+                "assignment_version": "assignment-1",
+            },
+        },
+        200,
+    ),
+    (
+        "/projects/p/setup/approvals",
+        "approve_setup_step",
         {**SETUP_APPROVAL, "step": "classes"},
         200,
     ),
@@ -1028,6 +1043,7 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
         "guide",
         "classes",
         "sources",
+        "evidence",
     ]
     assert (
         spec["paths"]["/projects/{project_id}/references/accept"]["post"]["operationId"]

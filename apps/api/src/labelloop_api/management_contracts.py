@@ -147,11 +147,27 @@ class SourcePairResolve(Mutation):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
+class SetupAnchorPack(Contract):
+    pack_id: Identifier
+    version: Identifier
+    ontology_id: Identifier
+    assignment_version: Identifier
+
+
 class SetupStepApprove(Mutation):
-    # Classes require a published catalog; none of these steps qualify a pilot.
-    step: Literal["scope", "guide", "classes", "sources"]
+    # Evidence pins a current published pack; no step qualifies a pilot.
+    step: Literal["scope", "guide", "classes", "sources", "evidence"]
     draft_sha256: Digest
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    anchor_pack: SetupAnchorPack | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def explicit_evidence_pack(self) -> Self:
+        if (self.step == "evidence") != (self.anchor_pack is not None):
+            raise ValueError("only evidence approval requires an explicit anchor pack")
+        return self
 
 
 class ReferenceEnroll(Mutation):

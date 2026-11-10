@@ -30,7 +30,7 @@ from .management_contracts import AnchorPackPublish as AnchorPackPublish
 from .management_contracts import ManagementError, Resource
 from .management_details import AnchorPackRead
 from .management_ports import ManagementFailure
-from .management_references import read_references, reference_context_sha256
+from .management_references import current_reference_evidence, reference_context_sha256
 from .management_release import revision_refusal
 from .revision_store import completeness_context_hash
 from .schema import annotation_revision, canonical_event, completeness_assessment, ontology_release
@@ -97,12 +97,19 @@ def verify_anchor_receipt(receipt, project_row, workspace_id, pack: ReferencePac
 
 
 def read_current_anchor_pack(
-    connection: Connection, project_row, workspace_id, pack_id: str, version: str
+    connection: Connection,
+    project_row,
+    workspace_id,
+    pack_id: str,
+    version: str,
+    *,
+    lock_sources=False,
 ) -> ReferencePack:
-    """Internal only. Caller authorizes and supplies one repeatable read snapshot."""
+    """Caller owns a read snapshot, or project lock plus source locks for mutation."""
     if str(project_row.workspace_id) != str(workspace_id):
         reject("not_found")
-    if connection.get_isolation_level() != "REPEATABLE READ":
+    required_isolation = "READ COMMITTED" if lock_sources else "REPEATABLE READ"
+    if connection.get_isolation_level() != required_isolation:
         reject("management_unavailable")
     receipts = connection.execute(
         select(canonical_event)
@@ -128,7 +135,9 @@ def read_current_anchor_pack(
         if len(selected) != 1:
             reject()
         receipt, plan = selected[0]
-        pack = prepare_anchor_pack(connection, project_row, workspace_id, plan, lock_sources=False)
+        pack = prepare_anchor_pack(
+            connection, project_row, workspace_id, plan, lock_sources=lock_sources
+        )
         verify_anchor_receipt(receipt, project_row, workspace_id, pack)
         return pack
     except (KeyError, TypeError, ValueError):
@@ -208,7 +217,7 @@ def prepare_anchor_pack(
         reject("not_found")
     # Current receipt-backed approval is necessary, but never sufficient to turn
     # enrollment metadata or a verified negative into a positive memory example.
-    references = read_references(connection, project_row, workspace_id) or []
+    references = current_reference_evidence(connection, project_row, workspace_id) or []
     by_id = {ref.id: ref for ref in references}
     if not plan.entries.keys() <= by_id.keys():
         reject("not_found")

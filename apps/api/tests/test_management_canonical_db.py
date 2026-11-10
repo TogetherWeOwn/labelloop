@@ -7295,6 +7295,231 @@ def anchor_pack_inputs(service, owner, *, setup_step=None):
     return created, asset, source, plan
 
 
+def evidence_approval(service, project_id, plan):
+    from labelloop_api.management_contracts import SetupAnchorPack
+
+    summary = CanonicalManagementReads(service.engine, service.workspace_id).read_anchor_pack(
+        Reader(), project_id, plan.pack_id, plan.version
+    )
+    return SetupStepApprove(
+        expected_revision=summary.project_revision,
+        step="evidence",
+        draft_sha256=summary.snapshot_sha256,
+        anchor_pack=SetupAnchorPack(
+            pack_id=plan.pack_id,
+            version=plan.version,
+            ontology_id=plan.ontology_id,
+            assignment_version=plan.assignment_version,
+        ),
+        reason="Reviewed source-bound human anchors",
+    )
+
+
+def test_evidence_approval_pins_current_pack_without_publication_or_freeze_clearance(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    result = approve_step(service, created.id, payload)
+    assert result.revision == 6 and result.state == "draft"
+    assert approve_step(service, created.id, payload) == result
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.approved_steps == ["evidence"] and detail.published_release_id is None
+    assert (
+        reads.read_anchor_pack(Reader(), created.id, plan.pack_id, plan.version).snapshot_sha256
+        == payload.draft_sha256
+    )
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.approve_setup_step",
+            )
+        ).one()
+        assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+        assert receipt.payload["evidence"]["anchor_pack"] == payload.anchor_pack.model_dump(
+            mode="json"
+        )
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        assert "auto_accept_qualification" not in policy
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        approve_step(
+            service,
+            created.id,
+            payload.model_copy(update={"expected_revision": 6}),
+            key="duplicate-evidence",
+        )
+    assert len(pack_receipts(owner, created.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "field", ["pack_id", "version", "ontology_id", "assignment_version", "digest"]
+)
+def test_evidence_approval_refuses_substituted_pack_pins_atomically(database, field):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    if field == "digest":
+        payload = payload.model_copy(update={"draft_sha256": "0" * 64})
+    else:
+        payload = payload.model_copy(
+            update={"anchor_pack": payload.anchor_pack.model_copy(update={field: "absent"})}
+        )
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure):
+        approve_step(service, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="worker"), Actor(role="reviewer")])
+def test_evidence_approval_refuses_nonadmin_identity(database, actor):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    before = counts(owner, created.id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        approve_step(service, created.id, payload, actor=actor)
+    assert counts(owner, created.id) == before
+
+
+@pytest.mark.parametrize("grant", ["project", "canonical_event"])
+def test_evidence_approval_grant_failure_rolls_back_all_state(database, grant):
+    service, owner, role = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    before = initial_grouping_snapshot(owner, created.id)
+    privilege = "UPDATE" if grant == "project" else "INSERT"
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} ON {grant} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        approve_step(service, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} ON {grant} TO "{role}"'))
+    assert approve_step(service, created.id, payload).revision == 6
+
+
+def test_evidence_approval_serializes_competing_revision_claims(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    barrier = Barrier(2)
+
+    def attempt(key):
+        barrier.wait(timeout=10)
+        try:
+            return approve_step(service, created.id, payload, key=key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ["evidence-race-a", "evidence-race-b"]))
+    assert sorted(str(item) for item in results) == ["6", "revision_conflict"]
+
+
+@pytest.mark.parametrize("change", ["annotation", "publication"])
+def test_evidence_approval_is_rechecked_and_replay_never_renews_it(database, change):
+    service, owner, _ = database
+    created, asset, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    payload = evidence_approval(service, created.id, plan)
+    approved = approve_step(service, created.id, payload)
+    if change == "publication":
+        publish_pack(
+            service,
+            created.id,
+            plan.model_copy(update={"version": "v2"}),
+            revision=6,
+            key="publish-next-pack",
+        )
+        assert (
+            CanonicalManagementReads(service.engine, service.workspace_id)
+            .read_project(Reader(), created.id)
+            .approved_steps
+            == []
+        )
+    else:
+        with owner.begin() as connection:
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=3,
+                approval_state="rejected",
+                review_tier="human_reviewed",
+                scope_completeness="unreviewed",
+                objects=[],
+            )
+        with pytest.raises(ManagementFailure):
+            CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+                Reader(), created.id
+            )
+    before = counts(owner, created.id)
+    assert approve_step(service, created.id, payload) == approved
+    assert counts(owner, created.id) == before
+
+
+def test_evidence_approval_uses_shared_session_csrf_and_current_role(
+    database, restricted_auth_store, auth_account
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal as auth_principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    publish_pack(service, created.id, plan)
+    body = evidence_approval(service, created.id, plan).model_dump(mode="json")
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    origin = "https://testserver"
+    path = f"/projects/{created.id}/setup/approvals"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-evidence-approval",
+        }
+        assert client.post(path, json=body, headers={"origin": origin}).status_code == 403
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["revision"] == 6
+        assert client.post(path, json=body, headers=headers).json() == response.json()
+        detail = client.get(f"/projects/{created.id}").json()
+        assert detail["approved_steps"] == ["evidence"] and detail["published_release_id"] is None
+        with owner.begin() as connection:
+            receipt = connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.aggregate_id == created.id,
+                    canonical_event.c.event_type == "management.approve_setup_step",
+                )
+            ).one()
+            assert receipt.actor_id == identity and receipt.actor_kind == "human"
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.get(f"/projects/{created.id}").json()["approved_steps"] == ["evidence"]
+        assert client.post(path, json=body, headers=headers).status_code == 403
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
 def prepare_pack(service, project_id, plan, *, workspace_id=None):
     from labelloop_api.management_reference_pack import prepare_anchor_pack
 

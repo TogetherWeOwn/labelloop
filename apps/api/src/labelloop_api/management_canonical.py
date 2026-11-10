@@ -43,7 +43,12 @@ from .management_references import reference_context_sha256, require_retired_ref
 from .management_references import revalidate_reference as renew_reference
 from .management_references import withdraw_reference as retire_reference
 from .management_release import freeze_candidate
-from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
+from .management_setup import (
+    draft_sha256,
+    evidence_pack_digest,
+    published_catalog_content,
+    read_setup_approvals,
+)
 from .repository import ingest_canonical_asset
 from .schema import canonical_dataset_release, canonical_event, ontology_release, project
 
@@ -428,7 +433,7 @@ class CanonicalManagementMutations:
             # No implicit deletion, merge or split of an established identity.
             if not ontology.class_map.keys() <= proposed_ids:
                 refuse("unsupported_classes")
-            read_setup_approvals(connection, owned, self.workspace_id)
+            read_setup_approvals(connection, owned, self.workspace_id, lock_sources=True)
             require_retired_references(connection, owned, self.workspace_id)
             mapping = dict(ontology.class_map)
             for identifier in sorted(proposed_ids - mapping.keys()):
@@ -562,14 +567,19 @@ class CanonicalManagementMutations:
         from .management_project_reads import guide_draft, scope_draft, source_policy_draft
 
         self.authorize(actor, context, "approve_setup_step", context.target_id, payload)
+        payload = SetupStepApprove.model_validate(payload.model_dump(mode="json"))
         with self.engine.begin() as connection:
             self.begin_mutation(connection, context)
             owned = self.lock_project(connection, context.target_id)
             if replay := self.replay(connection, context):
                 return replay
             self.check_project_revision(connection, owned.id, payload.expected_revision)
-            read_setup_approvals(connection, owned, self.workspace_id)
-            if payload.step == "classes":
+            read_setup_approvals(connection, owned, self.workspace_id, lock_sources=True)
+            if payload.step == "evidence":
+                digest = evidence_pack_digest(
+                    connection, owned, self.workspace_id, payload.anchor_pack, lock_sources=True
+                )
+            elif payload.step == "classes":
                 content = published_catalog_content(connection, owned, self.workspace_id)
             else:
                 loader = {
@@ -583,9 +593,10 @@ class CanonicalManagementMutations:
                     if draft is not None
                     else None
                 )
-            if content is None:
-                refuse("missing_evidence")
-            digest = draft_sha256(content)
+            if payload.step != "evidence":
+                if content is None:
+                    refuse("missing_evidence")
+                digest = draft_sha256(content)
             if digest != payload.draft_sha256:
                 refuse("revision_conflict")
             policy = dict(owned.access_policy)
@@ -614,7 +625,16 @@ class CanonicalManagementMutations:
                 str(owned.id),
                 payload.expected_revision,
                 result,
-                {"step": payload.step, "draft_sha256": digest, "reason": payload.reason},
+                {
+                    "step": payload.step,
+                    "draft_sha256": digest,
+                    "reason": payload.reason,
+                    **(
+                        {"anchor_pack": payload.anchor_pack.model_dump(mode="json")}
+                        if payload.anchor_pack is not None
+                        else {}
+                    ),
+                },
             )
             return result
 
@@ -837,6 +857,7 @@ class CanonicalManagementMutations:
                 for item in receipts
             ):
                 refuse("revision_conflict")
+            read_setup_approvals(connection, owned, self.workspace_id, lock_sources=True)
             pack = prepare_anchor_pack(connection, owned, self.workspace_id, payload.plan)
             snapshot, digest = pack_snapshot(pack)
             policy = dict(owned.access_policy)

@@ -247,6 +247,7 @@ class CanonicalManagementReads:
         self, actor: ManagementPrincipal, project_id: str, pack_id: str, version: str
     ) -> AnchorPackRead:
         from .management_reference_pack import anchor_pack_summary, read_current_anchor_pack
+        from .management_setup import read_setup_approvals
 
         authorize_reader(actor)
         owned = self.project_rows()
@@ -263,6 +264,7 @@ class CanonicalManagementReads:
                 if row is None:
                     refuse("not_found")
                 try:
+                    read_setup_approvals(connection, row, self.workspace_id)
                     pack = read_current_anchor_pack(
                         connection, row, self.workspace_id, pack_id, version
                     )

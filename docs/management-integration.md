@@ -145,10 +145,30 @@ verifier's stale/corrupt evidence controls, exact version selection, SELECT-only
 access and project/workspace isolation. The restricted-session publication case
 also reads the exact digest summary, reloads the reviewer role, checks publication
 refusal and checks summary denial after logout. Pure projection/schema tests and
-generated-client path encoding cases cover the new read contract. These changes
-await exact-head Actions; prior-head green checks do not verify this increment.
-Effective project publication, evidence-step approval, runtime roles/dispatch,
-single registry composition and final mounting remain incomplete.
+generated-client path encoding cases cover the new read contract. Exact summary
+head `f58c22ac68e03861627ec526fdda7b2546fa59bf` passed
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42806950435),
+CodeQL and gitleaks. This verifies the summary, not full setup publication.
+
+### Explicit evidence-step approval (opt-in)
+
+The existing setup approval command now accepts a named current human-anchor pack,
+its version/ontology/assignment pins and the verified summary's snapshot digest.
+The canonical mutation uses project and source locks with existing revision/retry/
+audit authority. Read-only projections independently revalidate the receipt's pack;
+no prior summary response is a durable eligibility grant. Reference evidence loading
+is factored beneath setup approval to avoid recursive self-validation, while public
+reads retain setup checks. Old intent requests omit the new optional field when
+serialized, preserving historical idempotency hashes.
+
+Fourteen new disposable DB cases cover attribution/replay, explicit pin substitution,
+nonadmin refusal, competing revisions, grant rollback, later annotation/publication
+invalidation, and restricted shared-session/CSRF/reviewer/logout composition. Pure
+contract/receipt and generated-client cases cover the new shape. These changes await
+exact-head Actions. Effective project publication, runtime roles/dispatch, single
+registry composition and final mounting remain incomplete. This approval grants no
+pilot quality, retrieval, automatic acceptance or freeze clearance; default mounting
+and real admission remain disabled.
 
 ### Disposable authentication-role contract
 
