@@ -117,11 +117,28 @@ to a verified negative image does not become a positive memory example.
 
 Mutation callers own authorization, the project lock and transaction; source locks
 synchronize with existing review writers. A read-only caller must explicitly disable
-source locking and use one repeatable snapshot. This module writes nothing and
-fetches no objects. No API operation, persisted pack, retrieval binding, project
-release, freeze clearance, admission or default mounting is added. Durable attributed
-publication and subsequent invalidation/revalidation remain required before a
-prepared pack may be consumed by bulk jobs.
+source locking and use one repeatable snapshot. Preparation writes nothing and
+fetches no objects.
+
+`CanonicalManagementMutations.publish_anchor_pack` is an internal-only publication
+transaction. Its strict `AnchorPackPublish` accepts an expected project revision,
+plan and reason, never a caller-authored snapshot or actor identity. The existing
+human-admin/workspace/project/retry locks and append-only event authority apply.
+The server prepares current source evidence under locks and stores a deterministic
+JSON-native snapshot, SHA-256, plan, current reference-context digest and reason in
+one attributed canonical event. The snapshot includes internal source lineage and
+is not a public read. It is capped at two megabytes. A project-scoped pack ID/version
+cannot be republished under another key; a new version appends history. Exact retries
+return the original project receipt without revalidating or silently renewing the
+pack. Policy invalidation and the event commit atomically; setup approvals and any
+automatic-acceptance grant clear. The project remains draft.
+
+No API operation, retrieval binding, project release, freeze clearance, admission,
+worker startup or default mounting is added. Historical publication does not prove
+current eligibility after a later reference, annotation, grouping or context change.
+A receipt-verified current-pack reader and invalidation/revalidation checks remain
+required before bulk jobs may consume a published pack. Confusion negatives,
+automatic expansions, gold and cross-project imports remain unavailable here.
 
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.

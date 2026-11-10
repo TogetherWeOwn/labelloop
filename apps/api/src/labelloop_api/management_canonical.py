@@ -804,6 +804,78 @@ class CanonicalManagementMutations:
             )
             return result
 
+    def publish_anchor_pack(self, actor, context, payload) -> Resource:
+        from .management_reference_pack import AnchorPackPublish, pack_snapshot, prepare_anchor_pack
+
+        self.authorize(actor, context, "publish_anchor_pack", context.target_id, payload)
+        # Internal callers receive the same strict validation as a typed HTTP port;
+        # model_copy and hand-built objects are not alternate state authority.
+        payload = AnchorPackPublish.model_validate(payload.model_dump(mode="json"))
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            receipts = (
+                connection.execute(
+                    select(canonical_event.c.payload)
+                    .where(
+                        canonical_event.c.aggregate_id == str(owned.id),
+                        canonical_event.c.event_type == "management.publish_anchor_pack",
+                    )
+                    .limit(1001)
+                )
+                .scalars()
+                .all()
+            )
+            if len(receipts) >= 1000:
+                refuse("management_unavailable")
+            if any(
+                item["evidence"]["plan"]["pack_id"] == payload.plan.pack_id
+                and item["evidence"]["plan"]["version"] == payload.plan.version
+                for item in receipts
+            ):
+                refuse("revision_conflict")
+            pack = prepare_anchor_pack(connection, owned, self.workspace_id, payload.plan)
+            snapshot, digest = pack_snapshot(pack)
+            policy = dict(owned.access_policy)
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection,
+                context,
+                str(owned.id),
+                payload.expected_revision,
+                result,
+                {
+                    "plan": payload.plan.model_dump(mode="json"),
+                    "snapshot": snapshot,
+                    "snapshot_sha256": digest,
+                    "context_sha256": reference_context_sha256(owned),
+                    "reason": payload.reason,
+                    "invalidated_steps": [
+                        "scope",
+                        "classes",
+                        "evidence",
+                        "guide",
+                        "sources",
+                        "publish",
+                    ],
+                },
+            )
+            return result
+
     def freeze_release(
         self, actor: ManagementPrincipal, context: MutationContext, payload: ReleaseFreeze
     ) -> Resource:

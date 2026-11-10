@@ -5,7 +5,9 @@ must use one repeatable snapshot and explicitly disable source locking. There is
 no object I/O, persisted pack, retrieval registration or setup-release authority.
 """
 
+import hashlib
 import json
+from dataclasses import asdict
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection, select
@@ -22,7 +24,7 @@ from labelloop_core.evidence import EvidenceScope, SourceAnnotationRevision
 from labelloop_core.geometry import Box
 from labelloop_core.references import MemoryExample, ReferencePack
 
-from .management_contracts import ManagementError
+from .management_contracts import ManagementError, Mutation
 from .management_ports import ManagementFailure
 from .management_references import read_references
 from .management_release import revision_refusal
@@ -48,6 +50,30 @@ class AnchorPackPlan(BaseModel):
     ontology_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
     assignment_version: str = Field(min_length=1, max_length=200, pattern=r"\S")
     entries: dict[str, AnchorPackEntry] = Field(min_length=1, max_length=1000)
+
+
+class AnchorPackPublish(Mutation):
+    plan: AnchorPackPlan
+    reason: str = Field(min_length=1, max_length=4096, pattern=r"\S")
+
+
+def pack_snapshot(pack: ReferencePack) -> tuple[dict, str]:
+    """Bounded internal snapshot; never a public read or retrieval grant."""
+
+    def encode(value):
+        if isinstance(value, frozenset):
+            return sorted(value)
+        raise TypeError("unsupported pack value")
+
+    try:
+        raw = json.dumps(
+            asdict(pack), sort_keys=True, separators=(",", ":"), allow_nan=False, default=encode
+        ).encode()
+        if len(raw) > 2_000_000:
+            reject("management_unavailable")
+        return json.loads(raw), hashlib.sha256(raw).hexdigest()
+    except (TypeError, ValueError):
+        reject()
 
 
 def reject(code="missing_evidence"):

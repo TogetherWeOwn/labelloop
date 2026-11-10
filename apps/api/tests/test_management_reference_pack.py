@@ -9,7 +9,9 @@ from labelloop_api.management_details import ReferenceRead
 from labelloop_api.management_ports import ManagementFailure
 from labelloop_api.management_reference_pack import (
     AnchorPackPlan,
+    AnchorPackPublish,
     assemble_anchor_pack,
+    pack_snapshot,
 )
 from labelloop_core.domain import (
     ClassDefinition,
@@ -101,6 +103,42 @@ class AnchorPackTests(TestCase):
         self.assertIsNone(example.teacher_generation)
         self.assertIsNone(example.gold_adjudication)
         self.assertEqual(example.validity_tags, frozenset({"side", "diffuse"}))
+
+    def test_snapshot_is_deterministic_json_native_and_content_bound(self):
+        import hashlib
+        import json
+
+        scope, refs, revisions, plan = inputs()
+        pack = assemble_anchor_pack(scope, refs, revisions, plan)
+        snapshot, digest = pack_snapshot(pack)
+        raw = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        self.assertEqual(hashlib.sha256(raw.encode()).hexdigest(), digest)
+        self.assertEqual(json.loads(raw), snapshot)
+        self.assertEqual(pack_snapshot(pack), (snapshot, digest))
+        self.assertEqual(snapshot["examples"][0]["validity_tags"], ["diffuse", "side"])
+        self.assertEqual(snapshot["examples"][0]["revision"]["objects"][0]["box"]["x_min"], 1)
+        changed = replace(pack, examples=(replace(pack.examples[0], utility=0.5),))
+        self.assertNotEqual(pack_snapshot(changed)[1], digest)
+
+    def test_snapshot_refuses_oversized_evidence(self):
+        scope, refs, revisions, plan = inputs()
+        pack = assemble_anchor_pack(scope, refs, revisions, plan)
+        changed = replace(pack, examples=(replace(pack.examples[0], scene="x" * 2_000_000),))
+        with self.assertRaisesRegex(ManagementFailure, "management_unavailable"):
+            pack_snapshot(changed)
+
+    def test_internal_publication_input_cannot_supply_snapshot_or_identity(self):
+        raw = {"expected_revision": 4, "plan": inputs()[3].model_dump(), "reason": "Checked"}
+        self.assertEqual(AnchorPackPublish.model_validate(raw).expected_revision, 4)
+        for changes in (
+            {"snapshot": {}},
+            {"actor_id": "foreign"},
+            {"expected_revision": True},
+            {"reason": " "},
+            {"reason": "x" * 4097},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                AnchorPackPublish.model_validate({**raw, **changes})
 
     def test_metadata_approval_does_not_create_a_positive_instance(self):
         scope, refs, revisions, plan = inputs()

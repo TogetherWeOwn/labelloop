@@ -7414,6 +7414,185 @@ def test_anchor_pack_preparation_does_not_upgrade_approved_negative_metadata(dat
         prepare_pack(service, created.id, plan)
 
 
+def publish_pack(service, project_id, plan, *, revision=4, key="publish-pack", actor=None):
+    from labelloop_api.management_reference_pack import AnchorPackPublish
+
+    actor = actor or Actor()
+    payload = AnchorPackPublish(expected_revision=revision, plan=plan, reason="Checked anchors")
+    context = MutationContext.bind(actor, key, "publish_anchor_pack", project_id, payload)
+    return service.publish_anchor_pack(actor, context, payload)
+
+
+def pack_receipts(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == project_id,
+                canonical_event.c.event_type == "management.publish_anchor_pack",
+            )
+        ).all()
+
+
+def test_anchor_pack_publication_persists_attributed_snapshot_and_replay(database):
+    from labelloop_api.management_reference_pack import pack_snapshot
+
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    snapshot, digest = pack_snapshot(prepare_pack(service, created.id, plan))
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(access_policy={**policy, "auto_accept_qualification": {"fixture": True}})
+        )
+    result = publish_pack(service, created.id, plan)
+    assert result.revision == 5 and result.state == "draft"
+    assert publish_pack(service, created.id, plan) == result
+    (receipt,) = pack_receipts(owner, created.id)
+    assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+    assert receipt.expected_revision == 4
+    assert receipt.payload["evidence"]["snapshot"] == snapshot
+    assert receipt.payload["evidence"]["snapshot_sha256"] == digest
+    assert receipt.payload["evidence"]["plan"] == plan.model_dump(mode="json")
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.published_release_id is None and detail.approved_steps == []
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        publish_pack(service, created.id, plan.model_copy(update={"version": "v2"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_pack(service, created.id, plan, revision=5, key="duplicate-pack")
+    assert counts(owner, created.id) == (*before[:2], before[2] + 1)
+    with owner.connect() as connection:
+        saved_policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+    assert "auto_accept_qualification" not in saved_policy
+    assert saved_policy["management_setup_approvals"] == {}
+
+
+def test_anchor_pack_publication_versions_do_not_rewrite_prior_snapshot(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    first = publish_pack(service, created.id, plan)
+    before = pack_receipts(owner, created.id)[0].payload
+    changed = plan.model_copy(update={"version": "v2"})
+    assert publish_pack(service, created.id, changed, revision=5, key="pack-v2").revision == 6
+    receipts = pack_receipts(owner, created.id)
+    assert len(receipts) == 2 and before in [row.payload for row in receipts]
+    assert publish_pack(service, created.id, plan) == first
+
+
+@pytest.mark.parametrize("failure", ["event", "policy", "caller"])
+def test_anchor_pack_publication_rolls_back_snapshot_and_invalidation(database, failure):
+    service, owner, role = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    with owner.begin() as connection:
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(
+                access_policy={
+                    **connection.execute(
+                        select(project.c.access_policy).where(project.c.id == created.id)
+                    ).scalar_one(),
+                    "auto_accept_qualification": {"fixture": True},
+                }
+            )
+        )
+        if failure == "event":
+            connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+        elif failure == "policy":
+            connection.execute(
+                text(f'REVOKE UPDATE (scope, domain, access_policy) ON project FROM "{role}"')
+            )
+    before = counts(owner, created.id)
+    with owner.connect() as connection:
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == created.id)
+        ).scalar_one()
+    if failure == "caller":
+
+        def abort(connection):
+            raise RuntimeError("fixture caller rollback")
+
+        event.listen(service.engine, "commit", abort)
+    try:
+        with pytest.raises(RuntimeError if failure == "caller" else DBAPIError):
+            publish_pack(service, created.id, plan)
+    finally:
+        if failure == "caller":
+            event.remove(service.engine, "commit", abort)
+    assert pack_receipts(owner, created.id) == [] and counts(owner, created.id) == before
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                select(project.c.access_policy).where(project.c.id == created.id)
+            ).scalar_one()
+            == policy
+        )
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="worker"), Actor(role="reviewer")])
+def test_anchor_pack_publication_refuses_nonadmin_identity(database, actor):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        publish_pack(service, created.id, plan, actor=actor)
+    assert pack_receipts(owner, created.id) == []
+
+
+@pytest.mark.parametrize("failure", ["workspace", "revision", "annotation", "withdrawn"])
+def test_anchor_pack_publication_requires_current_owned_evidence(database, failure):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    revision = 4
+    if failure == "workspace":
+        service = replace(service, workspace_id=uuid4())
+    elif failure == "revision":
+        revision = 3
+    elif failure == "annotation":
+        identifier, entry = next(iter(plan.entries.items()))
+        plan = plan.model_copy(
+            update={"entries": {identifier: entry.model_copy(update={"annotation_revision": 2})}}
+        )
+    else:
+        withdraw(
+            service,
+            created.id,
+            ReferenceWithdraw(
+                expected_revision=4, reference_id=next(iter(plan.entries)), reason="Retired"
+            ),
+        )
+        revision = 5
+    before = counts(owner, created.id)
+    with pytest.raises(ManagementFailure):
+        publish_pack(service, created.id, plan, revision=revision)
+    assert pack_receipts(owner, created.id) == [] and counts(owner, created.id) == before
+
+
+def test_anchor_pack_publication_serializes_competing_version_claims(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    barrier = Barrier(2)
+
+    def attempt(key):
+        barrier.wait(timeout=10)
+        try:
+            return publish_pack(service, created.id, plan, key=key).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ["pack-race-a", "pack-race-b"]))
+    assert sorted(str(item) for item in results) == ["5", "revision_conflict"]
+    assert len(pack_receipts(owner, created.id)) == 1
+
+
 def reference_inputs(service, owner, **kwargs):
     created, asset, source, frozen = release_inputs(service, owner, **kwargs)
     payload = ReferenceEnroll(
