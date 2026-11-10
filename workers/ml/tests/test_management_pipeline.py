@@ -8,6 +8,7 @@ admission, complete bootstrap, quality and default app mounting are not proved.
 
 import base64
 import hashlib
+import io
 import json
 import os
 import sys
@@ -18,7 +19,10 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+import urllib3
 from fastapi.testclient import TestClient
+from minio import Minio
+from minio.error import S3Error
 from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.exc import DBAPIError
 
@@ -27,6 +31,7 @@ from labelloop_api.management_configuration import ConfigurationTrainingBinding
 from labelloop_api.management_contracts import AssetIngest, JobAccepted, ProjectCreate, Resource
 from labelloop_api.management_dispatch import CompilationDispatch, LocalMLDispatch
 from labelloop_api.management_evaluation import ApprovedDevelopmentProtocol
+from labelloop_api.management_objects import BoundedMinioObjects
 from labelloop_api.management_operations import CanonicalManagementOperations
 from labelloop_api.management_training import ApprovedTrainingProfile
 from labelloop_api.model_store import load_release
@@ -46,7 +51,78 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def pipeline_worker(database, compilation):
+def pipeline_objects(tmp_path):
+    assert os.environ.get("LABELLOOP_MANAGEMENT_MINIO_TESTS") == "1", (
+        "CPU pipeline requires the disposable Actions MinIO service"
+    )
+    pool = urllib3.PoolManager(timeout=urllib3.Timeout(connect=5, read=20), retries=False)
+    # Fixed loopback fixture only; never consume deployment endpoints or credentials.
+    client = Minio(
+        "127.0.0.1:9000",
+        access_key="labelloop-local-only",
+        secret_key="labelloop-local-secret",
+        secure=False,
+        region="us-east-1",
+        http_client=pool,
+    )
+    bucket = "pipeline-" + uuid4().hex
+    client.make_bucket(bucket)
+    try:
+        yield BoundedMinioObjects(client, bucket, 64 * 1024 * 1024)
+    finally:
+        try:
+            for item in client.list_objects(bucket, recursive=True):
+                client.remove_object(bucket, item.object_name)
+            client.remove_bucket(bucket)
+            assert not client.bucket_exists(bucket)
+            (tmp_path / "minio-cleanup.json").write_text(
+                json.dumps({"scope": "disposable-actions-fixture", "bucket_removed": True})
+            )
+        finally:
+            pool.clear()
+
+
+@pytest.mark.parametrize("length", [0, 8, 1024 * 1024 + 1])
+def test_live_minio_content_round_trip_at_transport_limit(pipeline_objects, length):
+    from labelloop_api.management_compile_worker import content_key
+
+    data = b"x" * length
+    key = content_key(hashlib.sha256(data).hexdigest())
+    transport = replace(pipeline_objects, max_object_bytes=max(1, length))
+    transport.put(key, data)
+    assert transport.read(key) == data
+    assert pipeline_objects.client.stat_object(pipeline_objects.bucket, key).content_type == (
+        "application/octet-stream"
+    )
+
+
+@pytest.mark.parametrize("data", [b"wrong", b"123456789"])
+def test_live_minio_corrupt_or_oversized_content_refuses(pipeline_objects, data):
+    from labelloop_api.management_compile_worker import content_key
+
+    key = content_key(hashlib.sha256(b"1234").hexdigest())
+    pipeline_objects.client.put_object(
+        pipeline_objects.bucket, key, io.BytesIO(data), length=len(data)
+    )
+    transport = replace(pipeline_objects, max_object_bytes=8)
+    reason = "byte limit" if len(data) > 8 else "digest mismatch"
+    with pytest.raises(ValueError, match=reason):
+        transport.read(key)
+    # A refused response must not prevent the same client from reading intact content.
+    transport.put(key, b"1234")
+    assert transport.read(key) == b"1234"
+
+
+def test_live_minio_missing_content_refuses(pipeline_objects):
+    from labelloop_api.management_compile_worker import content_key
+
+    with pytest.raises(S3Error) as error:
+        pipeline_objects.read(content_key(hashlib.sha256(b"missing").hexdigest()))
+    assert error.value.code == "NoSuchKey"
+
+
+@pytest.fixture
+def pipeline_worker(database, compilation, pipeline_objects):
     from labelloop_worker_core.jobs import JobStore
 
     service, owner, api_role = database
@@ -83,12 +159,8 @@ def pipeline_worker(database, compilation):
     store = JobStore(
         lambda: psycopg.connect(os.environ["DATABASE_URL"].replace("+psycopg", ""), options=options)
     )
-    objects = SimpleNamespace(
-        read=lambda key: service.store.root.joinpath(*key.split("/")).read_bytes(),
-        put=service.store.put,
-    )
     try:
-        yield SimpleNamespace(engine=engine, store=store, objects=objects, role=role)
+        yield SimpleNamespace(engine=engine, store=store, objects=pipeline_objects, role=role)
     finally:
         engine.dispose()
         with owner.begin() as connection:
@@ -162,9 +234,11 @@ def assert_runtime_separation(service, worker, auth_store, api_role):
 
 
 @pytest.fixture
-def management_http(database, restricted_auth_store, auth_account):
+def management_http(database, restricted_auth_store, auth_account, pipeline_objects):
     service, _, _ = database
-    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    operations = CanonicalManagementOperations(
+        service.engine, pipeline_objects, service.workspace_id
+    )
 
     def configure(**settings):
         nonlocal operations
@@ -641,6 +715,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest, predict_samples
 
     service, owner, role = database
+    service = replace(service, store=pipeline_worker.objects)
     role_evidence = assert_runtime_separation(
         service, pipeline_worker, restricted_auth_store[0], role
     )
@@ -917,6 +992,15 @@ def test_management_http_runs_real_cpu_project_to_export(
         assert_runtime_separation(service, pipeline_worker, restricted_auth_store[0], role)
         == role_evidence
     )
+    objects = pipeline_worker.objects
+    stored = list(objects.client.list_objects(objects.bucket, recursive=True))
+    assert len(stored) > len(source_ids)
+    assert trained["export"]["export_key"] in {item.object_name for item in stored}
+    assert not (database[0].store.root / "sha256").exists()
+    for item in stored:
+        assert objects.client.stat_object(objects.bucket, item.object_name).content_type == (
+            "application/octet-stream"
+        )
     (tmp_path / "management-pipeline.json").write_text(
         json.dumps(
             {
@@ -969,6 +1053,15 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "specific_job_only": True,
                     "compiler_ml_lane_refusals": True,
                     "automatic_startup": False,
+                },
+                "object_transport": {
+                    "adapter": "BoundedMinioObjects",
+                    "service": "disposable-checksum-pinned-minio",
+                    "max_object_bytes": objects.max_object_bytes,
+                    "stored_object_count": len(stored),
+                    "all_content_types_binary": True,
+                    "no_filesystem_content_fallback": True,
+                    "provisioning": "fixture-root-not-production-iam",
                 },
                 "runtime_roles": {
                     **role_evidence,

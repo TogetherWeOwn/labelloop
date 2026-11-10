@@ -1143,9 +1143,43 @@ The limit bounds returned transport bytes, not total process RSS, SDK-internal
 buffers, request duration or aggregate job storage. Native SDK timeouts and deployment
 resource limits remain required; worker-stage aggregate bounds are unchanged. Unit
 contracts cover chunk/boundary/EOF/digest/key/input refusals, cleanup and no retry.
-They use a synthetic MinIO response, not a live storage service. Exact-head Actions
-verification of this new adapter is pending; live installation, object IAM, runtime
-provisioning, mounting and real admission remain separately gated.
+They use a synthetic MinIO response, not a live storage service. Exact head
+`c86196407d8f7a52d4891c08a54254e0b30d3fa6` passed
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42873352942), including
+[2,151 unit tests / 1,044 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42873352942/job/130030161887)
+and [943 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42873352942/job/130030162170).
+CodeQL and gitleaks passed. That verifies the synthetic transport contracts, not
+live storage. Its [CPU artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42873352942/artifacts/13791281184)
+retains filesystem-backed cohorts with four validation sources at 320 and five at
+640, nonempty ONNX comparisons and matching configuration/checkpoint/export pins.
+Both have zero recall: execution/equivalence is not quality or independent gold.
+
+### Disposable live object-transport acceptance (commissioned)
+
+The existing two CPU cohorts now use `BoundedMinioObjects` for normalized fixture
+admission, grouping reads, initialization, compiler artifacts, checkpoints and
+ONNX artifacts, with a 64 MiB per-object cap and no filesystem content fallback.
+Canonical admission and annotations remain explicit fixture preparation, not HTTP
+admission acceptance. All stored object types must be binary; the pipeline record
+retains the adapter, cap and observed object count without endpoints or credentials.
+Six additional live cases cover empty/exact/chunk-boundary round trips, stored
+corruption, an oversized response and missing content. Refusal controls reuse the
+client for an intact subsequent read. These new cases **await exact-head Actions**;
+no live transport or expanded CPU pass is claimed yet.
+
+Actions starts only the existing checksum-pinned `dev/minio` service immediately
+before CPU tests, waits for health under a 120-second readiness limit and retains
+the job's 20-minute bound. Each test creates an isolated disposable bucket, removes
+its objects and bucket in fixture teardown and records confirmed bucket absence
+in `minio-cleanup.json`. An `always()` step removes the service and its volume on
+success, failure or cancellation; the GitHub-hosted runner is also ephemeral.
+Nothing runs between jobs or outside this bounded Actions use window.
+
+The fixture uses fixed loopback plaintext access and the existing local-only root
+identity, never deployment endpoints or provider credentials. This is not storage
+IAM/least-privilege provisioning, production installation, TLS qualification,
+process-RSS/time isolation, default mounting or real-admission clearance. Those
+remain separately gated; no production code, grant or automatic startup changes.
 
 ## Canonical summary reads (partial, unmounted)
 
