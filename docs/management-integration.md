@@ -1001,6 +1001,37 @@ runs/borrowed receipts. These cases await exact-head Actions; synthetic DB train
 artifacts do not establish real CPU or full mounted HTTP acceptance. No schema,
 client, dependency, migration, runtime grant or default mounting change is needed.
 
+## Published recipe preview (partial, unmounted)
+
+`CanonicalManagementReads.read_recipe_preview` exposes one emitted full-frame
+320/640 sample from an owned frozen release, only after successful fenced compiler
+publication. It reuses the existing historical snapshot/receipt/application
+validator and reads the source's exact annotation revision in the same read-only
+repeatable snapshot. Core geometry computes actual raster gains, padding and mapped
+boxes; the transform must exactly match the published compiler manifest. Current
+labels never replace historical labels. Review tier, source hash, dimensions,
+object identity/class/geometry and retained policy must agree with the pinned sample.
+
+This is **not a pre-compilation planning surface**. Uncompiled recipes, excluded or
+nonmember sources and final-test samples return missing evidence rather than an
+invented preview or another final-test label channel. Only emitted training and
+validation samples are supported. The immutable code-owned v1 recipes have revision
+one. Counts describe this selected emitted sample: clipped/below-minimum/excluded
+counts are zero after retained full-frame policy validation; a target at or below
+six derived pixels is flagged as a small-target warning. No model-quality pass is
+inferred. Artifact IDs are content digests, not object keys, signed URLs or a new
+download capability. No object bytes, image decoding or compiler run occurs on read.
+
+Fifteen new disposable Actions cases cover precommit invisibility, SELECT-only
+access, principal/workspace/release/recipe/source isolation, current application
+and unique receipt requirements, and synthetic projection-boundary corruption
+including final-test refusal. Both existing positive compiler cases additionally
+check exact transformed boxes and historical reads after later source rejection.
+These additions await exact-head Actions; no local suite or test-pass claim is
+substituted. Schema/client, runtime grants, default mounting and real asset admission
+are unchanged. A usable pre-compilation preview and excluded-source planning remain
+explicit gaps, as do complete runtime/setup and final HTTP acceptance.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

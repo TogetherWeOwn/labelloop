@@ -13,6 +13,7 @@ from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
+    RecipePreviewRead,
     ReferenceLifecycleList,
     ReleaseDetail,
     TrainingDetail,
@@ -259,6 +260,47 @@ class CanonicalManagementReads:
                     refuse("not_found")
                 try:
                     return release_detail(connection, row, self.workspace_id)
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
+
+    def read_recipe_preview(
+        self, actor: ManagementPrincipal, release_id: str, recipe_id: str, asset_id: str
+    ) -> RecipePreviewRead:
+        from .management_recipe_reads import recipe_preview
+        from .model_store import variant_context
+        from .schema import preprocessing_recipe, yolo_dataset_variant
+
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                release = connection.execute(
+                    select(canonical_dataset_release)
+                    .join(owned, canonical_dataset_release.c.project_id == owned.c.id)
+                    .where(canonical_dataset_release.c.release_key == release_id)
+                ).one_or_none()
+                if release is None:
+                    refuse("not_found")
+                variant_id = connection.execute(
+                    select(yolo_dataset_variant.c.id)
+                    .join(preprocessing_recipe)
+                    .where(
+                        yolo_dataset_variant.c.release_id == release.id,
+                        preprocessing_recipe.c.recipe_key == recipe_id,
+                    )
+                ).scalar_one_or_none()
+                if variant_id is None:
+                    refuse("missing_evidence")
+                try:
+                    return recipe_preview(
+                        connection,
+                        variant_context(connection, variant_id),
+                        self.workspace_id,
+                        asset_id,
+                    )
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 

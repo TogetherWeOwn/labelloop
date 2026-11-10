@@ -3522,6 +3522,185 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
     assert labels == sample["objects"][0]["yolo_row"] + "\n"
     raster = Image.open(io.BytesIO(worker.objects.read(content_key(sample["image_sha256"]))))
     assert raster.size == (manifest["recipe"]["output_size"],) * 2
+    from labelloop_core.geometry import Box
+
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+    assert len(detail.boxes) == 1
+    projected = detail.boxes[0]
+    assert projected.box == detail.transform.apply(Box(1, 1, 11, 9))
+    assert projected.object_id == "box-1" and projected.class_id == "package"
+    assert projected.review_tier == "human_reviewed" and projected.clipped is False
+    assert projected.flag == "none" and detail.tiny_targets == 0
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=3,
+            approval_state="rejected",
+            review_tier="human_reviewed",
+            scope_completeness="partial",
+            objects=[],
+        )
+    assert reads.read_recipe_preview(Reader(), release.id, recipe, asset.id) == detail
+
+
+def test_recipe_preview_is_read_only_and_requires_committed_compiler_publication(
+    database, compilation, compiler_worker
+):
+    from labelloop_compiler.compiler import transform_document
+
+    service, owner, role = database
+    _, asset, release, accepted, lease, record = prepared_compilation(
+        database, compilation, compiler_worker
+    )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    recipe = "full-letterbox-320-v1"
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+
+    def sink(connection, current, artifacts):
+        compiler_worker.publish(connection, current, artifacts)
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+
+    compiler_worker.store.complete(lease, ("compilation",), sink)
+    before = publication_state(owner, accepted)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, recipe, asset.id
+        )
+    finally:
+        readonly.dispose()
+    assert detail == reads.read_recipe_preview(Actor(), release.id, recipe, asset.id)
+    assert detail.recipe_id == recipe and detail.recipe_revision == 1
+    assert detail.boxes == [] and detail.source_asset_id == asset.id
+    assert detail.source_width == 24 and detail.source_height == 12
+    assert transform_document(detail.transform) == record["manifest"]["samples"][0]["transform"]
+    assert detail.manifest_artifact_id == record["manifest_sha256"]
+    assert (
+        detail.validation_artifact_id == record["manifest"]["file_hashes"]["validation-report.json"]
+    )
+    assert detail.tiny_targets == detail.below_minimum_targets == detail.clipped_targets == 0
+    assert detail.excluded_images == 0
+    assert detail.checks[0].passed is True and detail.checks[1].passed is None
+    assert "sha256/" not in detail.model_dump_json()
+    assert "fixture:" not in detail.model_dump_json()
+    assert publication_state(owner, accepted) == before
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"kind": "service"}, {"granted": False}, {"role": "worker_ml"}, {"id": ""}]
+)
+def test_recipe_preview_denies_untrusted_identity_before_lookup(database, overrides):
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Reader(**overrides), "unknown", "full-letterbox-320-v1", "unknown"
+        )
+
+
+def test_recipe_preview_isolates_release_recipe_and_source(database, compilation, compiler_worker):
+    service, _, _ = database
+    _, asset, release, _, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    for workspace, release_id in [(uuid4(), release.id), (service.workspace_id, "unknown")]:
+        with pytest.raises(ManagementFailure, match="not_found"):
+            CanonicalManagementReads(service.engine, workspace).read_recipe_preview(
+                Reader(), release_id, "full-letterbox-320-v1", asset.id
+            )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    for recipe, asset_id in [
+        ("full-letterbox-640-v1", asset.id),
+        ("full-letterbox-320-v1", "unknown"),
+    ]:
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            reads.read_recipe_preview(Reader(), release.id, recipe, asset_id)
+
+
+@pytest.mark.parametrize("change", ["generation", "failed", "duplicate_receipt"])
+def test_recipe_preview_requires_current_unique_compiler_application(
+    database, compilation, compiler_worker, change
+):
+    service, owner, _ = database
+    _, asset, release, accepted, lease, _ = prepared_compilation(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    with owner.begin() as connection:
+        if change == "duplicate_receipt":
+            receipt = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.variant_compiled",
+                        canonical_event.c.aggregate_id == accepted.resource.id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{key: value for key, value in receipt.items() if key != "id"}
+                )
+            )
+        else:
+            assignment = "status='failed'" if change == "failed" else "generation=generation+1"
+            connection.execute(
+                text(f"UPDATE worker_job SET {assignment} WHERE job_id=:id"),
+                {"id": accepted.job_id},
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, "full-letterbox-320-v1", asset.id
+        )
+
+
+@pytest.mark.parametrize(
+    "change", ["transform", "source_hash", "tier", "objects", "test_split", "size"]
+)
+def test_recipe_preview_refuses_inconsistent_or_final_test_sample(
+    database, compilation, compiler_worker, monkeypatch, change
+):
+    from copy import deepcopy
+
+    from labelloop_api import management_recipe_reads
+
+    service, _, _ = database
+    _, asset, release, _, lease, _ = prepared_compilation(database, compilation, compiler_worker)
+    compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
+    original = management_recipe_reads.verified_variant
+
+    def changed(*args):
+        manifest, digest, job_id = original(*args)
+        manifest = deepcopy(manifest)
+        sample = manifest["samples"][0]
+        if change == "transform":
+            sample["transform"]["left"] += 1
+        elif change == "source_hash":
+            sample["source_sha256"] = "0" * 64
+        elif change == "tier":
+            sample["review_tier"] = "adjudicated"
+        elif change == "objects":
+            sample["objects"] = [{}]
+        elif change == "test_split":
+            sample["split"] = "test"
+        else:
+            sample["image_size"] = [640, 640]
+        return manifest, digest, job_id
+
+    # Synthetic projection-boundary corruption; native receipt/application checks run first.
+    monkeypatch.setattr(management_recipe_reads, "verified_variant", changed)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, "full-letterbox-320-v1", asset.id
+        )
 
 
 def test_compiler_rejects_source_bytes_that_differ_from_frozen_hash(
