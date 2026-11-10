@@ -30,8 +30,8 @@ function responses(first: unknown = summary, second: unknown = page) {
   return fetch;
 }
 const read = () => sessionCostsRecord(project, query, { limit: 1 }, new AbortController().signal);
-function html(record: CostsRecord, commands?: CostCommands) {
-  return renderToStaticMarkup(<CostsView readId={1} state={{ status: 'ready', data: record, updatedAt: '2026-11-09T12:00:00Z', stale: false }} role="admin" scope={{ kind: 'project', id: project }} commands={commands} onRefresh={() => undefined} />);
+function html(record: CostsRecord, commands?: CostCommands, saveLimits?: CostCommands['savePolicy'], stale = false, role: 'admin' | 'reviewer' = 'admin') {
+  return renderToStaticMarkup(<CostsView readId={1} state={{ status: 'ready', data: record, updatedAt: '2026-11-09T12:00:00Z', stale }} role={role} scope={{ kind: 'project', id: project }} commands={commands} saveLimits={saveLimits} onRefresh={() => undefined} />);
 }
 afterEach(() => vi.unstubAllGlobals());
 
@@ -129,6 +129,21 @@ describe('session cost display contract', () => {
     expect(rendered).toMatch(/disabled=""[^>]*>Resume paid steps/);
     expect(rendered).toMatch(/disabled=""[^>]*>Save limits/);
     expect(commands.savePolicy).not.toHaveBeenCalled();
+    expect(commands.resumePaid).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit limits-only port without granting fixture resumption on session data', async () => {
+    responses({ ...summary, pause_reason: 'insufficient_credits' }, { ...page, pause_reason: 'insufficient_credits' });
+    const commands = { savePolicy: vi.fn(), resumePaid: vi.fn() };
+    const saveLimits = vi.fn();
+    const record = await read();
+    const rendered = html(record, commands, saveLimits);
+    expect(rendered).not.toMatch(/disabled=""[^>]*>Save limits/);
+    expect(rendered).toMatch(/disabled=""[^>]*>Resume paid steps/);
+    expect(rendered).toContain('Saving limits does not resume paused paid steps or dispatch work.');
+    expect(html(record, commands, saveLimits, true)).toMatch(/disabled=""[^>]*>Save limits/);
+    expect(html(record, commands, saveLimits, false, 'reviewer')).not.toContain('>Save limits<');
+    expect(saveLimits).not.toHaveBeenCalled();
     expect(commands.resumePaid).not.toHaveBeenCalled();
   });
 
