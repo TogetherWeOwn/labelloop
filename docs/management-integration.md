@@ -120,9 +120,35 @@ policy marker alone, determines whether approval remains current. A focused
 query regression failed before the correction. Three new disposable PostgreSQL
 cases exercise scope/guide/source approvals, historical retry acknowledgment,
 restored-policy refusal, fresh approval and later publication replay without
-invalidating that fresh approval. Their exact-head Actions results are pending.
+invalidating that fresh approval. Exact `545a194ab1c25fe3cca7030ce7b60ece578c8be4`
+[Actions CI passed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42803435363),
+including these regressions, CodeQL and gitleaks. This verifies the invalidation
+repair, not the summary-read increment below or complete project setup.
 No freeze guard is relaxed and no project publication, retrieval, admission,
 runtime grants, worker startup or default mounting is enabled by this repair.
+
+### Current anchor summary (opt-in, not mounted by default)
+
+`readAnchorPack` composes the existing current-pack verifier inside one authorized
+SELECT-only repeatable snapshot. The caller explicitly pins pack ID and version;
+only identity, canonical snapshot digest and example counts cross the typed port.
+The response always says `qualification: not_assessed`. It exposes neither the
+internal snapshot/lineage nor an object read, URL, retrieval or durable eligibility
+grant. Reference withdrawal, changed scope/annotation/completeness/grouping and
+corrupt/duplicate receipts fail closed; no historical fallback or renewal occurs.
+Project/workspace ownership is resolved before pack lookup. Shared sessions allow
+admin/reviewer reads; service roles cannot read and reviewers still cannot publish.
+The default app and real asset admission remain disabled.
+
+Existing disposable DB tests now cover public summary refusal alongside the core
+verifier's stale/corrupt evidence controls, exact version selection, SELECT-only
+access and project/workspace isolation. The restricted-session publication case
+also reads the exact digest summary, reloads the reviewer role, checks publication
+refusal and checks summary denial after logout. Pure projection/schema tests and
+generated-client path encoding cases cover the new read contract. These changes
+await exact-head Actions; prior-head green checks do not verify this increment.
+Effective project publication, evidence-step approval, runtime roles/dispatch,
+single registry composition and final mounting remain incomplete.
 
 ### Disposable authentication-role contract
 

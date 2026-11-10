@@ -10,6 +10,7 @@ from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 from .management_canonical import refuse
 from .management_contracts import ExportRead, Resource, ResourceKind, ResourcePage
 from .management_details import (
+    AnchorPackRead,
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
@@ -239,6 +240,33 @@ class CanonicalManagementReads:
                     return reference_lifecycle(
                         connection, row, row.management_revision, self.workspace_id
                     )
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
+
+    def read_anchor_pack(
+        self, actor: ManagementPrincipal, project_id: str, pack_id: str, version: str
+    ) -> AnchorPackRead:
+        from .management_reference_pack import anchor_pack_summary, read_current_anchor_pack
+
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(project, owned.c.revision.label("management_revision"))
+                    .join(owned, project.c.id == owned.c.id)
+                    .where(cast(project.c.id, String) == project_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                try:
+                    pack = read_current_anchor_pack(
+                        connection, row, self.workspace_id, pack_id, version
+                    )
+                    return anchor_pack_summary(pack, row.management_revision)
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 

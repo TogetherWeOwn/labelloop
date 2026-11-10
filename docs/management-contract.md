@@ -140,8 +140,8 @@ Clients supply reference IDs and annotation pins plus bounded scene/diversity/ta
 utility declarations, never source objects, snapshots, approval, split or gold claims.
 The server still rechecks all canonical evidence. The response contains the draft
 project revision only, not the internal pack snapshot or usable retrieval authority.
-No pack GET, retrieval binding, project release, freeze clearance, admission,
-worker startup or default mounting is added. Historical publication does not prove
+The mutation adds no snapshot GET, retrieval binding, project release, freeze clearance,
+admission, worker startup or default mounting. Historical publication does not prove
 current eligibility after a later reference, annotation, grouping or context change.
 `read_current_anchor_pack` is an internal-only, SELECT-only verifier requiring an
 explicit pack ID/version and one repeatable-read transaction. Its caller owns
@@ -157,11 +157,23 @@ it does not rewrite the historical publication. A historical retry still acknowl
 the original receipt, never renews current eligibility, and cannot fall back to some
 other version. Unchanged explicitly pinned versions may coexist.
 
-This supplies current evidence validation, not automatic bulk-job binding, a public
-read/retrieval operation, setup approval or freeze clearance. A consuming transaction
-must own its snapshot and locking policy; a successful read is not a durable grant
-against future changes. Confusion negatives, automatic expansions, gold and
-cross-project imports remain unavailable here.
+`readAnchorPack`, `GET /projects/{project_id}/reference-packs/{pack_id}/versions/{version}`,
+uses this verifier behind the shared human-admin/reviewer session boundary. Explicit
+pack/version selection is required; no latest-version fallback is inferred. The
+SELECT-only repeatable snapshot includes project ownership, current management
+revision and all pack verification. The strict summary exposes only project/pack/
+ontology/assignment identity, the recomputed snapshot SHA-256, example counts per
+class and `qualification: not_assessed`. Counts are reference examples, not objects,
+independent gold, measured quality or coverage. No snapshots, source pixels, source
+URIs, object keys, scene/tag declarations or retrieval/download authority cross this
+port. Missing publication, stale evidence or corrupt receipts refuse rather than
+return a historical or partially verified summary. Inaccessible projects are not found.
+
+This supplies current evidence validation and a bounded summary, not automatic
+bulk-job binding, retrieval, setup approval or freeze clearance. A consuming
+transaction must own its snapshot and locking policy; a successful read is not a
+durable grant against future changes. Confusion negatives, automatic expansions,
+gold and cross-project imports remain unavailable here.
 
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.

@@ -62,6 +62,27 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('reads explicit anchor identity without mutation or retrieval authority', async () => {
+    const { request, result } = mockRequest();
+    const csrf = vi.fn(() => 'csrf');
+    const client = new ManagementClient(csrf);
+    await expect(client.readAnchorPack({
+      project_id: 'project/../other', pack_id: 'anchors?all=true', version: 'v1&v2',
+    })).resolves.toEqual(result);
+    expect(request).toHaveBeenCalledWith(
+      '/api/projects/project%2F..%2Fother/reference-packs/anchors%3Fall%3Dtrue/versions/v1%26v2',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        body: undefined,
+      },
+    );
+    expect(csrf).not.toHaveBeenCalled();
+  });
+
   it('publishes explicit anchor pins without sending approval or snapshot authority', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

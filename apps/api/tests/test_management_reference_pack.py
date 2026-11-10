@@ -12,6 +12,7 @@ from labelloop_api.management_ports import ManagementFailure
 from labelloop_api.management_reference_pack import (
     AnchorPackPlan,
     AnchorPackPublish,
+    anchor_pack_summary,
     assemble_anchor_pack,
     pack_snapshot,
     verify_anchor_receipt,
@@ -123,6 +124,95 @@ class AnchorPackTests(TestCase):
         self.assertEqual(snapshot["examples"][0]["revision"]["objects"][0]["box"]["x_min"], 1)
         changed = replace(pack, examples=(replace(pack.examples[0], utility=0.5),))
         self.assertNotEqual(pack_snapshot(changed)[1], digest)
+
+    def test_summary_projects_only_identity_digest_and_class_counts(self):
+        scope, refs, revisions, plan = inputs()
+        pack = assemble_anchor_pack(scope, refs, revisions, plan)
+        self.assertEqual(
+            anchor_pack_summary(pack, 5).model_dump(mode="json"),
+            {
+                "project_id": "project-1",
+                "project_revision": 5,
+                "pack_id": "pack-1",
+                "version": "v1",
+                "snapshot_sha256": pack_snapshot(pack)[1],
+                "ontology_id": "ontology-1",
+                "assignment_version": "assignment-1",
+                "examples_per_class": {"package": 1},
+                "qualification": "not_assessed",
+            },
+        )
+
+    def test_summary_counts_examples_not_boxes_or_quality(self):
+        scope, refs, revisions, plan = inputs()
+        revisions["source-1"] = replace(
+            revisions["source-1"],
+            objects=revisions["source-1"].objects
+            + (DatasetObject("object-2", "package", Box(0, 0, 2, 2)),),
+        )
+        pack = assemble_anchor_pack(scope, refs, revisions, plan)
+        first = pack.examples[0]
+        second = replace(first, reference=replace(first.reference, reference_id="reference-2"))
+        pack = replace(pack, examples=(first, second))
+        summary = anchor_pack_summary(pack, 5)
+        self.assertEqual(summary.examples_per_class, {"package": 2})
+        self.assertEqual(summary.qualification, "not_assessed")
+
+    def test_summary_reader_refuses_untrusted_identity_before_database_access(self):
+        from uuid import uuid4
+
+        from sqlalchemy import create_engine, event
+
+        from labelloop_api.management_reads import CanonicalManagementReads
+
+        engine = create_engine("postgresql+psycopg://")
+
+        @event.listens_for(engine, "do_connect")
+        def no_database(*args):
+            self.fail("untrusted readers must be refused before database access")
+
+        try:
+            reads = CanonicalManagementReads(engine, uuid4())
+            for changes in (
+                {"id": ""},
+                {"kind": "service"},
+                {"role": "worker-core"},
+                {"role": "worker-ml"},
+                {"role": "worker-llm"},
+                {"role": "worker-platform"},
+                {"permits": lambda permission: False},
+            ):
+                actor = SimpleNamespace(
+                    **{
+                        **{
+                            "id": "reader",
+                            "kind": "human",
+                            "role": "reviewer",
+                            "permits": lambda permission: True,
+                        },
+                        **changes,
+                    }
+                )
+                with (
+                    self.subTest(changes=changes),
+                    self.assertRaisesRegex(ManagementFailure, "permission_denied"),
+                ):
+                    reads.read_anchor_pack(actor, "project-1", "pack-1", "v1")
+        finally:
+            engine.dispose()
+
+    def test_summary_schema_cannot_add_lineage_or_claim_qualification(self):
+        scope, refs, revisions, plan = inputs()
+        summary = anchor_pack_summary(assemble_anchor_pack(scope, refs, revisions, plan), 5)
+        for changes in (
+            {"snapshot": {}},
+            {"object_key": "sha256/aa/" + "a" * 64},
+            {"qualification": "qualified"},
+            {"project_revision": True},
+            {"examples_per_class": {"package": -1}},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                type(summary).model_validate({**summary.model_dump(), **changes})
 
     def test_snapshot_refuses_oversized_evidence(self):
         scope, refs, revisions, plan = inputs()

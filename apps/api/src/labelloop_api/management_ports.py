@@ -44,6 +44,7 @@ from .management_contracts import (
     VariantCompile,
 )
 from .management_details import (
+    AnchorPackRead,
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
@@ -204,6 +205,10 @@ class ManagementOperations(Protocol):
     def read_reference_lifecycle(
         self, actor: ManagementPrincipal, project_id: str
     ) -> ReferenceLifecycleList: ...
+
+    def read_anchor_pack(
+        self, actor: ManagementPrincipal, project_id: str, pack_id: str, version: str
+    ) -> AnchorPackRead: ...
 
     def read_release(self, actor: ManagementPrincipal, release_id: str) -> ReleaseDetail: ...
 

@@ -40,6 +40,7 @@ from .management_contracts import (
     VariantCompile,
 )
 from .management_details import (
+    AnchorPackRead,
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
@@ -527,6 +528,20 @@ def management_router(
         service: Annotated[ManagementOperations, Depends(operations)],
     ) -> ReferenceLifecycleList:
         return invoke(lambda: service.read_reference_lifecycle(actor, project_id))
+
+    @router.get(
+        "/projects/{project_id}/reference-packs/{pack_id}/versions/{version}",
+        response_model=AnchorPackRead,
+        operation_id="readAnchorPack",
+    )
+    def read_anchor_pack(
+        project_id: Identifier,
+        pack_id: Identifier,
+        version: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> AnchorPackRead:
+        return invoke(lambda: service.read_anchor_pack(actor, project_id, pack_id, version))
 
     @router.get("/projects/{project_id}", response_model=ProjectDetail, operation_id="readProject")
     def read_project(

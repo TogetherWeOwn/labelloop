@@ -26,6 +26,22 @@ REFERENCE_LIFECYCLE_RESULT = {
 }
 DETAIL_READS = [
     (
+        "/projects/p/reference-packs/anchors/versions/v1",
+        "read_anchor_pack",
+        ("p", "anchors", "v1"),
+        {
+            "project_id": "p",
+            "project_revision": 5,
+            "pack_id": "anchors",
+            "version": "v1",
+            "snapshot_sha256": "a" * 64,
+            "ontology_id": "ontology-1",
+            "assignment_version": "assignment-1",
+            "examples_per_class": {"package": 1},
+            "qualification": "not_assessed",
+        },
+    ),
+    (
         "/projects/p/references/lifecycle",
         "read_reference_lifecycle",
         ("p",),

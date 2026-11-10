@@ -965,8 +965,15 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 32
-    assert sum(len(methods) for methods in spec["paths"].values()) == 33
+    assert len(spec["paths"]) == 33
+    assert sum(len(methods) for methods in spec["paths"].values()) == 34
+    assert (
+        spec["paths"]["/projects/{project_id}/reference-packs/{pack_id}/versions/{version}"]["get"][
+            "operationId"
+        ]
+        == "readAnchorPack"
+    )
+    assert "export type AnchorPackRead =" in client
     assert (
         spec["paths"]["/projects/{project_id}/reference-packs"]["post"]["operationId"]
         == "publishAnchorPack"

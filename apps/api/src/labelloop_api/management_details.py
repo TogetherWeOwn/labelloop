@@ -74,6 +74,18 @@ class ReferenceLifecycleList(Contract):
     references: Annotated[list[ReferenceLifecycleRead], Field(max_length=1000)]
 
 
+class AnchorPackRead(Contract):
+    project_id: Identifier
+    project_revision: Revision
+    pack_id: Identifier
+    version: Identifier
+    snapshot_sha256: Digest
+    ontology_id: Identifier
+    assignment_version: Identifier
+    examples_per_class: Annotated[dict[Identifier, Count], Field(max_length=1000)]
+    qualification: Literal["not_assessed"]
+
+
 class GuideRead(Contract):
     extent: Literal["visible", "estimated"]
     truncation: Text

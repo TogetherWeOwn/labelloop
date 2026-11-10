@@ -7,6 +7,7 @@ never retrieval registration or setup-release authority. No object I/O occurs he
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import asdict
 
 from sqlalchemy import Connection, select
@@ -27,6 +28,7 @@ from .management_contracts import AnchorPackEntry as AnchorPackEntry
 from .management_contracts import AnchorPackPlan as AnchorPackPlan
 from .management_contracts import AnchorPackPublish as AnchorPackPublish
 from .management_contracts import ManagementError, Resource
+from .management_details import AnchorPackRead
 from .management_ports import ManagementFailure
 from .management_references import read_references, reference_context_sha256
 from .management_release import revision_refusal
@@ -131,6 +133,24 @@ def read_current_anchor_pack(
         return pack
     except (KeyError, TypeError, ValueError):
         reject()
+
+
+def anchor_pack_summary(pack: ReferencePack, project_revision: int) -> AnchorPackRead:
+    """Project only safe facts from verified current evidence, never internal lineage."""
+    _, digest = pack_snapshot(pack)
+    return AnchorPackRead(
+        project_id=pack.scope.ontology.project_id,
+        project_revision=project_revision,
+        pack_id=pack.pack_id,
+        version=pack.version,
+        snapshot_sha256=digest,
+        ontology_id=pack.scope.ontology.ontology_id,
+        assignment_version=pack.scope.assignment.assignment_version,
+        examples_per_class=dict(
+            sorted(Counter(item.reference.class_id for item in pack.examples).items())
+        ),
+        qualification="not_assessed",
+    )
 
 
 def assemble_anchor_pack(scope, references, revisions, plan: AnchorPackPlan) -> ReferencePack:

@@ -212,6 +212,89 @@
         "title": "AnchorPackPublish",
         "type": "object"
       },
+      "AnchorPackRead": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "examples_per_class": {
+            "maxProperties": 1000,
+            "patternProperties": {
+              "^[A-Za-z0-9_.-]+$": {
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "propertyNames": {
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "title": "Examples Per Class",
+            "type": "object"
+          },
+          "ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "pack_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Pack Id",
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_revision": {
+            "minimum": 0.0,
+            "title": "Project Revision",
+            "type": "integer"
+          },
+          "qualification": {
+            "const": "not_assessed",
+            "title": "Qualification",
+            "type": "string"
+          },
+          "snapshot_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Snapshot Sha256",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "project_revision",
+          "pack_id",
+          "version",
+          "snapshot_sha256",
+          "ontology_id",
+          "assignment_version",
+          "examples_per_class",
+          "qualification"
+        ],
+        "title": "AnchorPackRead",
+        "type": "object"
+      },
       "AnnotationHistory": {
         "additionalProperties": false,
         "properties": {
@@ -6100,6 +6183,125 @@
           }
         },
         "summary": "Publish Anchor Pack",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/reference-packs/{pack_id}/versions/{version}": {
+      "get": {
+        "operationId": "readAnchorPack",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pack_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Pack Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnchorPackRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read Anchor Pack",
         "tags": [
           "management"
         ]

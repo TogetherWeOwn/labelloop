@@ -7488,10 +7488,34 @@ def test_anchor_pack_http_reuses_shared_identity_and_canonical_publication(
         assert after[3]["management_setup_approvals"] == {}
         detail = client.get(f"/projects/{created.id}").json()
         assert detail["published_release_id"] is None and detail["approved_steps"] == []
-        # No snapshot/source-lineage read is added alongside the mutation.
+        # Explicit summary is current evidence, never a snapshot or retrieval port.
         assert client.get(path).status_code == 405
+        summary_path = f"{path}/{plan.pack_id}/versions/{plan.version}"
+        summary = client.get(summary_path)
+        assert summary.status_code == 200, summary.text
+        assert summary.headers["cache-control"] == "no-store"
+        assert summary.json() == {
+            "project_id": created.id,
+            "project_revision": 5,
+            "pack_id": plan.pack_id,
+            "version": plan.version,
+            "snapshot_sha256": receipt.payload["evidence"]["snapshot_sha256"],
+            "ontology_id": plan.ontology_id,
+            "assignment_version": plan.assignment_version,
+            "examples_per_class": {"package": 1},
+            "qualification": "not_assessed",
+        }
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.get(summary_path).json() == summary.json()
+        assert client.post(path, json=body, headers=headers).status_code == 403
         assert client.post("/auth/logout", headers=headers).status_code == 204
         assert client.post(path, json=body, headers=headers).status_code == 401
+        assert client.get(summary_path).status_code == 401
         assert initial_grouping_snapshot(owner, created.id) == after
 
 
@@ -7841,22 +7865,41 @@ def test_current_anchor_pack_is_receipt_verified_select_only(database):
             text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
         )
     assert current_pack(service, created.id, plan) == expected
+    from labelloop_api.management_reference_pack import anchor_pack_summary
+
+    summary = CanonicalManagementReads(service.engine, service.workspace_id).read_anchor_pack(
+        Reader(), created.id, plan.pack_id, plan.version
+    )
+    assert summary == anchor_pack_summary(expected, 5)
     assert counts(owner, created.id) == before
 
 
 def test_current_anchor_pack_requires_publication_and_exact_version(database):
     service, owner, _ = database
     created, _, _, plan = anchor_pack_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         current_pack(service, created.id, plan)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_anchor_pack(Reader(), created.id, plan.pack_id, plan.version)
     publish_pack(service, created.id, plan)
     for changes in ({"pack_id": "absent"}, {"version": "absent"}):
         with pytest.raises(ManagementFailure, match="missing_evidence"):
             current_pack(service, created.id, plan.model_copy(update=changes))
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            reads.read_anchor_pack(
+                Reader(),
+                created.id,
+                changes.get("pack_id", plan.pack_id),
+                changes.get("version", plan.version),
+            )
     changed = plan.model_copy(update={"version": "v2"})
     publish_pack(service, created.id, changed, revision=5, key="current-pack-v2")
     assert current_pack(service, created.id, plan).version == "v1"
     assert current_pack(service, created.id, changed).version == "v2"
+    for version in ("v1", "v2"):
+        summary = reads.read_anchor_pack(Reader(), created.id, plan.pack_id, version)
+        assert summary.version == version and summary.project_revision == 6
 
 
 @pytest.mark.parametrize(
@@ -7922,6 +7965,11 @@ def test_current_anchor_pack_rechecks_current_evidence_and_never_renews_on_repla
         current_pack(service, created.id, plan)
     assert counts(owner, created.id) == before
     assert len(pack_receipts(owner, created.id)) == 1
+    with pytest.raises(ManagementFailure):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_anchor_pack(
+            Reader(), created.id, plan.pack_id, plan.version
+        )
+    assert counts(owner, created.id) == before
 
 
 @pytest.mark.parametrize(
@@ -7986,6 +8034,10 @@ def test_current_anchor_pack_refuses_corrupt_or_ambiguous_receipt(database, fail
             )
     with pytest.raises(ManagementFailure):
         current_pack(service, created.id, plan)
+    with pytest.raises(ManagementFailure):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_anchor_pack(
+            Reader(), created.id, plan.pack_id, plan.version
+        )
 
 
 def test_current_anchor_pack_keeps_one_snapshot_during_concurrent_withdrawal(database):
@@ -8030,6 +8082,14 @@ def test_current_anchor_pack_refuses_foreign_workspace_and_read_committed(databa
     publish_pack(service, created.id, plan)
     with pytest.raises(ManagementFailure, match="not_found"):
         current_pack(replace(service, workspace_id=uuid4()), created.id, plan)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    for identifier in (str(uuid4()), "not-a-project"):
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read_anchor_pack(Reader(), identifier, plan.pack_id, plan.version)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        replace(reads, workspace_id=uuid4()).read_anchor_pack(
+            Reader(), created.id, plan.pack_id, plan.version
+        )
     with service.engine.begin() as connection:
         row = connection.execute(select(project).where(project.c.id == created.id)).one()
         with pytest.raises(ManagementFailure, match="management_unavailable"):

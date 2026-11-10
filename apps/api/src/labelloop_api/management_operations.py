@@ -26,6 +26,7 @@ from .management_contracts import (
     VariantCompile,
 )
 from .management_details import (
+    AnchorPackRead,
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
@@ -145,6 +146,11 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         self, actor: ManagementPrincipal, project_id: str
     ) -> ReferenceLifecycleList:
         return self._reads().read_reference_lifecycle(actor, project_id)
+
+    def read_anchor_pack(
+        self, actor: ManagementPrincipal, project_id: str, pack_id: str, version: str
+    ) -> AnchorPackRead:
+        return self._reads().read_anchor_pack(actor, project_id, pack_id, version)
 
     def read_release(self, actor: ManagementPrincipal, release_id: str) -> ReleaseDetail:
         return self._reads().read_release(actor, release_id)

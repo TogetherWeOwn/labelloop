@@ -5,6 +5,7 @@ export type AffineTransform = { "algorithm": string; "allow_upscale"?: boolean; 
 export type AnchorPackEntry = { "annotation_revision": number; "cluster_id": string; "scene": string; "utility": number; "validity_tags": Array<string> };
 export type AnchorPackPlan = { "assignment_version": string; "entries": Record<string, AnchorPackEntry>; "ontology_id": string; "pack_id": string; "version": string };
 export type AnchorPackPublish = { "expected_revision": number; "plan": AnchorPackPlan; "reason": string };
+export type AnchorPackRead = { "assignment_version": string; "examples_per_class": Record<string, unknown>; "ontology_id": string; "pack_id": string; "project_id": string; "project_revision": number; "qualification": "not_assessed"; "snapshot_sha256": string; "version": string };
 export type ArgumentMismatchRead = { "key": string; "requested": string | number | boolean | null; "resolved": string | number | boolean | null };
 export type AssetIngest = { "expected_revision": number; "original_base64": string; "source_group": string; "source_metadata"?: Record<string, string>; "source_uri"?: string };
 export type Box = { "x_max": number; "x_min": number; "y_max": number; "y_min": number };
@@ -170,6 +171,11 @@ export class ManagementClient {
   publishAnchorPack(input: { "project_id": string; "idempotency-key": string; body: AnchorPackPublish }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/reference-packs`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  readAnchorPack(input: { "project_id": string; "pack_id": string; "version": string }): Promise<AnchorPackRead> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/reference-packs/${encodeURIComponent(input["pack_id"])}/versions/${encodeURIComponent(input["version"])}`;
+    return this.request<AnchorPackRead>(path, "GET");
   }
 
   enrollReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceEnroll }): Promise<Resource> {
