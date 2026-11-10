@@ -157,11 +157,15 @@ jobs:
             uv run alembic -c apps/api/alembic.ini upgrade head
           done
       - run: uv run pytest workers/core/tests/test_jobs.py -v --junitxml=queue-evidence.xml
+      - name: Check source-grouping lifecycle on disposable PostgreSQL
+        run: uv run pytest apps/api/tests/test_source_grouping_lifecycle.py -v --junitxml=lifecycle-pg-evidence.xml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: queue-evidence
-          path: queue-evidence.xml
+          path: |
+            queue-evidence.xml
+            lifecycle-pg-evidence.xml
           if-no-files-found: error
           retention-days: 7
 

@@ -6,6 +6,7 @@ DDL so the leaf's transaction boundary (propose read-only, apply
 append-only, rollback on audit failure) is exercised for real.
 """
 
+import os
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -54,7 +55,8 @@ DDL = (
     "CREATE TABLE source_split_assignment (id TEXT PRIMARY KEY, assignment_version TEXT,"
     " asset_id TEXT, group_id TEXT, split TEXT, seed INTEGER, algorithm TEXT, thresholds JSON,"
     " reason TEXT, locked BOOLEAN,"
-    " created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now')))",
+    " created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now')),"
+    " UNIQUE(assignment_version, asset_id))",
     "CREATE TABLE similarity_relation (id TEXT PRIMARY KEY, left_asset_id TEXT,"
     " right_asset_id TEXT, reason TEXT, evidence TEXT, embedding_model TEXT,"
     " algorithm_version TEXT, created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now')))",
@@ -656,3 +658,488 @@ def test_unrelated_different_group_apply_never_removes_automatic_relation() -> N
     with fixture.engine.connect() as connection:
         relations = connection.execute(select(similarity_relation.c.reason)).all()
     assert ("metadata",) in relations
+
+
+# ---------------------------------------------------------------------------
+# QA repair regressions (findings 1-10)
+# ---------------------------------------------------------------------------
+
+
+def test_unchanged_memberships_preserve_splits_including_test_holdout() -> None:
+    observations = [observation(index) for index in range(5)]
+    old_splits = {
+        "asset-00": "train",
+        "asset-01": "train",
+        "asset-02": "train",
+        "asset-03": "val",
+        "asset-04": "test",
+    }
+    old_groups = {key: f"g-{index}" for index, key in enumerate(old_splits)}
+    proposal = compute_proposal(
+        observations, old_groups=old_groups, old_splits=old_splits, seed=999
+    )
+    assert proposal.assignment is not None
+    assert dict(proposal.assignment.asset_splits) == old_splits
+    assert proposal.split_transitions == ()
+    assert proposal.requires_fresh_holdout is False
+    assert proposal.changed_memberships == ()
+
+
+def test_synthetic_session_tag_cannot_merge_unrelated_singleton() -> None:
+    observations = [
+        observation(0),
+        observation(1),
+        observation(2, metadata={"session": "__lifecycle_decision_0"}),
+        observation(3, metadata={"session": "independent"}),
+    ]
+    proposal = compute_proposal(observations, [decision(0, 1, "same_group")])
+    assert proposal.groups["asset-00"] == proposal.groups["asset-01"]
+    assert proposal.groups["asset-02"] != proposal.groups["asset-00"]
+    assert proposal.groups["asset-03"] != proposal.groups["asset-00"]
+    assert proposal.groups["asset-02"] != proposal.groups["asset-03"]
+
+
+def test_complete_collapse_reports_quarantine_without_assignment() -> None:
+    observations = [
+        observation(0, metadata={"session": "all"}),
+        observation(1, metadata={"session": "all"}),
+    ]
+    proposal = compute_proposal(
+        observations,
+        old_groups={"asset-00": "g0", "asset-01": "g1"},
+        old_splits={"asset-00": "train", "asset-01": "val"},
+    )
+    assert proposal.assignment is None
+    assert proposal.new_assignment_version is None
+    assert proposal.cross_split_pairs == (("asset-00", "asset-01"),)
+    assert proposal.requires_fresh_holdout is True
+
+
+def test_borderline_band_and_embedding_pin_change_publication_identity() -> None:
+    base = [
+        TrustedObservation(asset_id=f"asset-0{i}", sha256=f"{i + 1:064x}", phash=0)
+        for i in range(3)
+    ]
+    banded = [
+        base[0],
+        TrustedObservation(asset_id="asset-01", sha256=base[1].sha256, phash=0b1111111111),
+        base[2],
+    ]
+    outside = [
+        base[0],
+        TrustedObservation(
+            asset_id="asset-01", sha256=base[1].sha256, phash=0b11111111111111111111
+        ),
+        base[2],
+    ]
+    assert (
+        compute_proposal(banded).new_assignment_version
+        != compute_proposal(outside).new_assignment_version
+    )
+
+    vectors = [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+
+    def embedded_for(version: str) -> list[TrustedObservation]:
+        return [
+            observation(
+                index,
+                embedding=vectors[index],
+                embedding_model="approved-emb",
+                embedding_version=version,
+            )
+            for index in range(3)
+        ]
+
+    thresholds = GroupingThresholds(embedding_model="approved-emb")
+    assert (
+        compute_proposal(
+            embedded_for("v2"), thresholds=thresholds, approved_embedding_version="v2"
+        ).new_assignment_version
+        != compute_proposal(
+            embedded_for("v3"), thresholds=thresholds, approved_embedding_version="v3"
+        ).new_assignment_version
+    )
+
+
+def test_unversioned_embeddings_rejected() -> None:
+    vectors = [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+    thresholds = GroupingThresholds(embedding_model="approved-emb")
+    for version in (None, ""):
+        unversioned = [
+            observation(
+                index,
+                embedding=vectors[index],
+                embedding_model="approved-emb",
+                embedding_version=version,
+            )
+            for index in range(3)
+        ]
+        with pytest.raises(ValueError, match="pinned embedding version"):
+            compute_proposal(unversioned, thresholds=thresholds, approved_embedding_version="v2")
+    with pytest.raises(ValueError, match="pinned embedding version"):
+        compute_proposal(
+            [
+                observation(
+                    index,
+                    embedding=vectors[index],
+                    embedding_model="approved-emb",
+                    embedding_version="v2",
+                )
+                for index in range(3)
+            ],
+            thresholds=thresholds,
+        )
+
+
+def test_duplicate_decisions_are_idempotent() -> None:
+    observations = [observation(index) for index in range(5)]
+    single = compute_proposal(observations, [decision(0, 1)])
+    duplicate = compute_proposal(observations, [decision(0, 1), decision(1, 0)])
+    assert single.new_assignment_version == duplicate.new_assignment_version
+
+
+def test_historical_release_quarantined_across_assignment_versions() -> None:
+    fixture = Fixture()
+    with fixture.engine.begin() as connection:
+        v2 = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            decisions=[decision(0, 1, "same_group")],
+            pins=pins_for(fixture),
+            actor_id="integrator-1",
+        )
+    assert v2.assignment_version != fixture.version
+    train_key = next(key for key in fixture.keys if fixture.seed_splits[key] == "train")
+    val_key = next(key for key in fixture.keys if fixture.seed_splits[key] == "val")
+    revised = [
+        observation(index, metadata={"session": "cross-split"})
+        if key in {train_key, val_key}
+        else observation(index)
+        for index, key in enumerate(fixture.keys)
+    ]
+    with fixture.engine.connect() as connection:
+        proposal = propose_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=revised,
+            pins=LifecyclePins(expected_assignment_version=v2.assignment_version),
+        )
+    # release-1 is pinned to V1 (fixture.version), not the immediate
+    # predecessor V2, and must still be quarantined.
+    assert [item.release_key for item in proposal.quarantined_releases] == ["release-1"]
+    assert proposal.requires_fresh_holdout is True
+
+
+def test_canonical_hash_mismatch_rejected_and_exact_duplicate_grouped() -> None:
+    fixture = Fixture()
+    forged = [
+        TrustedObservation(asset_id="asset-00", sha256="f" * 64, phash=walsh(0))
+        if index == 0
+        else observation(index)
+        for index in range(5)
+    ]
+    with fixture.engine.connect() as connection:
+        with pytest.raises(ValueError, match="canonical source hash"):
+            propose_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=forged,
+                pins=pins_for(fixture),
+            )
+    # Two canonical sources with equal stored SHA-256 must gain the
+    # mandatory exact-hash relation.
+    with fixture.engine.begin() as connection:
+        duplicated_hash = "0" * 63 + "1"
+        connection.execute(
+            text("UPDATE source_asset SET sha256 = :draft WHERE asset_key = 'asset-01'"),
+            {"draft": duplicated_hash},
+        )
+    duplicated = [
+        TrustedObservation(
+            asset_id="asset-01",
+            sha256="0" * 63 + "1",
+            phash=walsh(1),
+            class_counts={"item": 1},
+        )
+        if index == 1
+        else observation(index)
+        for index in range(5)
+    ]
+    with fixture.engine.connect() as connection:
+        proposal = propose_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=duplicated,
+            pins=pins_for(fixture),
+        )
+    assert proposal.groups["asset-00"] == proposal.groups["asset-01"]
+    assert any(
+        item.reason == "exact_hash"
+        and {item.left_asset_id, item.right_asset_id} == {"asset-00", "asset-01"}
+        for item in proposal.relations
+    )
+
+
+def test_apply_fails_closed_on_complete_collapse() -> None:
+    fixture = Fixture()
+    collapsed = [observation(index, metadata={"session": "all"}) for index in range(5)]
+    with fixture.engine.connect() as connection:
+        proposal = propose_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=collapsed,
+            pins=pins_for(fixture),
+        )
+    assert proposal.assignment is None
+    assert proposal.requires_fresh_holdout is True
+    before = fixture.counts()
+    with fixture.engine.begin() as connection:
+        with pytest.raises(ValueError, match="usable train/val"):
+            apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=collapsed,
+                pins=pins_for(fixture),
+                actor_id="integrator-1",
+            )
+    assert fixture.counts() == before
+
+
+def test_duplicate_decision_repeat_apply_is_noop() -> None:
+    fixture = Fixture()
+    with fixture.engine.begin() as connection:
+        first = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            decisions=[decision(0, 1), decision(0, 1)],
+            pins=pins_for(fixture),
+            actor_id="integrator-1",
+        )
+    before = fixture.counts()
+    with fixture.engine.begin() as connection:
+        repeat = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            decisions=[decision(0, 1), decision(0, 1)],
+            pins=LifecyclePins(expected_assignment_version=first.assignment_version),
+            actor_id="integrator-1",
+        )
+    assert repeat.published is False
+    assert repeat.assignment_version == first.assignment_version
+    assert fixture.counts() == before
+
+
+def test_return_to_historical_grouping_reuses_immutable_version() -> None:
+    fixture = Fixture()
+    with fixture.engine.begin() as connection:
+        a = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            pins=pins_for(fixture),
+            actor_id="integrator-1",
+        )
+        b = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            seed=20261108,
+            pins=LifecyclePins(expected_assignment_version=a.assignment_version),
+            actor_id="integrator-1",
+        )
+        assert b.assignment_version != a.assignment_version
+        before = fixture.counts()
+        restored = apply_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            pins=LifecyclePins(expected_assignment_version=b.assignment_version),
+            actor_id="integrator-1",
+        )
+    assert restored.assignment_version == a.assignment_version
+    assert restored.published is False
+    assert fixture.counts()["source_split_assignment"] == before["source_split_assignment"]
+    with fixture.engine.connect() as connection:
+        proposal = propose_regroup(
+            connection,
+            project_id=fixture.project_id,
+            observations=observations(),
+            pins=LifecyclePins(expected_assignment_version=a.assignment_version),
+        )
+    assert proposal.new_assignment_version == a.assignment_version
+
+
+# ---------------------------------------------------------------------------
+# Disposable canonical PostgreSQL coverage (Actions queue-postgres job)
+# ---------------------------------------------------------------------------
+
+PG_ONLY = pytest.mark.skipif(
+    os.environ.get("LABELLOOP_QUEUE_TESTS") != "1",
+    reason="requires disposable Actions PostgreSQL",
+)
+
+
+class PgFixture:
+    def __init__(self, count: int = 5) -> None:
+        from labelloop_api.schema import metadata as canonical_metadata
+
+        url = os.environ["DATABASE_URL"]
+        self.engine = create_engine(url)
+        canonical_metadata.drop_all(self.engine)
+        canonical_metadata.create_all(self.engine)
+        self.project_id = uuid.uuid4()
+        self.ontology_id = uuid.uuid4()
+        self.keys = [f"asset-{index:02d}" for index in range(count)]
+        self.asset_ids = {key: uuid.uuid4() for key in self.keys}
+        from labelloop_core.grouping import AssetEvidence
+
+        seed = assign_splits(
+            [
+                AssetEvidence(
+                    asset_id=key,
+                    sha256=f"{index + 1:064x}",
+                    phash=walsh(index),
+                    embedding=(),
+                    metadata={},
+                    class_counts={"item": 1},
+                )
+                for index, key in enumerate(self.keys)
+            ]
+        )
+        self.version = seed.assignment_version
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(project).values(
+                    id=self.project_id,
+                    project_key="domain-pg",
+                    workspace_id=uuid.uuid4(),
+                    task="detect",
+                    scope=SCOPE,
+                    domain="fixture",
+                    access_policy={},
+                )
+            )
+            connection.execute(
+                insert(ontology_release).values(
+                    id=self.ontology_id,
+                    ontology_key="onto",
+                    project_id=self.project_id,
+                    version=1,
+                    classes=CLASSES,
+                    class_map=CLASS_MAP,
+                )
+            )
+            for index, key in enumerate(self.keys):
+                sha = f"{index + 1:064x}"
+                connection.execute(
+                    insert(source_asset).values(
+                        id=self.asset_ids[key],
+                        asset_key=key,
+                        project_id=self.project_id,
+                        sha256=sha,
+                        object_key=f"sha256/{sha[:2]}/{sha}",
+                        width=100,
+                        height=100,
+                        exif_orientation=1,
+                        source_uri="fixture",
+                    )
+                )
+                connection.execute(
+                    insert(source_split_assignment).values(
+                        id=uuid.uuid4(),
+                        assignment_version=self.version,
+                        asset_id=self.asset_ids[key],
+                        group_id=seed.group_ids[key],
+                        split=seed.asset_splits[key],
+                        seed=seed.seed,
+                        algorithm=seed.algorithm,
+                        thresholds={},
+                        reason=seed.reasons[seed.group_ids[key]],
+                        locked=True,
+                    )
+                )
+
+    def dispose(self) -> None:
+        self.engine.dispose()
+
+
+@PG_ONLY
+def test_postgres_two_publications_one_transaction_second_is_current() -> None:
+    fixture = PgFixture()
+    try:
+        with fixture.engine.begin() as connection:
+            first = apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                pins=LifecyclePins(expected_assignment_version=fixture.version),
+                actor_id="integrator-1",
+            )
+            second = apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                seed=20261108,
+                pins=LifecyclePins(expected_assignment_version=first.assignment_version),
+                actor_id="integrator-1",
+            )
+            # Both publications share now(); the second must still be
+            # current (publication sequence, not timestamp/lexical order).
+            proposal = propose_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                pins=LifecyclePins(expected_assignment_version=second.assignment_version),
+            )
+            assert proposal.new_assignment_version == second.assignment_version
+            with pytest.raises(ValueError, match="stale assignment pin"):
+                propose_regroup(
+                    connection,
+                    project_id=fixture.project_id,
+                    observations=observations(),
+                    pins=LifecyclePins(expected_assignment_version=first.assignment_version),
+                )
+    finally:
+        fixture.dispose()
+
+
+@PG_ONLY
+def test_postgres_return_to_historical_version_respects_uniqueness() -> None:
+    fixture = PgFixture()
+    try:
+        with fixture.engine.begin() as connection:
+            a = apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                pins=LifecyclePins(expected_assignment_version=fixture.version),
+                actor_id="integrator-1",
+            )
+            b = apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                seed=20261108,
+                pins=LifecyclePins(expected_assignment_version=a.assignment_version),
+                actor_id="integrator-1",
+            )
+            restored = apply_regroup(
+                connection,
+                project_id=fixture.project_id,
+                observations=observations(),
+                pins=LifecyclePins(expected_assignment_version=b.assignment_version),
+                actor_id="integrator-1",
+            )
+            assert restored.assignment_version == a.assignment_version
+            assert restored.published is False
+            rows = connection.execute(
+                select(source_split_assignment.c.assignment_version).where(
+                    source_split_assignment.c.assignment_version == a.assignment_version
+                )
+            ).all()
+            assert len(rows) == len(fixture.keys)
+    finally:
+        fixture.dispose()

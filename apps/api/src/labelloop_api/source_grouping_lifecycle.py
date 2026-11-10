@@ -87,12 +87,12 @@ from sqlalchemy import Connection
 
 from labelloop_core.domain import SourceSplitAssignment
 from labelloop_core.grouping import (
+    ALGORITHM,
     METADATA_KEYS,
     AssetEvidence,
     BorderlineReview,
     GroupingThresholds,
     SimilarityRelation,
-    assign_splits,
     group_sources,
 )
 
@@ -235,6 +235,7 @@ class ProposedGrouping:
     quarantined_releases: tuple[QuarantinedRelease, ...]
     requires_fresh_holdout: bool
     new_assignment_version: str | None
+    split_transitions: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,10 +265,14 @@ def validate_observations(
     approved = approved_embedding_model if approved_embedding_model != NO_EMBEDDING_MODEL else None
     for item in observations:
         if item.embedding:
-            if approved is None:
+            if not approved:
                 raise ValueError("embedding evidence supplied without an approved pinned model")
             if item.embedding_model != approved:
                 raise ValueError("stale or unapproved embedding model")
+            if not approved_embedding_version or not item.embedding_version:
+                raise ValueError(
+                    "embedding evidence supplied without an approved pinned embedding version"
+                )
             if item.embedding_version != approved_embedding_version:
                 raise ValueError("stale or unapproved embedding version")
         elif item.embedding_model not in {None, "", NO_EMBEDDING_MODEL}:
@@ -302,23 +307,174 @@ def decision_hash(decision: PairDecision) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _published_version(assignment: SourceSplitAssignment, decisions: Sequence[PairDecision]) -> str:
+def _published_version(
+    assignment: SourceSplitAssignment, decisions: Sequence[PairDecision], evidence_digest: str
+) -> str:
     # The core identity binds thresholds/seed/algorithm only, not the asset
     # set or relations, so the published version always appends a content
     # digest. Identical content repeats the same version (idempotent
-    # repeat); any membership, split or decision change publishes anew.
+    # repeat); any membership, split, decision or evidence change
+    # (borderline band, embedding pin, thresholds, seed) publishes anew.
     digest = hashlib.sha256(
         json.dumps(
             {
                 "membership": sorted(assignment.group_ids.items()),
                 "splits": sorted(assignment.asset_splits.items()),
                 "decisions": sorted(decision_hash(item) for item in decisions),
+                "evidence_digest": evidence_digest,
             },
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
     ).hexdigest()[:12]
     return f"{assignment.assignment_version}-{digest}"
+
+
+def _evidence_digest(
+    observations: Sequence[TrustedObservation],
+    relations: Sequence[SimilarityRelation],
+    borderline: Sequence[BorderlineReview],
+    *,
+    thresholds: GroupingThresholds,
+    seed: int,
+    validation_fraction: float,
+    approved_embedding_version: str | None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "relations": sorted(
+                    (item.left_asset_id, item.right_asset_id, item.reason, item.evidence)
+                    for item in relations
+                ),
+                "borderline": sorted(
+                    (item.left_asset_id, item.right_asset_id, item.metric, str(item.value))
+                    for item in borderline
+                ),
+                "embedding_pins": sorted(
+                    (item.asset_id, item.embedding_model or "", item.embedding_version or "")
+                    for item in observations
+                    if item.embedding
+                ),
+                "approved_embedding_version": approved_embedding_version or "",
+                "thresholds": {
+                    "phash_max_distance": thresholds.phash_max_distance,
+                    "phash_review_distance": thresholds.phash_review_distance,
+                    "embed_min_cosine": thresholds.embed_min_cosine,
+                    "embed_review_cosine": thresholds.embed_review_cosine,
+                    "embedding_model": thresholds.embedding_model,
+                },
+                "seed": seed,
+                "validation_fraction": validation_fraction,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _stratified_val_groups(
+    group_ids: Sequence[str],
+    members: Mapping[str, Sequence[str]],
+    class_counts: Mapping[str, Mapping[str, int]],
+    *,
+    seed: int,
+    validation_fraction: float,
+) -> set[str]:
+    """Seeded group-level class-count stratification over explicit components.
+
+    Mirrors the core assigner's balancing rule, but operates on the
+    already-computed closure components directly — no synthetic metadata
+    relations are fabricated, so unrelated assets that happen to share a
+    session value can never be merged by construction.
+    """
+    from collections import Counter
+
+    shuffled = sorted(
+        group_ids, key=lambda group: hashlib.sha256(f"{seed}:{group}".encode()).hexdigest()
+    )
+    positions = {group: index for index, group in enumerate(shuffled)}
+    counts = {group: Counter(class_counts.get(group, {})) for group in group_ids}
+    classes = {class_id for row in counts.values() for class_id in row} or {"negative"}
+    targets = {
+        class_id: max(
+            1, round(sum(row.get(class_id, 0) for row in counts.values()) * validation_fraction)
+        )
+        for class_id in classes
+    }
+    val_cap = min(len(group_ids) - 1, max(1, round(len(group_ids) * validation_fraction)))
+
+    def candidate_key(candidate: list[str]) -> tuple[float, float, tuple[int, ...]]:
+        deficit = sum(
+            max(0, targets[class_id] - sum(counts[group][class_id] for group in candidate))
+            for class_id in classes
+        )
+        return (
+            deficit,
+            abs(len(candidate) - val_cap),
+            tuple(positions[group] for group in candidate),
+        )
+
+    best: list[str] | None = None
+    if len(group_ids) <= 16:
+
+        def search(selected: list[str], tail: list[str]) -> None:
+            nonlocal best
+            if len(selected) > val_cap:
+                return
+            if not tail:
+                if (
+                    selected
+                    and len(selected) < len(group_ids)
+                    and (best is None or candidate_key(selected) < candidate_key(best))
+                ):
+                    best = list(selected)
+                return
+            search(selected + [tail[0]], tail[1:])
+            search(selected, tail[1:])
+
+        search([], list(shuffled))
+    else:
+        selected = []
+        covered: Counter = Counter()
+        remaining = list(shuffled)
+        while len(selected) < val_cap:
+            group = max(
+                remaining,
+                key=lambda item: (
+                    sum(
+                        min(counts[item][class_id], targets[class_id])
+                        for class_id in classes
+                        if covered[class_id] < targets[class_id]
+                    ),
+                    -positions[item],
+                ),
+            )
+            selected.append(group)
+            covered.update(counts[group])
+            remaining.remove(group)
+        best = selected
+    if best is None:
+        raise ValueError("assignment cannot establish non-empty train and validation")
+    return set(best)
+
+
+def _core_identity(thresholds: GroupingThresholds, seed: int, validation_fraction: float) -> str:
+    from dataclasses import asdict
+
+    identity = hashlib.sha256(
+        json.dumps(
+            {
+                "thresholds": asdict(thresholds),
+                "validation_fraction": validation_fraction,
+                "seed": seed,
+                "algorithm": ALGORITHM,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()[:16]
+    return f"{ALGORITHM}-{identity}"
 
 
 def compute_proposal(
@@ -343,6 +499,10 @@ def compute_proposal(
     for decision in decisions:
         if decision.left_asset_id not in known or decision.right_asset_id not in known:
             raise ValueError("pair decisions must name observed assets")
+    deduped: dict[str, PairDecision] = {}
+    for decision in decisions:
+        deduped.setdefault(decision_hash(decision), decision)
+    decisions = tuple(deduped.values())
     evidence = [_evidence(item) for item in observations]
     base_groups, relations, borderline = group_sources(evidence, thresholds)
 
@@ -379,61 +539,141 @@ def compute_proposal(
         )
     )
 
-    merged = [members for members in components.values() if len(members) > 1]
-    if merged:
-        # Reuse the core split assigner verbatim: a shared synthetic session
-        # tag makes each decision-merged component one metadata relation.
-        synthetic = []
-        for index, members in enumerate(merged):
-            tag = f"__lifecycle_decision_{index}"
-            for asset_id in members:
-                record = next(item for item in evidence if item.asset_id == asset_id)
-                synthetic.append(
-                    AssetEvidence(
-                        asset_id=record.asset_id,
-                        sha256=record.sha256,
-                        phash=record.phash,
-                        embedding=record.embedding,
-                        metadata={**record.metadata, "session": tag},
-                        class_counts=record.class_counts,
-                    )
-                )
-        for record in evidence:
-            if all(record.asset_id not in members for members in merged):
-                synthetic.append(record)
-        assignment: SourceSplitAssignment | None = assign_splits(
-            synthetic, thresholds=thresholds, seed=seed, validation_fraction=validation_fraction
-        )
-    else:
-        assignment = assign_splits(
-            evidence, thresholds=thresholds, seed=seed, validation_fraction=validation_fraction
-        )
-    groups = dict(assignment.group_ids)
+    # Explicit components: no fabricated metadata relations. Group IDs are
+    # deterministic in the sorted membership, so splits are reproducible.
+    ordered_components = sorted(
+        (sorted(members) for members in components.values()), key=lambda members: tuple(members)
+    )
+    groups = {
+        asset_id: f"group-{index:04d}"
+        for index, members in enumerate(ordered_components)
+        for asset_id in members
+    }
+    class_counts_by_group: dict[str, dict[str, int]] = {}
+    for item in evidence:
+        combined = class_counts_by_group.setdefault(groups[item.asset_id], {})
+        for class_id, count in item.class_counts.items():
+            combined[class_id] = combined.get(class_id, 0) + count
+
+    old_splits = dict(old_splits or {})
+    group_splits: dict[str, str] = {}
+    preserved: set[str] = set()
+    free: list[str] = []
+    for index, members in enumerate(ordered_components):
+        group_id = f"group-{index:04d}"
+        old_member_splits = {old_splits[asset_id] for asset_id in members if asset_id in old_splits}
+        if len(old_member_splits) == 1:
+            # Locked assignment, preserved verbatim (train/val/test all
+            # survive; an unchanged singleton never moves split because the
+            # seed changed).
+            group_splits[group_id] = next(iter(old_member_splits))
+            preserved.add(group_id)
+        else:
+            free.append(group_id)
+    total_groups = len(ordered_components)
+    if free and total_groups > 1:
+        if len(free) == 1:
+            locked = {group_splits[group] for group in preserved}
+            group_splits[free[0]] = "val" if locked == {"train"} else "train"
+        else:
+            free_members = {
+                f"group-{index:04d}": members
+                for index, members in enumerate(ordered_components)
+                if f"group-{index:04d}" in free
+            }
+            val_groups = _stratified_val_groups(
+                free,
+                free_members,
+                class_counts_by_group,
+                seed=seed,
+                validation_fraction=validation_fraction,
+            )
+            for group_id in free:
+                group_splits[group_id] = "val" if group_id in val_groups else "train"
 
     old_sets = _membership_sets(old_groups or {})
     new_sets = _membership_sets(groups)
-    changed = tuple(sorted((item for item in new_sets if item not in old_sets), key=sorted))
+    changed_set = {item for item in new_sets if item not in old_sets}
     cross: set[tuple[str, str]] = set()
-    if old_splits:
-        for members in new_sets:
-            splits = {old_splits[asset_id] for asset_id in members if asset_id in old_splits}
-            if len(splits) > 1:
-                ordered = sorted(members)
-                for index, left in enumerate(ordered):
-                    for right in ordered[index + 1 :]:
-                        if old_splits.get(left) != old_splits.get(right):
-                            cross.add((left, right))
+    for members in ordered_components:
+        for index, left in enumerate(members):
+            for right in members[index + 1 :]:
+                if (
+                    left in old_splits
+                    and right in old_splits
+                    and old_splits[left] != old_splits[right]
+                ):
+                    cross.add((left, right))
+
+    if len(set(group_splits.values())) < 2 or total_groups < 2:
+        # Complete collapse: closure/quarantine is still reported, but no
+        # usable train/val assignment exists. Apply must fail closed.
+        return ProposedGrouping(
+            groups=groups,
+            relations=tuple(relations),
+            borderline=tuple(borderline),
+            assignment=None,
+            changed_memberships=tuple(sorted(changed_set, key=sorted)),
+            cross_split_pairs=tuple(sorted(cross)),
+            conflicting_separations=conflicting,
+            quarantined_releases=(),
+            requires_fresh_holdout=bool(cross),
+            new_assignment_version=None,
+        )
+
+    asset_splits = {asset_id: group_splits[group] for asset_id, group in groups.items()}
+    transitions = tuple(
+        sorted(
+            (asset_id, old_splits[asset_id], asset_splits[asset_id])
+            for asset_id in asset_splits
+            if old_splits.get(asset_id) in {"val", "test"} and asset_splits[asset_id] == "train"
+        )
+    )
+    if transitions:
+        transition_assets = {asset for asset, _old, _new in transitions}
+        changed_set |= {
+            frozenset(members) for members in ordered_components if transition_assets & set(members)
+        }
+    assignment = SourceSplitAssignment(
+        assignment_version=_core_identity(thresholds, seed, validation_fraction),
+        asset_splits=asset_splits,  # type: ignore[arg-type]
+        group_splits=group_splits,  # type: ignore[arg-type]
+        group_ids=groups,
+        seed=seed,
+        algorithm=ALGORITHM,
+        reasons={
+            group_id: (
+                "preserved locked assignment"
+                if group_id in preserved
+                else "seeded group-level class-count stratification"
+            )
+            for group_id in group_splits
+        },
+    )
     return ProposedGrouping(
         groups=groups,
         relations=tuple(relations),
         borderline=tuple(borderline),
         assignment=assignment,
-        changed_memberships=changed,
+        changed_memberships=tuple(sorted(changed_set, key=sorted)),
         cross_split_pairs=tuple(sorted(cross)),
         conflicting_separations=conflicting,
         quarantined_releases=(),
-        requires_fresh_holdout=bool(cross),
-        new_assignment_version=_published_version(assignment, decisions),
+        requires_fresh_holdout=bool(cross) or bool(transitions),
+        new_assignment_version=_published_version(
+            assignment,
+            decisions,
+            _evidence_digest(
+                observations,
+                relations,
+                borderline,
+                thresholds=thresholds,
+                seed=seed,
+                validation_fraction=validation_fraction,
+                approved_embedding_version=approved_embedding_version,
+            ),
+        ),
+        split_transitions=transitions,
     )
 
 
@@ -506,6 +746,15 @@ def _as_list(value: Any) -> list[Any]:
     return list(decoded or [])
 
 
+def _project_hashes(connection: Connection, project_id: uuid.UUID) -> dict[str, str]:
+    rows = connection.execute(
+        sa.select(source_asset.c.asset_key, source_asset.c.sha256).where(
+            source_asset.c.project_id == project_id
+        )
+    ).all()
+    return {key: digest for key, digest in rows}
+
+
 def _project_assets(connection: Connection, project_id: uuid.UUID) -> dict[str, uuid.UUID]:
     rows = connection.execute(
         sa.select(source_asset.c.id, source_asset.c.asset_key).where(
@@ -515,8 +764,26 @@ def _project_assets(connection: Connection, project_id: uuid.UUID) -> dict[str, 
     return {key: asset_id for asset_id, key in rows}
 
 
+def _rows_for_version(
+    rows: list[Any], version: str, asset_ids: Mapping[str, uuid.UUID]
+) -> tuple[dict[str, str], dict[str, str]]:
+    uuid_to_key = {value: key for key, value in asset_ids.items()}
+    groups: dict[str, str] = {}
+    splits: dict[str, str] = {}
+    for row_version, asset_uuid, group, split, _created in rows:
+        if row_version != version:
+            continue
+        key = uuid_to_key.get(asset_uuid)
+        if key is not None:
+            groups[key] = group
+            splits[key] = split
+    return groups, splits
+
+
 def _current_assignment(
-    connection: Connection, asset_ids: Mapping[str, uuid.UUID]
+    connection: Connection,
+    asset_ids: Mapping[str, uuid.UUID],
+    project_uuid: uuid.UUID | None = None,
 ) -> tuple[str | None, dict[str, str], dict[str, str]]:
     if not asset_ids:
         return None, {}, {}
@@ -531,6 +798,26 @@ def _current_assignment(
     ).all()
     if not rows:
         return None, {}, {}
+    # Authoritative publication order: the publication event's
+    # expected_revision sequence (monotonic per project, assigned at print
+    # time), never created_at ties — two publications in one transaction
+    # share now() and lexical version order is arbitrary.
+    if project_uuid is not None:
+        event_rows = connection.execute(
+            sa.select(canonical_event.c.payload, canonical_event.c.expected_revision)
+            .where(
+                canonical_event.c.event_type == PUBLICATION_EVENT,
+                canonical_event.c.aggregate_id == str(project_uuid),
+            )
+            .order_by(canonical_event.c.expected_revision.desc())
+            .limit(1)
+        ).all()
+        for payload, _revision in event_rows:
+            version = _as_dict(payload).get("assignment_version")
+            if version:
+                groups, splits = _rows_for_version(rows, version, asset_ids)
+                if len(groups) == len(asset_ids):
+                    return version, groups, splits
     uuid_to_key = {value: key for key, value in asset_ids.items()}
     latest: dict[str, tuple[Any, set[str]]] = {}
     for version, asset_uuid, _group, _split, created in rows:
@@ -539,8 +826,9 @@ def _current_assignment(
             continue
         stamp, keys = latest.get(version, (None, set()))
         latest[version] = (created if stamp is None or created > stamp else stamp, keys | {key})
-    # The current version covers every asset; among those, the latest
-    # publication stamp wins. Version text breaks residual ties.
+    # Fallback for assignments published outside this leaf (no publication
+    # event): the current version covers every asset; among those, the
+    # latest publication stamp wins. Version text breaks residual ties.
     version = max(
         latest,
         key=lambda item: (
@@ -550,16 +838,18 @@ def _current_assignment(
             item,
         ),
     )
-    groups: dict[str, str] = {}
-    splits: dict[str, str] = {}
-    for row_version, asset_uuid, group, split, _created in rows:
-        if row_version != version:
-            continue
-        key = uuid_to_key.get(asset_uuid)
-        if key is not None:
-            groups[key] = group
-            splits[key] = split
+    groups, splits = _rows_for_version(rows, version, asset_ids)
     return version, groups, splits
+
+
+def _next_publication_revision(connection: Connection, project_uuid: uuid.UUID) -> int:
+    row = connection.execute(
+        sa.select(sa.func.max(canonical_event.c.expected_revision)).where(
+            canonical_event.c.event_type == PUBLICATION_EVENT,
+            canonical_event.c.aggregate_id == str(project_uuid),
+        )
+    ).one()
+    return int(row[0] or 0) + 1
 
 
 def _ontology_hash(connection: Connection, project_id: uuid.UUID) -> str | None:
@@ -623,15 +913,16 @@ def _affected_releases(
     names = changed_assets | cross_assets
     if not names:
         return ()
+    # Relevant releases are those frozen under *any* historical assignment
+    # that contains affected assets — not only the immediate predecessor.
+    # A release pinned to an older version is quarantined too; its stored
+    # hash/membership is never modified here.
     rows = connection.execute(
         sa.select(
             canonical_dataset_release.c.id,
             canonical_dataset_release.c.release_key,
             canonical_dataset_release.c.sample_revisions,
-        ).where(
-            canonical_dataset_release.c.project_id == project_id,
-            canonical_dataset_release.c.assignment_version == old_version,
-        )
+        ).where(canonical_dataset_release.c.project_id == project_id)
     ).all()
     quarantined = []
     for release_id, release_key, sample_revisions in rows:
@@ -669,7 +960,13 @@ def _prepare(
             "lifecycle observations must exactly cover owned project sources; "
             "register new sources through ingest before admission"
         )
-    current_version, old_groups, old_splits = _current_assignment(connection, asset_ids)
+    canonical_hashes = _project_hashes(connection, project_uuid)
+    for item in observations:
+        if canonical_hashes.get(item.asset_id) != item.sha256:
+            raise ValueError("observation hash must match the immutable canonical source hash")
+    current_version, old_groups, old_splits = _current_assignment(
+        connection, asset_ids, project_uuid
+    )
     if pins.expected_assignment_version != current_version:
         raise StalePinError("stale assignment pin")
     if pins.expected_ontology_hash is not None:
@@ -683,10 +980,13 @@ def _prepare(
                 raise StalePinError("stale annotation pin")
     persisted = _read_decisions(connection, project_uuid)
     known_hashes = {decision_hash(item) for item in persisted}
-    effective = [
-        *persisted,
-        *(item for item in decisions if decision_hash(item) not in known_hashes),
-    ]
+    effective: list[PairDecision] = list(persisted)
+    for item in decisions:
+        digest = decision_hash(item)
+        if digest not in known_hashes:
+            known_hashes.add(digest)
+            effective.append(item)
+    effective = list({decision_hash(item): item for item in effective}.values())
     proposal = compute_proposal(
         observations,
         effective,
@@ -701,11 +1001,12 @@ def _prepare(
         set().union(*proposal.changed_memberships) if proposal.changed_memberships else set()
     )
     cross_assets = {asset for pair in proposal.cross_split_pairs for asset in pair}
+    transition_assets = {asset for asset, _old, _new in proposal.split_transitions}
     quarantined = _affected_releases(
         connection,
         project_id=project_uuid,
         old_version=current_version,
-        changed_assets=changed_assets,
+        changed_assets=changed_assets | transition_assets,
         cross_assets=cross_assets,
     )
     return ProposedGrouping(
@@ -719,6 +1020,7 @@ def _prepare(
         quarantined_releases=quarantined,
         requires_fresh_holdout=proposal.requires_fresh_holdout,
         new_assignment_version=proposal.new_assignment_version,
+        split_transitions=proposal.split_transitions,
     )
 
 
@@ -790,15 +1092,62 @@ def apply_regroup(
             validation_fraction=validation_fraction,
             approved_embedding_version=approved_embedding_version,
         )
-        assert proposal.assignment is not None
-        assert proposal.new_assignment_version is not None
+        if proposal.assignment is None or proposal.new_assignment_version is None:
+            # Closure/invalidation was reported by the proposal (quarantine,
+            # cross-split pairs), but no usable train/val assignment exists.
+            # Fail closed: write nothing; training/evaluation must not start
+            # from an unusable assignment.
+            raise ValueError(
+                "regroup cannot produce a usable train/val assignment; "
+                "quarantined releases require a fresh independent holdout or retraining"
+            )
         current_version, _, _ = _current_assignment(
-            connection, _project_assets(connection, project_uuid)
+            connection, _project_assets(connection, project_uuid), project_uuid
         )
         asset_ids = _project_assets(connection, project_uuid)
         if proposal.new_assignment_version == current_version:
             return PublishedGrouping(
                 assignment_version=current_version,
+                groups=proposal.groups,
+                quarantined_releases=proposal.quarantined_releases,
+                requires_fresh_holdout=proposal.requires_fresh_holdout,
+                published=False,
+            )
+        existing_versions = {
+            row[0]
+            for row in connection.execute(
+                sa.select(source_split_assignment.c.assignment_version).where(
+                    source_split_assignment.c.asset_id.in_(list(asset_ids.values()))
+                )
+            ).all()
+        }
+        if proposal.new_assignment_version in existing_versions:
+            # Returning to a historical grouping (A -> B -> A): reuse the
+            # immutable rows safely instead of violating the production
+            # UNIQUE(assignment_version, asset_id), and record the
+            # publication transition so current-version selection moves
+            # back to the reused version.
+            connection.execute(
+                sa.insert(canonical_event).values(
+                    id=uuid.uuid4(),
+                    event_type=PUBLICATION_EVENT,
+                    aggregate_id=str(project_uuid),
+                    expected_revision=_next_publication_revision(connection, project_uuid),
+                    payload={
+                        "assignment_version": proposal.new_assignment_version,
+                        "previous_assignment_version": current_version,
+                        "reused_existing_version": True,
+                        "groups": proposal.groups,
+                        "requires_fresh_holdout": proposal.requires_fresh_holdout,
+                    },
+                    actor_kind="system",
+                    actor_id=actor_id,
+                )
+            )
+            if audit_hook is not None:
+                audit_hook()
+            return PublishedGrouping(
+                assignment_version=proposal.new_assignment_version,
                 groups=proposal.groups,
                 quarantined_releases=proposal.quarantined_releases,
                 requires_fresh_holdout=proposal.requires_fresh_holdout,
@@ -926,7 +1275,7 @@ def apply_regroup(
                 id=uuid.uuid4(),
                 event_type=PUBLICATION_EVENT,
                 aggregate_id=str(project_uuid),
-                expected_revision=0,
+                expected_revision=_next_publication_revision(connection, project_uuid),
                 payload={
                     "assignment_version": proposal.new_assignment_version,
                     "previous_assignment_version": current_version,
@@ -936,6 +1285,7 @@ def apply_regroup(
                     "conflicting_separations": [
                         list(pair) for pair in proposal.conflicting_separations
                     ],
+                    "split_transitions": [list(item) for item in proposal.split_transitions],
                     "quarantined_releases": [
                         item.release_key for item in proposal.quarantined_releases
                     ],
