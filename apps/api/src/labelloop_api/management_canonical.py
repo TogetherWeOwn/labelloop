@@ -907,50 +907,60 @@ class CanonicalManagementMutations:
             if replay := self.replay(connection, context):
                 return replay
             self.check_project_revision(connection, owned.id, payload.expected_revision)
-            release_id = str(uuid4())
-            candidate = freeze_candidate(connection, owned, payload, release_id)
-            snapshot_sha256 = hashlib.sha256(
-                json.dumps(asdict(candidate), sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            ontology_uuid = connection.execute(
-                select(ontology_release.c.id).where(
-                    ontology_release.c.project_id == owned.id,
-                    ontology_release.c.ontology_key == payload.ontology_id,
-                )
-            ).scalar_one()
-            connection.execute(
-                insert(canonical_dataset_release).values(
-                    id=UUID(release_id),
-                    release_key=release_id,
-                    project_id=owned.id,
-                    ontology_id=ontology_uuid,
-                    assignment_version=payload.assignment_version,
-                    sample_revisions=payload.annotation_revisions,
-                    ontology_hash=candidate.ontology_hash(),
-                    excluded_asset_ids=candidate.excluded_asset_ids,
-                    hashes={"canonical_snapshot_sha256": snapshot_sha256},
-                    frozen=True,
-                )
+            return self._freeze_release(connection, owned, context, payload)
+
+    def _freeze_release(self, connection, owned, context, payload, *, configuration_release=None):
+        release_id = str(uuid4())
+        candidate = freeze_candidate(
+            connection, owned, payload, release_id, configuration_release=configuration_release
+        )
+        snapshot_sha256 = hashlib.sha256(
+            json.dumps(asdict(candidate), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        ontology_uuid = connection.execute(
+            select(ontology_release.c.id).where(
+                ontology_release.c.project_id == owned.id,
+                ontology_release.c.ontology_key == payload.ontology_id,
             )
-            result = Resource(
-                id=release_id,
-                project_id=str(owned.id),
-                kind="dataset-release",
-                revision=1,
-                state="frozen",
+        ).scalar_one()
+        connection.execute(
+            insert(canonical_dataset_release).values(
+                id=UUID(release_id),
+                release_key=release_id,
+                project_id=owned.id,
+                ontology_id=ontology_uuid,
+                assignment_version=payload.assignment_version,
+                sample_revisions=payload.annotation_revisions,
+                ontology_hash=candidate.ontology_hash(),
+                excluded_asset_ids=candidate.excluded_asset_ids,
+                hashes={"canonical_snapshot_sha256": snapshot_sha256},
+                frozen=True,
             )
-            self.record(
-                connection,
-                context,
-                str(owned.id),
-                payload.expected_revision,
-                result,
-                {
-                    "canonical_snapshot_sha256": snapshot_sha256,
-                    "acceptance_policy_id": "canonical-training-eligibility-v1",
-                },
-            )
-            return result
+        )
+        result = Resource(
+            id=release_id,
+            project_id=str(owned.id),
+            kind="dataset-release",
+            revision=1,
+            state="frozen",
+        )
+        self.record(
+            connection,
+            context,
+            str(owned.id),
+            payload.expected_revision,
+            result,
+            {
+                "canonical_snapshot_sha256": snapshot_sha256,
+                "acceptance_policy_id": "canonical-training-eligibility-v1",
+                **(
+                    {"configuration": configuration_release.pin.model_dump(mode="json")}
+                    if configuration_release is not None
+                    else {}
+                ),
+            },
+        )
+        return result
 
     def ingest_asset(
         self, actor: ManagementPrincipal, context: MutationContext, payload: AssetIngest

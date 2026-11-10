@@ -103,6 +103,43 @@ not HTTP producer acceptance. Default mounting, effective project publication,
 production role provisioning, operational dispatch and registry composition remain
 incomplete; real admission retains its exact-consuming-head Security gate.
 
+### Explicit internal local configuration publication
+
+`management_configuration_release.CanonicalLocalConfigurationRelease` takes an
+explicit canonical snapshot producer and immutable version/digest pin. Its
+`publish` command rechecks the current approved setup, source-group evidence and
+trusted local profiles under the canonical project/source locks, then appends an
+attributed `publish_local_configuration` receipt. The receipt fixes runtime to
+`local_ultralytics`, qualification to `not_assessed`, automatic acceptance to
+false and promotion targets to null. It creates no provider or spend authority.
+A snapshot alone remains preparation, not activation. A local publication version
+cannot be reused under a different key; an exact retry acknowledges history.
+
+Only this explicitly bound internal adapter can freeze an edited setup. It
+rechecks both the latest intact local publication and the complete current
+configuration before calling the existing canonical freeze persistence. Missing,
+stale, foreign or ambiguous evidence refuses; no fallback to an older activation
+is allowed. The existing eligibility, completeness, geometry, ontology,
+assignment, expected-revision, retry, lock and atomic audit gates still apply.
+The frozen release receipt retains the selected configuration pin. Historical
+freeze replay does not renew publication or current eligibility.
+
+New Actions cases commission real canonical freeze → fenced compiler execution
+at 320/640 → configuration-bound training enqueue, with immutable input/audit
+pin equality and replay. They seed fixture annotation/grouping explicitly and
+stop before actual CPU training. Publication/freeze audit rollback, stale
+setup/profile/pin, nonadmin identities, races, duplicate versions and corrupt
+publication controls are also commissioned. Pure receipt tests are not database
+acceptance; exact-head Actions must verify these new cases.
+
+This slice does **not** mount a publication route, supply an HTTP freeze plan or
+wire local activation into `CanonicalManagementOperations`. Ordinary mutation and
+read adapters retain their existing draft refusal; project details still report
+no published release ID. Full public project-release identity/version projection,
+configuration-bound HTTP-to-CPU acceptance and production runtime provisioning
+remain incomplete. Default management and real asset admission stay disabled;
+no table, migration, grant, dependency, worker startup or registry change occurs.
+
 ### Anchor-publication approval invalidation
 
 Exact head `66d8a2b6ddb4a1c565bc6e6649c8175284f15fcf` passed

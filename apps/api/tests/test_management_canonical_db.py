@@ -7849,6 +7849,342 @@ def test_configuration_bound_training_refuses_missing_snapshot_before_enqueue_an
     )
 
 
+def local_configuration_inputs(service, owner, *, validation_sample=False):
+    from labelloop_api.management_configuration_release import (
+        CanonicalLocalConfigurationRelease,
+        LocalConfigurationPublish,
+    )
+
+    created, publisher, payload = configuration_inputs(service, owner)
+    if validation_sample:
+        output = io.BytesIO()
+        Image.new("RGB", (26, 14), "blue").save(output, format="PNG")
+        asset = ingest(
+            service,
+            created.id,
+            AssetIngest(
+                expected_revision=payload.expected_revision,
+                original_base64=base64.b64encode(output.getvalue()).decode(),
+                source_uri="fixture:configured-validation",
+                source_group="configuration-val",
+            ),
+            key="configured-validation",
+        )
+        # Explicit fixture annotation/grouping, not the production grouping producer.
+        with owner.begin() as connection:
+            source = connection.execute(
+                select(source_asset).where(source_asset.c.asset_key == asset.id)
+            ).one()
+            ontology = connection.execute(
+                select(ontology_release)
+                .where(ontology_release.c.project_id == created.id)
+                .order_by(ontology_release.c.version.desc())
+                .limit(1)
+            ).one()
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version="assignment-1",
+                    asset_id=source.id,
+                    group_id="configuration-val",
+                    split="val",
+                    seed=7,
+                    algorithm="union-find-grouped-stratified-v2",
+                    thresholds={"phash_max_distance": 8},
+                    reason="fixture grouping",
+                    locked=True,
+                )
+            )
+            connection.execute(
+                insert(completeness_assessment).values(
+                    asset_id=source.id,
+                    revision=1,
+                    ontology_hash=completeness_context_hash(
+                        ontology.class_map, ontology.classes, "Visible packages"
+                    ),
+                    scope_completeness="exhaustive_for_scope",
+                    actor_kind="human",
+                    actor_id=Actor().id,
+                    output_truncated=False,
+                    unresolved_regions=[],
+                )
+            )
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=1,
+                approval_state="human_accepted",
+                review_tier="human_reviewed",
+                scope_completeness="exhaustive_for_scope",
+                objects=[],
+                training_eligible=True,
+            )
+        current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+        payload = payload.model_copy(
+            update={
+                "expected_revision": current.resource.revision,
+                "setup_summary_sha256": current.setup_summary_sha256,
+            }
+        )
+    published = publish_configuration(publisher, payload)
+    local = CanonicalLocalConfigurationRelease(publisher, configuration_pin(owner, created.id))
+    request = LocalConfigurationPublish(
+        expected_revision=published.revision,
+        configuration=local.pin,
+        reason="Controlled local dataset preparation only",
+    )
+    return created, local, request
+
+
+def publish_local_configuration(local, payload, *, key="local-publication", actor=None):
+    actor = actor or Actor()
+    context = MutationContext.bind(
+        actor, key, "publish_local_configuration", str(local.snapshots.project_id), payload
+    )
+    return local.publish(actor, context, payload)
+
+
+def local_freeze_payload(service, created, local, revision):
+    snapshot = local.snapshots.read_current(Reader(), local.pin)
+    with service.engine.connect() as connection:
+        revisions = connection.execute(
+            select(source_asset.c.asset_key, annotation_revision.c.revision)
+            .join(annotation_revision, annotation_revision.c.asset_id == source_asset.c.id)
+            .where(source_asset.c.project_id == created.id)
+            .order_by(annotation_revision.c.revision)
+        ).all()
+    return ReleaseFreeze(
+        expected_revision=revision,
+        ontology_id=snapshot["versions"]["ontology_id"],
+        assignment_version=snapshot["versions"]["assignment"],
+        annotation_revisions={row.asset_key: row.revision for row in revisions},
+    )
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_local_publication_freezes_compiles_and_enqueues_configuration_bound_training(
+    database, compilation, compiler_worker, side
+):
+    from labelloop_api.management_configuration import ConfigurationTrainingBinding
+    from labelloop_api.management_training import CanonicalManagementTraining
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner, validation_sample=True)
+    freeze_payload = local_freeze_payload(service, created, local, request.expected_revision)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(local, created.id, freeze_payload)
+    published = publish_local_configuration(local, request)
+    assert published.state == "frozen"
+    assert publish_local_configuration(local, request) == published
+    freeze_payload = freeze_payload.model_copy(update={"expected_revision": published.revision})
+    # No global draft bypass: the ordinary unbound adapter still refuses.
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(service, created.id, freeze_payload)
+    frozen = freeze(local, created.id, freeze_payload)
+    assert freeze(local, created.id, freeze_payload) == frozen
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.freeze_release",
+                canonical_event.c.payload["result"]["id"].as_string() == frozen.id,
+            )
+        ).one()
+    assert receipt.payload["evidence"]["configuration"] == local.pin.model_dump(mode="json")
+    compiled = compile_request(compilation, frozen.id, recipe=f"full-letterbox-{side}-v1")
+    assert JobRunner(
+        compiler_worker.store,
+        "compile_variant",
+        (Stage("compilation", compiler_worker.compile),),
+        compiler_worker.publish,
+        job_id=compiled.job_id,
+    ).run_once("fixture-configured-compiler")
+    training = CanonicalManagementTraining(
+        service,
+        compilation.enqueue,
+        local.snapshots.profiles,
+        (
+            ConfigurationTrainingBinding(
+                UUID(created.id), local.pin.version, local.pin.snapshot_sha256
+            ),
+        ),
+    )
+    accepted = training_request(training, compiled.resource.id, profile=f"baseline-{side}")
+    assert training_request(training, compiled.resource.id, profile=f"baseline-{side}") == accepted
+    (job,) = training_jobs(owner, created.id)
+    (intent,) = training_receipts(owner, compiled.resource.id)
+    assert job.input == intent.payload["evidence"]["inputs"]
+    assert job.input["configuration"] == {
+        "project_id": created.id,
+        **local.pin.model_dump(mode="json"),
+        "setup_summary_sha256": local.snapshots.read_current(Reader(), local.pin)[
+            "setup_summary_sha256"
+        ],
+    }
+    assert len(training_jobs(owner, created.id)) == release_count(owner, created.id) == 1
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read_freeze_plan(Reader(), created.id)
+        .payload
+        is None
+    )
+    # This fixture executes the real compiler, not CPU training or HTTP bootstrap.
+
+
+@pytest.mark.parametrize("change", ["guide", "profile", "pin"])
+def test_local_publication_refuses_stale_configuration_and_cannot_renew_by_replay(database, change):
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner)
+    published = publish_local_configuration(local, request)
+    payload = local_freeze_payload(service, created, local, published.revision)
+    if change == "guide":
+        saved = save_step_draft(service, created.id, "guide", published.revision, key="later-local")
+        payload = payload.model_copy(update={"expected_revision": saved.revision})
+    elif change == "profile":
+        local = replace(
+            local,
+            snapshots=replace(
+                local.snapshots,
+                profiles=(
+                    replace(local.snapshots.profiles[0], epochs=2),
+                    local.snapshots.profiles[1],
+                ),
+            ),
+        )
+    else:
+        local = replace(local, pin=local.pin.model_copy(update={"snapshot_sha256": "f" * 64}))
+    before = initial_grouping_snapshot(owner, created.id)
+    if change != "pin":
+        assert publish_local_configuration(local, request) == published
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(local, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert release_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize("actor", [Actor(role="reviewer"), Actor(kind="worker"), Actor(id="")])
+def test_local_publication_and_freeze_require_human_admin(database, actor):
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        publish_local_configuration(local, request, actor=actor)
+    payload = local_freeze_payload(service, created, local, request.expected_revision)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        freeze(local, created.id, payload, actor=actor)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("operation", ["publication", "freeze"])
+def test_local_publication_and_bound_freeze_audit_failure_rolls_back(database, operation):
+    service, owner, role = database
+    created, local, request = local_configuration_inputs(service, owner)
+    if operation == "freeze":
+        published = publish_local_configuration(local, request)
+        payload = local_freeze_payload(service, created, local, published.revision)
+    before = initial_grouping_snapshot(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        if operation == "freeze":
+            freeze(local, created.id, payload)
+        else:
+            publish_local_configuration(local, request)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert release_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_local_publication_serializes_competing_revisions(database, same_key):
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner)
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait(timeout=10)
+        try:
+            return publish_local_configuration(
+                local, request, key="local-race" if same_key else f"local-race-{index}"
+            )
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    accepted = [item for item in results if not isinstance(item, str)]
+    assert len(accepted) == (2 if same_key else 1)
+    assert all(item.revision == request.expected_revision + 1 for item in accepted)
+    if same_key:
+        assert results[0] == results[1]
+    else:
+        assert results.count("revision_conflict") == 1
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_local_configuration(
+            local,
+            request.model_copy(
+                update={
+                    "expected_revision": request.expected_revision + 1,
+                }
+            ),
+            key="duplicate-local-version",
+        )
+    assert release_count(owner, created.id) == 0
+
+
+@pytest.mark.parametrize("failure", ["worker", "runtime", "fingerprint", "duplicate"])
+def test_local_freeze_refuses_corrupt_or_ambiguous_publication(database, failure):
+    from copy import deepcopy
+
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner)
+    published = publish_local_configuration(local, request)
+    payload = local_freeze_payload(service, created, local, published.revision)
+    with owner.begin() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.publish_local_configuration",
+            )
+        ).one()
+        saved = deepcopy(receipt.payload)
+        if failure == "duplicate":
+            connection.execute(
+                insert(canonical_event).values(
+                    aggregate_id=receipt.aggregate_id,
+                    event_type=receipt.event_type,
+                    expected_revision=receipt.expected_revision,
+                    actor_kind=receipt.actor_kind,
+                    actor_id=receipt.actor_id,
+                    payload=saved,
+                )
+            )
+        else:
+            changes = {}
+            if failure == "worker":
+                changes["actor_kind"] = "worker"
+            elif failure == "runtime":
+                saved["evidence"]["runtime_binding"] = "ultralytics_platform"
+            else:
+                saved["fingerprint"] = "f" * 64
+            connection.execute(
+                canonical_event.update()
+                .where(canonical_event.c.id == receipt.id)
+                .values(payload=saved, **changes)
+            )
+    current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    payload = payload.model_copy(update={"expected_revision": current.resource.revision})
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        freeze(local, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert release_count(owner, created.id) == 0
+
+
 def test_complete_setup_pack_requires_revision_after_all_draft_and_catalog_writes(database):
     service, owner, _ = database
     created, _, _, plan = anchor_pack_inputs(service, owner, setup_step="all")

@@ -68,10 +68,11 @@ def freeze_candidate(
     release_id: str,
     *,
     lock_sources: bool = True,
+    configuration_release=None,
 ) -> CanonicalDatasetRelease:
-    # Draft saves invalidate setup acceptance, including edits that leave the
-    # old scope string unchanged. Publication/approval is a separate producer;
-    # until it is implemented, an edited draft cannot freeze a new release.
+    # Draft edits still require an explicit local publication adapter. Default
+    # callers have no clearance; a bound adapter rechecks its attributed release
+    # and all current setup/source evidence under this transaction's locks.
     edited = connection.execute(
         select(canonical_event.c.id)
         .where(
@@ -88,7 +89,16 @@ def freeze_candidate(
         )
         .limit(1)
     ).first()
-    if edited is not None or any(
+    if configuration_release is not None:
+        snapshot = configuration_release.verify(
+            connection, project_row, payload.expected_revision, lock_sources=lock_sources
+        )
+        if (
+            snapshot["versions"]["ontology_id"] != payload.ontology_id
+            or snapshot["versions"]["assignment"] != payload.assignment_version
+        ):
+            reject("revision_conflict")
+    elif edited is not None or any(
         key in project_row.access_policy
         for key in (
             "management_scope_draft",
