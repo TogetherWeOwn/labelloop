@@ -48,6 +48,23 @@ observations remain available. Intact groups can still be observed with pending
 suggestions; those suggestions continue to block freeze. These are SELECT-only
 observations, not assignment publication, readiness or qualification.
 
+`collect_source_grouping_evidence` prepares byte-derived input for the delivered
+core grouping engine. It requires matching content-addressed source bytes, recorded
+dimensions and a fully decoded, orientation-normalized RGB JPEG before computing
+core `phash_grayscale`. It neither transposes again nor reencodes the original.
+It retains only supported caller-resolved canonical metadata and observed class
+counts; empty counts are not verified background. Embeddings remain absent, not a
+claim of embedding-model coverage. Byte and pixel bounds fail closed; even a valid
+large normalized original needs a separately bounded processing path rather than
+a decoder-limit override.
+
+This internal collector is not a mounted read, admission path, grouping decision or
+assignment publisher. Its caller still must authorize the project, resolve current
+source/annotation/policy pins and preserve declared source groups and persisted
+relations. No split lock or usable assignment version comes from these observations;
+publication, pending-pair handling and historical holdout protection remain separate
+transactional prerequisites.
+
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.
 Artifacts are application IDs authorized through the common artifact boundary.
