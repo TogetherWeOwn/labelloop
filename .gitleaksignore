@@ -1,1 +1,2 @@
-# Local-only development exemptions are scoped in .gitleaks.toml.
+# No commit fingerprints: classification must survive squash and new commit identities.
+# The sole inert OpenAPI example is matched by exact content AND path in .gitleaks.toml.

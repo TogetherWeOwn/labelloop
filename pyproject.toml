@@ -33,6 +33,8 @@ runtime = [
 [tool.uv]
 default-groups = ["dev"]
 package = false
+exclude-newer-package = { pillow = "P3D" }
+no-build = true
 
 [tool.uv.sources]
 labelloop-api = { workspace = true }

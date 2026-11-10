@@ -1,0 +1,8 @@
+/* P6 acceptance frame only; no application header or sign-in is replaced. */
+body { margin: 0; background: var(--two-color-bg-canvas); }
+.platform-fixture-page { max-width: var(--two-layout-container); margin: 0 auto; padding: var(--two-space-7) var(--two-space-5) var(--two-space-10); }
+.platform-fixture-footer { padding: var(--two-space-5); color: var(--two-color-text-tertiary); font: var(--two-font-size-small)/var(--two-line-height-body) var(--two-font-ui); }
+.platform-fixture-footer a { color: inherit; }
+@media (max-width: 820px) {
+  .platform-fixture-page { padding: var(--two-space-5) var(--two-space-4) var(--two-space-9); }
+}
