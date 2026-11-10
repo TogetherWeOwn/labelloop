@@ -52,7 +52,12 @@ def published_catalog_content(connection: Connection, project_row, workspace_id)
 
 def read_setup_approvals(connection: Connection, project_row, workspace_id) -> list[str]:
     stored = project_row.access_policy.get("management_setup_approvals", {})
-    if not isinstance(stored, dict) or not stored.keys() <= {"scope", "guide", "classes"}:
+    if not isinstance(stored, dict) or not stored.keys() <= {
+        "scope",
+        "guide",
+        "classes",
+        "sources",
+    }:
         raise ManagementFailure(ManagementError(detail="missing_evidence"))
     if not stored:
         return []
@@ -84,7 +89,11 @@ def read_setup_approvals(connection: Connection, project_row, workspace_id) -> l
         draft = (
             published_catalog_content(connection, project_row, workspace_id)
             if step == "classes"
-            else project_row.access_policy.get(f"management_{step}_draft")
+            else project_row.access_policy.get(
+                "management_source_policy_draft"
+                if step == "sources"
+                else f"management_{step}_draft"
+            )
         )
         if (
             not isinstance(draft, dict)

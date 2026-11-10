@@ -375,6 +375,28 @@ No reference is deleted, no descendant release is rewritten, and no publication,
 qualification, real admission or new production grant is enabled. New freezes
 remain gated, and stale *other* accepted references still fail closed until retired.
 
+## Source-policy intent approval (unmounted)
+
+`approveSetupStep`, `POST /projects/{project_id}/setup/approvals`, also accepts
+`step: sources`. Refresh `readProject` for the current project revision and
+`setup_draft_sha256.sources`; submit that exact server-computed digest, a distinct
+idempotency key and a bounded reason. The digest pins the saved source-policy
+metadata keys and collection notes, not current grouping or split evidence.
+
+Approval requires the current attributed draft and reuses the existing admin,
+workspace, project-lock, replay, revision and atomic receipt checks. Approval
+composes with scope/guide/class intent approvals. Subsequent setup/reference
+changes clear all approvals, including a byte-identical source-policy save;
+restoring an old policy value cannot resurrect a stale approval. Project reads
+validate the receipt and current digest without writing state.
+
+This approves **intent only**. It does not compute relations, resolve pairs,
+create or lock assignments, change any source or historical release, publish a
+project/reference pack, grant eligibility, enable admission or qualify automatic
+acceptance. Observed source/group/split fields remain separate from draft intent.
+Effective grouping and project publication remain producer prerequisites. The
+new source-policy cases require exact-head Actions evidence; source is not a pass.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.

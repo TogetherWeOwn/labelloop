@@ -5607,11 +5607,20 @@ def step_approval(service, project_id, step="scope"):
     )
 
 
-@pytest.mark.parametrize("step", ["scope", "guide"])
+def save_step_draft(service, project_id, step, revision=1, key="draft"):
+    saver, factory = {
+        "scope": (save_scope, scope_payload),
+        "guide": (save_guide, guide_payload),
+        "sources": (save_sources, source_policy_payload),
+    }[step]
+    return saver(service, project_id, factory(revision), key=key)
+
+
+@pytest.mark.parametrize("step", ["scope", "guide", "sources"])
 def test_setup_approval_is_attributed_pinned_idempotent_draft_intent(database, step):
     service, owner, _ = database
     created = create(service)
-    (save_scope if step == "scope" else save_guide)(service, created.id)
+    save_step_draft(service, created.id, step)
     payload = step_approval(service, created.id, step)
     result = approve_step(service, created.id, payload)
     assert result.revision == 3 and result.state == "draft"
@@ -5655,12 +5664,34 @@ def test_setup_approvals_compose_without_publishing_or_changing_draft_pins(datab
     assert detail.resource.revision == 5 and detail.published_release_id is None
 
 
-@pytest.mark.parametrize("same_key", [True, False])
-def test_parallel_setup_approvals_share_project_revision_and_retry_locks(database, same_key):
+def test_source_intent_approval_composes_without_assigning_groups_or_publishing(database):
     service, owner, _ = database
     created = create(service)
-    save_scope(service, created.id)
-    payload = step_approval(service, created.id)
+    for revision, step in enumerate(("scope", "guide", "sources"), start=1):
+        save_step_draft(service, created.id, step, revision=revision, key=f"draft-{step}")
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    for step in ("scope", "guide", "sources"):
+        approve_step(
+            service, created.id, step_approval(service, created.id, step), key=f"ok-{step}"
+        )
+    after = reads.read_project(Reader(), created.id)
+    assert after.approved_steps == ["guide", "scope", "sources"]
+    assert after.resource.revision == 7 and after.published_release_id is None
+    assert after.sources == before.sources
+    assert after.sources.assignment_version is None and after.sources.metadata_keys is None
+    assert after.setup_draft_sha256 == before.setup_draft_sha256
+    assert after.source_policy_draft == before.source_policy_draft
+    assert counts(owner, created.id) == (0, 0, 7)
+
+
+@pytest.mark.parametrize("step", ["scope", "sources"])
+@pytest.mark.parametrize("same_key", [True, False])
+def test_parallel_setup_approvals_share_project_revision_and_retry_locks(database, same_key, step):
+    service, owner, _ = database
+    created = create(service)
+    save_step_draft(service, created.id, step)
+    payload = step_approval(service, created.id, step)
     barrier = Barrier(2, timeout=10)
 
     def submit(key):
@@ -5679,7 +5710,7 @@ def test_parallel_setup_approvals_share_project_revision_and_retry_locks(databas
     assert counts(owner, created.id) == (0, 0, 3)
 
 
-@pytest.mark.parametrize("step", ["scope", "guide"])
+@pytest.mark.parametrize("step", ["scope", "guide", "sources"])
 def test_setup_approval_requires_saved_draft_and_exact_digest(database, step):
     service, owner, _ = database
     created = create(service)
@@ -5688,27 +5719,29 @@ def test_setup_approval_requires_saved_draft_and_exact_digest(database, step):
     )
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         approve_step(service, created.id, payload)
-    (save_scope if step == "scope" else save_guide)(service, created.id)
+    save_step_draft(service, created.id, step)
     with pytest.raises(ManagementFailure, match="revision_conflict"):
         approve_step(service, created.id, payload.model_copy(update={"expected_revision": 2}))
     assert counts(owner, created.id) == (0, 0, 2)
 
 
+@pytest.mark.parametrize("step", ["scope", "sources"])
 @pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
-def test_setup_approval_refuses_nonadmin_principals(database, actor):
+def test_setup_approval_refuses_nonadmin_principals(database, actor, step):
     service, owner, _ = database
     created = create(service)
-    save_scope(service, created.id)
+    save_step_draft(service, created.id, step)
     with pytest.raises(ManagementFailure, match="permission_denied"):
-        approve_step(service, created.id, step_approval(service, created.id), actor=actor)
+        approve_step(service, created.id, step_approval(service, created.id, step), actor=actor)
     assert counts(owner, created.id) == (0, 0, 2)
 
 
-def test_setup_approval_replay_checks_workspace_target_and_actor_binding(database):
+@pytest.mark.parametrize("step", ["scope", "sources"])
+def test_setup_approval_replay_checks_workspace_target_and_actor_binding(database, step):
     service, owner, _ = database
     created = create(service)
-    save_scope(service, created.id)
-    payload = step_approval(service, created.id)
+    save_step_draft(service, created.id, step)
+    payload = step_approval(service, created.id, step)
     approve_step(service, created.id, payload)
     with pytest.raises(ManagementFailure, match="not_found"):
         approve_step(replace(service, workspace_id=uuid4()), created.id, payload)
@@ -5720,12 +5753,13 @@ def test_setup_approval_replay_checks_workspace_target_and_actor_binding(databas
     assert counts(owner, created.id) == (0, 0, 3)
 
 
+@pytest.mark.parametrize("step", ["scope", "sources"])
 @pytest.mark.parametrize("table", ["canonical_event", "project"])
-def test_setup_approval_is_atomic_when_runtime_grant_is_missing(database, table):
+def test_setup_approval_is_atomic_when_runtime_grant_is_missing(database, table, step):
     service, owner, role = database
     created = create(service)
-    save_scope(service, created.id)
-    payload = step_approval(service, created.id)
+    save_step_draft(service, created.id, step)
+    payload = step_approval(service, created.id, step)
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     before = reads.read_project(Reader(), created.id)
     privilege = "INSERT" if table == "canonical_event" else "UPDATE (scope, domain, access_policy)"
@@ -5740,19 +5774,17 @@ def test_setup_approval_is_atomic_when_runtime_grant_is_missing(database, table)
     assert approve_step(service, created.id, payload).revision == 3
 
 
-@pytest.mark.parametrize("step", ["scope", "guide"])
+@pytest.mark.parametrize("step", ["scope", "guide", "sources"])
 def test_setup_edits_clear_approvals_even_when_draft_bytes_are_unchanged(database, step):
     service, owner, _ = database
     created = create(service)
-    saver = save_scope if step == "scope" else save_guide
-    factory = scope_payload if step == "scope" else guide_payload
-    saver(service, created.id)
+    save_step_draft(service, created.id, step)
     approve_step(service, created.id, step_approval(service, created.id, step))
     with owner.connect() as connection:
         prior = connection.execute(
             select(project.c.access_policy).where(project.c.id == created.id)
         ).scalar_one()["management_setup_approvals"]
-    saver(service, created.id, factory(3), key="edit")
+    save_step_draft(service, created.id, step, revision=3, key="edit")
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     assert reads.read_project(Reader(), created.id).approved_steps == []
     # Restoring old policy cannot resurrect an approval invalidated by a save.
@@ -5766,23 +5798,27 @@ def test_setup_edits_clear_approvals_even_when_draft_bytes_are_unchanged(databas
         reads.read_project(Reader(), created.id)
 
 
+@pytest.mark.parametrize("step", ["scope", "sources"])
 @pytest.mark.parametrize("tamper", ["receipt", "digest", "step", "draft"])
-def test_setup_approval_projection_requires_current_matching_receipt(database, tamper):
+def test_setup_approval_projection_requires_current_matching_receipt(database, tamper, step):
     service, owner, _ = database
     created = create(service)
-    save_scope(service, created.id)
-    approve_step(service, created.id, step_approval(service, created.id))
+    save_step_draft(service, created.id, step)
+    approve_step(service, created.id, step_approval(service, created.id, step))
     with owner.begin() as connection:
         row = connection.execute(select(project).where(project.c.id == created.id)).one()
         policy = dict(row.access_policy)
         if tamper == "receipt":
-            policy["management_setup_approvals"]["scope"]["receipt_revision"] = 100
+            policy["management_setup_approvals"][step]["receipt_revision"] = 100
         elif tamper == "digest":
-            policy["management_setup_approvals"]["scope"]["draft_sha256"] = "a" * 64
+            policy["management_setup_approvals"][step]["draft_sha256"] = "a" * 64
         elif tamper == "step":
             policy["management_setup_approvals"]["publish"] = {}
         else:
-            policy["management_scope_draft"]["name"] = "Unattributed"
+            if step == "sources":
+                policy["management_source_policy_draft"]["collection_notes"] = "Unattributed"
+            else:
+                policy["management_scope_draft"]["name"] = "Unattributed"
         connection.execute(
             project.update().where(project.c.id == row.id).values(access_policy=policy)
         )

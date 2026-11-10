@@ -133,7 +133,7 @@ class SourcePolicyDraft(Mutation):
 
 class SetupStepApprove(Mutation):
     # Classes require a published catalog; none of these steps qualify a pilot.
-    step: Literal["scope", "guide", "classes"]
+    step: Literal["scope", "guide", "classes", "sources"]
     draft_sha256: Digest
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 

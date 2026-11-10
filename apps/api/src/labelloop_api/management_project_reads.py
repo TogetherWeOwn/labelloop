@@ -290,7 +290,12 @@ def project_detail(
     approvals = read_setup_approvals(connection, project_row, workspace_id)
     pins = {
         step: draft_sha256(value.model_dump(mode="json", exclude={"expected_revision"}))
-        for step, value in (("scope", draft), ("guide", guide), ("classes", catalog))
+        for step, value in (
+            ("scope", draft),
+            ("guide", guide),
+            ("classes", catalog),
+            ("sources", source_policy),
+        )
         if value is not None
     }
     if published is not None:

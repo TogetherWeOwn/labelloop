@@ -1765,7 +1765,8 @@
               "enum": [
                 "scope",
                 "guide",
-                "classes"
+                "classes",
+                "sources"
               ]
             },
             "title": "Setup Draft Sha256",
@@ -3332,7 +3333,8 @@
             "enum": [
               "scope",
               "guide",
-              "classes"
+              "classes",
+              "sources"
             ],
             "title": "Step",
             "type": "string"

@@ -78,6 +78,31 @@ real admission, actual HTTP-to-CPU training/evaluation completion, full project
 publication, registry composition or model quality. Unit delegation/configuration
 cases prove wiring only; exact-head Actions must verify all new cases.
 
+### Verified opt-in HTTP-to-CPU slice
+
+Exact head `e747622b376dec8ace382527f6583685c4e8c72e` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42758177591).
+The [DB/CPU job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42758177591/job/129637394489)
+passed 689 management DB cases, 24 ledger cases and 21 CPU cases. The
+[unit job](https://github.com/TogetherWeOwn/labelloop/actions/runs/42758177591/job/129637394568)
+passed 1,764 tests with 790 skipped. Queue, migration, contract drift, web,
+dev-stack, lint, type and import checks passed; CodeQL and gitleaks also passed.
+These exact-head results supersede the commissioned-only language for existing
+cases above, not for later changes or full production integration.
+
+The [retained CPU artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42758177591/artifacts/13735794828)
+contains both 320/640 `management-pipeline.json` cohorts. Restricted shared-session
+HTTP create/freeze-plan/freeze/compile/train/evaluate, actual fenced workers,
+completed publication/detail/export reads, replay, CSRF, role reload/reviewer
+mutation refusal and logout completed. Both cohorts have four validation sources
+and four nonempty ONNX comparison samples, matching weights/export digests and
+static `[1, 3, size, size]` signatures. Both have **zero recall**: this proves the
+execution/equivalence slice, not model quality, independent gold or qualification.
+Admission and annotation/grouping are explicitly seeded canonical fixture setup,
+not HTTP producer acceptance. Default mounting, effective project publication,
+production role provisioning, operational dispatch and registry composition remain
+incomplete; real admission retains its exact-consuming-head Security gate.
+
 ### Disposable authentication-role contract
 
 The composition fixture exercises the delivered `AuthStore` without changing its

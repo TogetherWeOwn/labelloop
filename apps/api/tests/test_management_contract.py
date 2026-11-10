@@ -105,6 +105,12 @@ MUTATIONS = [
         {**SETUP_APPROVAL, "step": "classes"},
         200,
     ),
+    (
+        "/projects/p/setup/approvals",
+        "approve_setup_step",
+        {**SETUP_APPROVAL, "step": "sources"},
+        200,
+    ),
     ("/projects/p/references", "enroll_reference", REFERENCE, 201),
     ("/projects/p/references/accept", "accept_reference", REFERENCE_ACCEPT, 200),
     ("/projects", "create_project", PROJECT, 201),
@@ -232,7 +238,7 @@ def test_reference_withdrawal_refuses_identity_replacement_and_privileged_fields
         ("step", "publish"),
         ("step", "pilot"),
         ("step", "evidence"),
-        ("step", "sources"),
+        ("step", "grouping"),
         ("draft_sha256", "invalid"),
         ("reason", ""),
         ("expected_revision", True),
@@ -864,6 +870,7 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
         "scope",
         "guide",
         "classes",
+        "sources",
     ]
     assert (
         spec["paths"]["/projects/{project_id}/references/accept"]["post"]["operationId"]

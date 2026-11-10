@@ -528,7 +528,7 @@ class CanonicalManagementMutations:
     ) -> Resource:
         # Import at the composition edge: the read projections share this module's
         # fail-closed error helper, and verify draft rows against their receipts.
-        from .management_project_reads import guide_draft, scope_draft
+        from .management_project_reads import guide_draft, scope_draft, source_policy_draft
 
         self.authorize(actor, context, "approve_setup_step", context.target_id, payload)
         with self.engine.begin() as connection:
@@ -541,7 +541,11 @@ class CanonicalManagementMutations:
             if payload.step == "classes":
                 content = published_catalog_content(connection, owned, self.workspace_id)
             else:
-                loader = scope_draft if payload.step == "scope" else guide_draft
+                loader = {
+                    "scope": scope_draft,
+                    "guide": guide_draft,
+                    "sources": source_policy_draft,
+                }[payload.step]
                 draft = loader(connection, owned, self.workspace_id)
                 content = (
                     draft.model_dump(mode="json", exclude={"expected_revision"})
