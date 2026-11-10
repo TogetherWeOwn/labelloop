@@ -1,6 +1,7 @@
 """Acknowledgements are exact historical evidence, not general pause bypasses."""
 
 from dataclasses import replace
+from typing import Any, Literal
 
 import pytest
 
@@ -15,13 +16,15 @@ from labelloop_core.budget import (
 )
 
 
-def entry(operation="failed", **changes):
+def entry(operation: str = "failed", **changes: Any) -> LedgerEntry:
     request = SpendRequest(operation, "project", "iteration", "2026-11", 10, "v1", "a" * 64)
     return LedgerEntry(request, SpendApproval("admin", request.digest), **changes)
 
 
 @pytest.mark.parametrize("reason", ["insufficient_credits", "estimate_overrun"])
-def test_explicit_acknowledgement_preserves_history_and_default_invariants(reason):
+def test_explicit_acknowledgement_preserves_history_and_default_invariants(
+    reason: Literal["insufficient_credits", "estimate_overrun"],
+) -> None:
     failed = (
         entry(state="insufficient_credits")
         if reason == "insufficient_credits"
@@ -47,7 +50,7 @@ def test_explicit_acknowledgement_preserves_history_and_default_invariants(reaso
         resumed.acknowledge_pause()
 
 
-def test_later_cause_on_new_or_same_operation_repauses():
+def test_later_cause_on_new_or_same_operation_repauses() -> None:
     old = entry(state="insufficient_credits")
     resumed = BudgetGate("project", entries=(old,), pause_reason="insufficient_credits")
     resumed = resumed.acknowledge_pause()
@@ -68,18 +71,20 @@ def test_later_cause_on_new_or_same_operation_repauses():
 
 
 @pytest.mark.parametrize("state", ["reserved", "dispatched", "unconfirmed"])
-def test_in_flight_entries_cannot_be_acknowledged(state):
+def test_in_flight_entries_cannot_be_acknowledged(state: str) -> None:
     paused = BudgetGate("project", entries=(entry(state=state),), pause_reason="estimate_overrun")
     with pytest.raises(BudgetRefused, match="resume_in_flight"):
         paused.acknowledge_pause()
 
 
-def test_acknowledgement_rejects_foreign_substituted_and_malformed_history():
+def test_acknowledgement_rejects_foreign_substituted_and_malformed_history() -> None:
     failed = entry(state="insufficient_credits")
     gate = BudgetGate("project", entries=(failed,), pause_reason="insufficient_credits")
     ack = gate.acknowledge_pause().acknowledged_pause
+    assert ack is not None
+    malformed: Any = {}
     with pytest.raises(ValueError):
-        replace(gate, pause_reason=None, acknowledged_pause={})
+        replace(gate, pause_reason=None, acknowledged_pause=malformed)
     with pytest.raises(ValueError):
         replace(gate, project_id="foreign", entries=(), acknowledged_pause=ack)
     with pytest.raises(ValueError):
@@ -88,11 +93,13 @@ def test_acknowledgement_rejects_foreign_substituted_and_malformed_history():
         replace(
             gate, entries=(replace(failed, reserved_autonomously=True),), acknowledged_pause=ack
         )
-    for entries in ([], (), (failed, failed), (entry(),)):
+    malformed_entries: tuple[Any, ...] = ([], (), (failed, failed), (entry(),))
+    for entries in malformed_entries:
         with pytest.raises(ValueError):
             AcknowledgedPause("project", "insufficient_credits", entries)
+    malformed_reason: Any = "approval_exhausted"
     with pytest.raises(ValueError):
-        AcknowledgedPause("project", "approval_exhausted", (failed,))
+        AcknowledgedPause("project", malformed_reason, (failed,))
     with pytest.raises(ValueError):
         replace(
             gate,
@@ -101,7 +108,7 @@ def test_acknowledgement_rejects_foreign_substituted_and_malformed_history():
         )
 
 
-def test_acknowledgement_never_changes_exposure_or_replenishes_limits():
+def test_acknowledgement_never_changes_exposure_or_replenishes_limits() -> None:
     failed = entry(state="insufficient_credits", exposure_floor=15)
     resumed = BudgetGate(
         "project", BudgetPolicy(15, 15, 20), (failed,), "insufficient_credits"

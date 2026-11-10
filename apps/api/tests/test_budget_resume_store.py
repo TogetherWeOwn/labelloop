@@ -115,7 +115,7 @@ def test_resume_restart_preserves_full_ledger_policy_claims_and_history(store, r
     refused(
         "pixel_provider_disallowed",
         store.prepare,
-        request("foreign"),
+        request("foreign", estimate=1),
         DispatchIntent("platform", "other"),
         actor=PLATFORM,
     )

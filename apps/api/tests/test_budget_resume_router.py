@@ -27,7 +27,9 @@ def password_hash():
 
 @pytest.fixture
 def client(store, monkeypatch, password_hash):
-    auth_schema.metadata.create_all(store.engine)
+    # Public already contains migrated auth tables in this disposable Actions DB.
+    # Force creation in the per-test search_path instead of finding public tables.
+    auth_schema.metadata.create_all(store.engine, checkfirst=False)
     with store.engine.begin() as connection:
         for name, kind, role in (
             ("admin", "human", "admin"),
