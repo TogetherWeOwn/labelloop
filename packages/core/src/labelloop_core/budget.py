@@ -194,11 +194,41 @@ class LedgerEntry:
 
 
 @dataclass(frozen=True)
+class AcknowledgedPause:
+    """Exact terminal ledger snapshot explicitly acknowledged by a trusted admin port.
+
+    Not an approval or a dispatch grant. The durable adapter binds this evidence
+    to an immutable actor event; callers without it retain fail-closed semantics.
+    """
+
+    project_id: str
+    pause_reason: Literal["insufficient_credits", "estimate_overrun"]
+    entries: tuple[LedgerEntry, ...]
+
+    def __post_init__(self) -> None:
+        identity(self.project_id)
+        if self.pause_reason not in {"insufficient_credits", "estimate_overrun"}:
+            raise ValueError("unsupported acknowledged pause")
+        if type(self.entries) is not tuple or not self.entries:
+            raise ValueError("acknowledgement requires an immutable ledger snapshot")
+        if any(
+            not isinstance(entry, LedgerEntry)
+            or entry.request.project_id != self.project_id
+            or entry.state not in {"settled", "cancelled", "insufficient_credits"}
+            for entry in self.entries
+        ):
+            raise ValueError("acknowledgement requires terminal project entries")
+        if len({entry.request.operation_id for entry in self.entries}) != len(self.entries):
+            raise ValueError("acknowledgement operation IDs must be unique")
+
+
+@dataclass(frozen=True)
 class BudgetGate:
     project_id: str
     policy: BudgetPolicy = BudgetPolicy()
     entries: tuple[LedgerEntry, ...] = ()
     pause_reason: Literal["insufficient_credits", "estimate_overrun"] | None = None
+    acknowledged_pause: AcknowledgedPause | None = None
 
     def __post_init__(self) -> None:
         identity(self.project_id)
@@ -210,8 +240,23 @@ class BudgetGate:
             raise ValueError("ledger cannot cross project boundaries")
         if len({entry.request.operation_id for entry in self.entries}) != len(self.entries):
             raise ValueError("operation IDs must be unique within the project")
+        acknowledged = self.acknowledged_pause
+        if acknowledged is not None:
+            if not isinstance(acknowledged, AcknowledgedPause):
+                raise ValueError("typed acknowledgement evidence required")
+            if acknowledged.project_id != self.project_id:
+                raise ValueError("acknowledgement cannot cross project boundaries")
+            for prior in acknowledged.entries:
+                current = self.entry(prior.request.operation_id)
+                if (
+                    prior.request != current.request
+                    or prior.approval != current.approval
+                    or prior.reserved_autonomously != current.reserved_autonomously
+                ):
+                    raise ValueError("acknowledgement substituted immutable ledger identity")
+        unacknowledged = tuple(entry for entry in self.entries if not self._acknowledged(entry))
         if (
-            any(entry.state == "insufficient_credits" for entry in self.entries)
+            any(entry.state == "insufficient_credits" for entry in unacknowledged)
             and not self.pause_reason
         ):
             raise ValueError("a 402 must pause paid stages")
@@ -219,11 +264,28 @@ class BudgetGate:
             any(
                 (entry.actual is not None and entry.actual > entry.request.estimate)
                 or entry.exposure_floor > entry.request.estimate
-                for entry in self.entries
+                for entry in unacknowledged
             )
             and not self.pause_reason
         ):
             raise ValueError("an estimate overrun must pause paid stages")
+
+    def _acknowledged(self, entry: LedgerEntry) -> bool:
+        return self.acknowledged_pause is not None and entry in self.acknowledged_pause.entries
+
+    def acknowledge_pause(self) -> "BudgetGate":
+        """Clear only the observed pause, retaining every entry and its exposure."""
+        if self.pause_reason is None:
+            raise BudgetRefused("paid_stages_not_paused")
+        if not self.entries or any(
+            entry.state in {"reserved", "dispatched", "unconfirmed"} for entry in self.entries
+        ):
+            raise BudgetRefused("resume_in_flight")
+        return replace(
+            self,
+            pause_reason=None,
+            acknowledged_pause=AcknowledgedPause(self.project_id, self.pause_reason, self.entries),
+        )
 
     def entry(self, operation_id: str) -> LedgerEntry:
         for entry in self.entries:
@@ -334,11 +396,19 @@ class BudgetGate:
         changed: LedgerEntry,
         pause: Literal["insufficient_credits", "estimate_overrun"] | None = None,
     ) -> "BudgetGate":
+        pause = pause or self.pause_reason
+        if pause is None and not self._acknowledged(changed):
+            if changed.state == "insufficient_credits":
+                pause = "insufficient_credits"
+            elif (
+                changed.actual is not None and changed.actual > changed.request.estimate
+            ) or changed.exposure_floor > changed.request.estimate:
+                pause = "estimate_overrun"
         return replace(
             self,
             entries=tuple(
                 changed if entry.request.operation_id == changed.request.operation_id else entry
                 for entry in self.entries
             ),
-            pause_reason=pause or self.pause_reason,
+            pause_reason=pause,
         )

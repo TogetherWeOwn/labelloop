@@ -207,6 +207,8 @@ class BudgetStore:
         )
 
     def _gate(self, connection, head) -> BudgetGate:
+        from labelloop_api.budget_resume_store import load_acknowledgement
+
         return BudgetGate(
             head["project_id"],
             BudgetPolicy(**head["policy"]["limits"]),
@@ -215,6 +217,7 @@ class BudgetStore:
                 for row in self._operations(connection, head["project_id"])
             ),
             head["pause_reason"],
+            load_acknowledgement(connection, head),
         )
 
     @staticmethod
