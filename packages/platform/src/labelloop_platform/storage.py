@@ -45,7 +45,13 @@ class SignedStorage:
                 re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", host) is None
             )
 
-    def _transfer(self, method: str, target: StorageTarget, content: bytes | None) -> StorageResult:
+    def _transfer(
+        self,
+        method: str,
+        target: StorageTarget,
+        content: bytes | None,
+        max_bytes: int | None = None,
+    ) -> StorageResult:
         try:
             url = httpx.URL(target.url)
             if (
@@ -60,12 +66,21 @@ class SignedStorage:
             for name, value in target.headers.items():
                 lower = name.lower()
                 # Returned storage instructions are untrusted; no auth/cookies/host override.
-                if lower not in ("content-type", "content-md5", "content-length") and not (
+                # The one exception is the exact create-only precondition the
+                # signed-URL flow returns; any other conditional value rejects.
+                if lower == "if-none-match":
+                    if value != "*":
+                        return StorageResult(Outcome.REJECTED)
+                    headers[name] = value
+                elif lower not in ("content-type", "content-md5", "content-length") and not (
                     lower.startswith("x-amz-") or lower.startswith("x-goog-")
                 ):
                     return StorageResult(Outcome.REJECTED)
-                headers[name] = value
-            response = self._http.request(method, url, headers=headers, content=content)
+                else:
+                    headers[name] = value
+            response = self._http.request(
+                method, url, headers=headers, content=content, max_bytes=max_bytes
+            )
         except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError):
             return StorageResult(
                 Outcome.RECONCILE_REQUIRED if method == "PUT" else Outcome.TRANSPORT_ERROR
@@ -83,8 +98,10 @@ class SignedStorage:
         # A failed/uncertain create-only PUT requires a fresh signed URL/session, not a repeat.
         return self._transfer("PUT", target, content)
 
-    def get(self, target: StorageTarget) -> StorageResult:
-        return self._transfer("GET", target, None)
+    def get(self, target: StorageTarget, *, max_bytes: int | None = None) -> StorageResult:
+        # An oversize GET aborts mid-transfer (ValueError from the bounded
+        # read) and surfaces as TRANSPORT_ERROR, never a buffered result.
+        return self._transfer("GET", target, None, max_bytes)
 
     def close(self) -> None:
         self._http.close()

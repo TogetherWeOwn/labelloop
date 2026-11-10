@@ -1,0 +1,65 @@
+{
+  "provenance": {
+    "kind": "synthetic recorded exchange, not a live account capture",
+    "contract": "https://github.com/ultralytics/sdk/blob/8af3921/openapi.json",
+    "sdk_version": "0.1.107",
+    "license": "AGPL-3.0; original synthetic fixture data",
+    "notes": "Response shape follows Image, UploadSignedUrlResponse and IngestDatasetResponse. No real pixels, provider keys or signed targets."
+  },
+  "image": {
+    "method": "GET",
+    "path": "/api/images/507f1f77bcf86cd799439011",
+    "status": 200,
+    "response": {
+      "metadata": {"fixture": true},
+      "properties": {
+        "id": "507f1f77bcf86cd799439011",
+        "datasetId": "507f1f77bcf86cd799439012",
+        "filename": "source.jpg",
+        "hash": "00000000000000000000000000000000",
+        "extension": "jpg",
+        "width": 320,
+        "height": 320,
+        "split": "train",
+        "annotationCount": 2,
+        "retainedByVersion": false,
+        "createdAt": "2026-11-07T00:00:00Z",
+        "updatedAt": "2026-11-07T00:00:00Z"
+      },
+      "labels": [
+        {"classId": 0, "bbox": [0.45566, 0.45072, 0.29691, 0.24404]},
+        {"classId": 1, "bbox": [0.5, 0.5, 0.2, 0.2], "segments": [0.4, 0.4, 0.6, 0.4, 0.6, 0.6, 0.4, 0.6]}
+      ],
+      "classNames": ["Object A", "Object B"]
+    }
+  },
+  "signed": {
+    "method": "POST",
+    "path": "/api/upload/signed-url",
+    "status": 200,
+    "request": {
+      "assetId": "507f1f77bcf86cd799439012",
+      "assetType": "datasets",
+      "filename": "release.zip",
+      "contentType": "application/zip",
+      "totalBytes": 128
+    },
+    "response": {
+      "sessionId": "507f1f77bcf86cd799439013",
+      "uploadUrl": "https://storage.example.invalid/create-only-target",
+      "expiresAt": "2026-11-07T12:00:00Z",
+      "headers": {"Content-Type": "application/zip", "If-None-Match": "*"}
+    }
+  },
+  "ingest": {
+    "method": "POST",
+    "path": "/api/datasets/fixture/release-7-full320/ingest",
+    "status": 201,
+    "request": {
+      "sessionId": "507f1f77bcf86cd799439013",
+      "classMapping": {"Object A": 0, "Object B": 1},
+      "conflictPolicy": "skip"
+    },
+    "response": {"jobId": "fixture-job-1", "status": "queued"}
+  }
+}
