@@ -17,6 +17,7 @@ class SetupApprovalTests(TestCase):
         digest = draft_sha256(draft)
         project = SimpleNamespace(
             id="project",
+            workspace_id="workspace",
             access_policy={
                 "management_scope_draft": draft,
                 "management_setup_approvals": {
@@ -25,12 +26,33 @@ class SetupApprovalTests(TestCase):
             },
         )
         receipt = SimpleNamespace(
-            expected_revision=3, payload={"evidence": {"draft_sha256": digest}}
+            expected_revision=3,
+            aggregate_id="project",
+            event_type="management.approve_setup_step",
+            actor_kind="human",
+            actor_id="admin",
+            payload={
+                "workspace_id": "workspace",
+                "aggregate_revision": 4,
+                "result": {
+                    "id": "project",
+                    "project_id": "project",
+                    "kind": "project",
+                    "state": "draft",
+                    "revision": 4,
+                },
+                "evidence": {
+                    "step": "scope",
+                    "draft_sha256": digest,
+                    "reason": "Reviewed scope",
+                },
+            },
         )
         connection = Mock()
+        connection.receipt = receipt
         connection.execute.side_effect = [
             Mock(scalar_one=Mock(return_value=invalidation)),
-            Mock(one_or_none=Mock(return_value=receipt)),
+            Mock(all=Mock(return_value=[receipt])),
         ]
         return connection, project
 
@@ -45,6 +67,65 @@ class SetupApprovalTests(TestCase):
         self.assertIn("project", parameters.values())
         self.assertIn("workspace", parameters.values())
         self.assertIn("human", parameters.values())
+
+    def test_approval_requires_intact_attribution_revision_and_result(self):
+        for field, value in [
+            ("actor_id", ""),
+            ("actor_kind", "worker"),
+            ("aggregate_id", "foreign"),
+            ("event_type", "management.save_scope_draft"),
+            ("expected_revision", True),
+        ]:
+            with self.subTest(field=field):
+                connection, project = self.inputs(2)
+                receipt = connection.receipt
+                setattr(receipt, field, value)
+                with self.assertRaisesRegex(ManagementFailure, "missing_evidence"):
+                    read_setup_approvals(connection, project, "workspace")
+        for section, field, value in [
+            (None, "workspace_id", "foreign"),
+            (None, "aggregate_revision", 5),
+            (None, "aggregate_revision", True),
+            ("result", "id", "foreign"),
+            ("result", "project_id", "foreign"),
+            ("result", "kind", "asset"),
+            ("result", "state", "frozen"),
+            ("result", "revision", 5),
+            ("evidence", "step", "guide"),
+            ("evidence", "reason", ""),
+        ]:
+            with self.subTest(section=section, field=field):
+                connection, project = self.inputs(2)
+                receipt = connection.receipt
+                target = receipt.payload if section is None else receipt.payload[section]
+                target[field] = value
+                with self.assertRaisesRegex(ManagementFailure, "missing_evidence"):
+                    read_setup_approvals(connection, project, "workspace")
+
+    def test_duplicate_latest_approval_is_not_arbitrarily_selected(self):
+        connection, project = self.inputs(2)
+        connection.execute.side_effect = [
+            Mock(scalar_one=Mock(return_value=2)),
+            Mock(all=Mock(return_value=[connection.receipt, connection.receipt])),
+        ]
+        with self.assertRaisesRegex(ManagementFailure, "missing_evidence"):
+            read_setup_approvals(connection, project, "workspace")
+
+    def test_older_distinct_approval_history_does_not_obscure_latest_receipt(self):
+        connection, project = self.inputs(2)
+        connection.execute.side_effect = [
+            Mock(scalar_one=Mock(return_value=2)),
+            Mock(all=Mock(return_value=[connection.receipt, SimpleNamespace(expected_revision=1)])),
+        ]
+        self.assertEqual(read_setup_approvals(connection, project, "workspace"), ["scope"])
+
+    def test_malformed_receipt_has_a_typed_missing_evidence_refusal(self):
+        for field, value in [("evidence", None), ("result", {}), ("result", None)]:
+            with self.subTest(field=field, value=value):
+                connection, project = self.inputs(2)
+                connection.receipt.payload[field] = value
+                with self.assertRaisesRegex(ManagementFailure, "missing_evidence"):
+                    read_setup_approvals(connection, project, "workspace")
 
     def test_older_approval_cannot_survive_a_later_invalidation(self):
         connection, project = self.inputs(4)
@@ -105,22 +186,19 @@ class SetupApprovalTests(TestCase):
         project.access_policy["management_setup_approvals"] = {
             "evidence": {"draft_sha256": digest, "receipt_revision": 4}
         }
-        connection.execute.side_effect = [
-            Mock(scalar_one=Mock(return_value=2)),
-            Mock(
-                one_or_none=Mock(
-                    return_value=SimpleNamespace(
-                        expected_revision=3,
-                        payload={"evidence": {"draft_sha256": digest, "anchor_pack": pin}},
-                    )
-                )
-            ),
-        ]
+        connection.receipt.payload["evidence"] = {
+            "step": "evidence",
+            "draft_sha256": digest,
+            "anchor_pack": pin,
+            "reason": "Reviewed anchors",
+        }
         with patch(
             "labelloop_api.management_setup.evidence_pack_digest", return_value=digest
         ) as verifier:
             self.assertEqual(read_setup_approvals(connection, project, "workspace"), ["evidence"])
-        verifier.assert_called_once_with(connection, project, "workspace", pin, lock_sources=False)
+        self.assertEqual(verifier.call_args.args[:3], (connection, project, "workspace"))
+        self.assertEqual(verifier.call_args.args[3].model_dump(mode="json"), pin)
+        self.assertEqual(verifier.call_args.kwargs, {"lock_sources": False})
 
     def test_evidence_digest_uses_current_verified_pack_not_client_scope_claims(self):
         from labelloop_api.management_setup import evidence_pack_digest

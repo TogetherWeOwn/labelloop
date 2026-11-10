@@ -188,6 +188,13 @@ Historical replay is acknowledgment, never renewal. Evidence approval remains dr
 intent: it grants no pilot qualification, bulk binding, project publication or freeze
 clearance. The default app and real admission remain disabled.
 
+All five setup approvals require a fully validated attributed receipt: the owned
+project/workspace, human actor, approval step/body, aggregate revision and draft
+project result must agree before approval is projected or consumed by another
+approval. A tied latest revision is ambiguous and refuses; older distinct approval
+history remains valid history, not a current fallback. This check adds no new
+approval or publication authority and changes no historical request serialization.
+
 This supplies current evidence validation and bounded approval, not automatic
 bulk-job binding, retrieval or freeze clearance. A consuming
 transaction must own its snapshot and locking policy; a successful read is not a

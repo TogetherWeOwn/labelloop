@@ -6205,6 +6205,82 @@ def test_setup_approval_projection_requires_current_matching_receipt(database, t
         )
 
 
+@pytest.mark.parametrize("step", ["scope", "sources"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "duplicate",
+        "actor",
+        "result-project",
+        "result-state",
+        "result-revision",
+        "aggregate-revision",
+        "reason",
+        "malformed-result",
+    ],
+)
+def test_setup_approval_receipt_integrity_gates_reads_and_new_approvals(database, step, failure):
+    from copy import deepcopy
+
+    service, owner, _ = database
+    created = create(service)
+    save_step_draft(service, created.id, step)
+    approval = step_approval(service, created.id, step)
+    result = approve_step(service, created.id, approval)
+    with owner.begin() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.approve_setup_step",
+            )
+        ).one()
+        payload = deepcopy(receipt.payload)
+        changes = {}
+        if failure == "duplicate":
+            connection.execute(
+                insert(canonical_event).values(
+                    event_type=receipt.event_type,
+                    aggregate_id=receipt.aggregate_id,
+                    expected_revision=receipt.expected_revision,
+                    actor_kind=receipt.actor_kind,
+                    actor_id=receipt.actor_id,
+                    payload=payload,
+                )
+            )
+        else:
+            if failure == "actor":
+                changes["actor_id"] = ""
+            elif failure == "result-project":
+                payload["result"]["project_id"] = str(uuid4())
+            elif failure == "result-state":
+                payload["result"]["state"] = "frozen"
+            elif failure == "result-revision":
+                payload["result"]["revision"] += 1
+            elif failure == "aggregate-revision":
+                payload["aggregate_revision"] += 1
+            elif failure == "reason":
+                payload["evidence"]["reason"] = ""
+            else:
+                payload["result"] = None
+            connection.execute(
+                canonical_event.update()
+                .where(canonical_event.c.id == receipt.id)
+                .values(payload=payload, **changes)
+            )
+    before = counts(owner, created.id)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        approve_step(
+            service,
+            created.id,
+            approval.model_copy(update={"expected_revision": result.revision}),
+            key="after-damaged-approval",
+        )
+    assert counts(owner, created.id) == before
+
+
 def test_scope_save_reconciles_replay_and_projects_only_attributed_draft(database):
     service, owner, _ = database
     created = create(service)
