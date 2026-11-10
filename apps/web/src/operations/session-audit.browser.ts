@@ -104,6 +104,117 @@ for (const width of [1280, 390]) {
   });
 }
 
+for (const width of [1280, 390]) {
+  test.describe(`${width}px session audit lifetime`, () => {
+    test.use({ viewport: { width, height: 800 } });
+
+    test('parent rerenders retain the port, filters and loaded pages', async ({ page }) => {
+      const requests: URL[] = [];
+      await page.route('**/api/**', async (route) => {
+        const url = new URL(route.request().url());
+        requests.push(url);
+        const after = url.searchParams.get('after');
+        await route.fulfill({ json: { project_id: 'audit-demo', events: [after === null ? events[0] : events[1]], total: 2, next_after: after === null ? `Promotion/${id}` : null } });
+      });
+      await page.goto('/operational-fixtures.html?view=audit&state=session-scope-swap');
+      await expect(page.locator('tbody tr')).toHaveCount(1);
+      await page.getByLabel('Image, run, model or person').fill('recorded');
+      await expect(page.locator('tbody tr')).toHaveCount(1);
+      await page.getByRole('button', { name: 'Show 50 more' }).click();
+      await expect(page.locator('tbody tr')).toHaveCount(2);
+      const count = requests.length;
+      await page.getByRole('button', { name: 'Re-render audit parent' }).click();
+      await expect(page.getByText('Audit parent renders: 1', { exact: true })).toBeVisible();
+      await expect(page.locator('tbody tr')).toHaveCount(2);
+      await expect(page.getByLabel('Image, run, model or person')).toHaveValue('recorded');
+      await expect(page.getByText('2 of 2 events', { exact: true })).toBeVisible();
+      expect(requests).toHaveLength(count);
+    });
+
+    for (const pending of ['initial', 'page'] as const) {
+      test(`project replacement cancels a pending ${pending} read and resets its query`, async ({ page }) => {
+        let release: (() => void) | undefined;
+        const delayed = new Promise<void>((resolve) => { release = resolve; });
+        let finish: (() => void) | undefined;
+        const finished = new Promise<void>((resolve) => { finish = resolve; });
+        const replacements: URL[] = [];
+        const isOld = (url: URL) => url.pathname === endpoint && (pending === 'initial' || url.searchParams.has('after'));
+        await page.route('**/api/**', async (route) => {
+          const url = new URL(route.request().url());
+          if (isOld(url)) {
+            await delayed;
+            try { await route.fulfill({ json: { project_id: 'audit-demo', events: [events[1]], total: 2, next_after: null } }); } finally { finish?.(); }
+          } else if (url.pathname.includes('audit-replacement')) {
+            replacements.push(url);
+            await route.fulfill({ json: { project_id: 'audit-replacement', events: [{ ...events[2], sentence: 'Replacement project evidence.' }], total: 1, next_after: null } });
+          } else {
+            await route.fulfill({ json: { project_id: 'audit-demo', events: [events[0]], total: 2, next_after: `Promotion/${id}` } });
+          }
+        });
+        const oldRequest = page.waitForRequest((request) => isOld(new URL(request.url())));
+        await page.goto('/operational-fixtures.html?view=audit&state=session-scope-swap');
+        if (pending === 'page') {
+          await expect(page.locator('tbody tr')).toHaveCount(1);
+          await page.getByLabel('Image, run, model or person').fill('previous');
+          await expect(page.locator('tbody tr')).toHaveCount(1);
+          await page.getByRole('button', { name: 'Show 50 more' }).click();
+        }
+        await oldRequest;
+        const cancelled = page.waitForEvent('requestfailed', (request) => isOld(new URL(request.url())));
+        await page.getByRole('button', { name: 'Replace audit scope' }).click();
+        await cancelled;
+        await expect(page.locator('tbody')).toContainText('Replacement project evidence.');
+        await expect(page.getByLabel('Image, run, model or person')).toHaveValue('');
+        release?.();
+        await finished;
+        await expect(page.locator('tbody tr')).toHaveCount(1);
+        await expect(page.locator('tbody')).not.toContainText('Current name');
+        await expect(page.locator('tbody')).not.toContainText('Paid operation refused.');
+        await expect(page.getByText('1 of 1 events', { exact: true })).toBeVisible();
+        expect(replacements).toHaveLength(1);
+        expect(replacements[0].searchParams.has('after')).toBe(false);
+        expect(replacements[0].searchParams.has('search')).toBe(false);
+      });
+    }
+
+    test('project replacement cancels an old export without downloading its late response', async ({ page }) => {
+      let release: (() => void) | undefined;
+      const delayed = new Promise<void>((resolve) => { release = resolve; });
+      let finish: (() => void) | undefined;
+      const finished = new Promise<void>((resolve) => { finish = resolve; });
+      const downloads: string[] = [];
+      const errors: string[] = [];
+      page.on('download', (item) => downloads.push(item.suggestedFilename()));
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.route('**/api/**', async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === `${endpoint}/export`) {
+          await delayed;
+          try { await route.fulfill({ contentType: 'application/x-ndjson', body: `${JSON.stringify(events[0])}\n` }); } finally { finish?.(); }
+        } else {
+          const replacement = url.pathname.includes('audit-replacement');
+          await route.fulfill({ json: { project_id: replacement ? 'audit-replacement' : 'audit-demo', events: [replacement ? events[2] : events[0]], total: 1, next_after: null } });
+        }
+      });
+      await page.goto('/operational-fixtures.html?view=audit&state=session-scope-swap');
+      await expect(page.locator('tbody tr')).toHaveCount(1);
+      const oldExport = page.waitForRequest((request) => new URL(request.url()).pathname === `${endpoint}/export`);
+      await page.getByRole('button', { name: 'Export JSON lines' }).click();
+      await oldExport;
+      const cancelled = page.waitForEvent('requestfailed', (request) => new URL(request.url()).pathname === `${endpoint}/export`);
+      await page.getByRole('button', { name: 'Replace audit scope' }).click();
+      await cancelled;
+      await expect(page.locator('tbody')).toContainText(events[2].sentence);
+      release?.();
+      await finished;
+      await expect(page.getByRole('button', { name: 'Export JSON lines' })).toBeEnabled();
+      await expect(page.getByRole('status')).not.toHaveText('Export downloaded.');
+      expect(downloads).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+  });
+}
+
 for (const failure of ['expired', 'foreign-scope', 'malformed-export'] as const) {
   test(`session audit ${failure} fails closed without retry or private error output`, async ({ page }) => {
     let requests = 0;

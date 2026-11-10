@@ -5,7 +5,7 @@ import { AuditLog, AuditView } from './AuditLog.tsx';
 import { CostsView } from './CostsView.tsx';
 import { SessionCostsView } from './SessionCostsView.tsx';
 import { RecipeOperations } from './RecipeOperations.tsx';
-import { sessionAuditPort } from './session-audit.ts';
+import { SessionAuditLog } from './SessionAuditLog.tsx';
 import { auditFixture, costsFixture, fixtureTime, recipesFixture, recordedAuditPort } from './fixtures.ts';
 import './operations.css';
 import './fixture.css';
@@ -19,8 +19,6 @@ const query: AuditQuery = { kinds: ['Review', 'Promotion', 'Connection', 'Budget
 // as authentication. Production integration must replace this entry entirely.
 const authorizedEvents = role === 'reviewer' ? auditFixture.filter((event) => event.kind === 'Review') : auditFixture;
 const auditPort = recordedAuditPort(authorizedEvents);
-// Browser tests intercept this fixed fixture scope. No login or product mount is implied.
-const sessionPort = sessionAuditPort('audit-demo');
 const ready = <T,>(data: T): ViewState<T> => scenario === 'loading' ? { status: 'loading' } : scenario === 'error' ? { status: 'error', retry: () => location.reload() } : { status: 'ready', data, updatedAt: fixtureTime, stale: scenario === 'stale' };
 
 // Deterministic deferred ports exercise mounted lifetime changes without timers or network.
@@ -89,11 +87,12 @@ export function FixtureApp() {
     <main id="content" tabIndex={-1}>
       {view === 'costs' && scenario === 'session-scope-swap' && <button className="pill ghost" onClick={() => setReplaced(true)}>Replace cost scope</button>}
       {view === 'costs' && scenario === 'background-refresh' && <div><button className="pill ghost" onClick={() => { setCosts((record) => ({ ...record, policy: { ...record.policy } })); setRefresh((value) => value + 1); }}>Complete background Costs read</button><p role="status">Authoritative Costs reads: {refresh}</p></div>}
+      {view === 'audit' && scenario === 'session-scope-swap' && <div><button className="pill ghost" onClick={() => setReplaced(true)}>Replace audit scope</button><button className="pill ghost" onClick={() => setRefresh((value) => value + 1)}>Re-render audit parent</button><p>Audit parent renders: {refresh}</p></div>}
       {view === 'audit' && scenario === 'deferred-page' && <div className="chips"><button className="pill ghost" onClick={pagination.complete}>Complete next audit page</button><button className="pill ghost" onClick={pagination.fail}>Fail next audit page</button></div>}
       {view === 'audit' && auditTest && <div className="chips" aria-label="Recorded lifecycle controls">
         {scenario === 'scope-swap' ? <><button className="pill ghost" onClick={() => setReplaced(true)}>Replace authorized port</button><button className="pill ghost" disabled={releasedExport} onClick={() => { lifecycle.completeExport(); setReleasedExport(true); }}>Release previous export</button></> : <><button className="pill ghost" onClick={() => { lifecycle.refresh(); setAuditStale(false); setAuditGeneration((value) => value + 1); }}>Refresh audit evidence</button><button className="pill ghost" onClick={lifecycle.completeQuery}>Complete refreshed query</button><button className="pill ghost" onClick={() => setAuditStale(true)}>Mark audit stale</button></>}
       </div>}
-      {view === 'costs' && (scenario === 'session' || scenario === 'session-scope-swap') ? <SessionCostsView project={replaced ? 'costs-replacement' : 'costs-demo'} month="2026-11" iteration="iteration-a" role={role} scope={{ kind: 'project', id: replaced ? 'costs-replacement' : 'costs-demo' }} /> : view === 'costs' ? <CostsView readId={refresh} state={ready(costs)} role={role} scope={scope} commands={commands} onRefresh={() => setRefresh(refresh + 1)} /> : view === 'models' ? <RecipeOperations state={ready(scenario === 'empty' ? [] : recipesFixture)} role={role} /> : scenario === 'loading' || scenario === 'error' || scenario === 'empty' ? <AuditView state={auditState} query={auditQuery} role={role} onQuery={setAuditQuery} onMore={() => undefined} onExport={() => undefined} /> : <AuditLog port={scenario === 'session' ? sessionPort : scenario === 'deferred-page' ? pagination.port : auditTest ? replaced ? lifecycle.replacement : lifecycle.port : auditPort} role={role} stale={scenario === 'stale' || auditStale} updatedAt={auditGeneration === 0 ? fixtureTime : new Date(Date.parse(fixtureTime) + auditGeneration * 1000).toISOString()} />}
+      {view === 'costs' && (scenario === 'session' || scenario === 'session-scope-swap') ? <SessionCostsView project={replaced ? 'costs-replacement' : 'costs-demo'} month="2026-11" iteration="iteration-a" role={role} scope={{ kind: 'project', id: replaced ? 'costs-replacement' : 'costs-demo' }} /> : view === 'costs' ? <CostsView readId={refresh} state={ready(costs)} role={role} scope={scope} commands={commands} onRefresh={() => setRefresh(refresh + 1)} /> : view === 'models' ? <RecipeOperations state={ready(scenario === 'empty' ? [] : recipesFixture)} role={role} /> : scenario === 'loading' || scenario === 'error' || scenario === 'empty' ? <AuditView state={auditState} query={auditQuery} role={role} onQuery={setAuditQuery} onMore={() => undefined} onExport={() => undefined} /> : scenario === 'session' || scenario === 'session-scope-swap' ? <SessionAuditLog project={replaced ? 'audit-replacement' : 'audit-demo'} role={role} updatedAt={fixtureTime} /> : <AuditLog port={scenario === 'deferred-page' ? pagination.port : auditTest ? replaced ? lifecycle.replacement : lifecycle.port : auditPort} role={role} stale={scenario === 'stale' || auditStale} updatedAt={auditGeneration === 0 ? fixtureTime : new Date(Date.parse(fixtureTime) + auditGeneration * 1000).toISOString()} />}
     </main><footer>labelloop is free software under the AGPL-3.0. <a href="https://github.com/TogetherWeOwn/labelloop">Get the source code.</a></footer>
   </div>;
 }
