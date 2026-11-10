@@ -7411,11 +7411,17 @@ def evidence_approval(service, project_id, plan):
     )
 
 
-def approved_setup_inputs(service, owner):
+def approved_setup_inputs(service, owner, *, validation_sample=False):
     created, asset, source, plan = anchor_pack_inputs(service, owner, setup_step="all")
     current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
         Reader(), created.id
     )
+    if validation_sample:
+        # Pack snapshots include the whole source assignment, not only anchor images.
+        prepare_configuration_validation_sample(service, owner, created, current.resource.revision)
+        current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
     publish_pack(service, created.id, plan, revision=current.resource.revision)
     approve_step(
         service, created.id, evidence_approval(service, created.id, plan), key="approve-evidence"
@@ -7427,14 +7433,14 @@ def approved_setup_inputs(service, owner):
     return created, asset, source, plan
 
 
-def configuration_inputs(service, owner):
+def configuration_inputs(service, owner, *, validation_sample=False):
     from labelloop_api.management_configuration import (
         CanonicalConfigurationSnapshots,
         ConfigurationSnapshotPublish,
     )
     from labelloop_api.management_training import ApprovedTrainingProfile
 
-    created, _, _, _ = approved_setup_inputs(service, owner)
+    created, _, _, _ = approved_setup_inputs(service, owner, validation_sample=validation_sample)
     detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
         Reader(), created.id
     )
@@ -7849,86 +7855,81 @@ def test_configuration_bound_training_refuses_missing_snapshot_before_enqueue_an
     )
 
 
+def prepare_configuration_validation_sample(service, owner, created, revision):
+    output = io.BytesIO()
+    Image.new("RGB", (26, 14), "blue").save(output, format="PNG")
+    asset = ingest(
+        service,
+        created.id,
+        AssetIngest(
+            expected_revision=revision,
+            original_base64=base64.b64encode(output.getvalue()).decode(),
+            source_uri="fixture:configured-validation",
+            source_group="configuration-val",
+        ),
+        key="configured-validation",
+    )
+    # Explicit fixture annotation/grouping, not the production grouping producer.
+    with owner.begin() as connection:
+        source = connection.execute(
+            select(source_asset).where(source_asset.c.asset_key == asset.id)
+        ).one()
+        ontology = connection.execute(
+            select(ontology_release)
+            .where(ontology_release.c.project_id == created.id)
+            .order_by(ontology_release.c.version.desc())
+            .limit(1)
+        ).one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=source.id,
+                group_id="configuration-val",
+                split="val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=True,
+            )
+        )
+        connection.execute(
+            insert(completeness_assessment).values(
+                asset_id=source.id,
+                revision=1,
+                ontology_hash=completeness_context_hash(
+                    ontology.class_map, ontology.classes, "Visible packages"
+                ),
+                scope_completeness="exhaustive_for_scope",
+                actor_kind="human",
+                actor_id=Actor().id,
+                output_truncated=False,
+                unresolved_regions=[],
+            )
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=1,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            training_eligible=True,
+        )
+
+
 def local_configuration_inputs(service, owner, *, validation_sample=False):
     from labelloop_api.management_configuration_release import (
         CanonicalLocalConfigurationRelease,
         LocalConfigurationPublish,
     )
 
-    created, publisher, payload = configuration_inputs(service, owner)
-    if validation_sample:
-        output = io.BytesIO()
-        Image.new("RGB", (26, 14), "blue").save(output, format="PNG")
-        asset = ingest(
-            service,
-            created.id,
-            AssetIngest(
-                expected_revision=payload.expected_revision,
-                original_base64=base64.b64encode(output.getvalue()).decode(),
-                source_uri="fixture:configured-validation",
-                source_group="configuration-val",
-            ),
-            key="configured-validation",
-        )
-        # Explicit fixture annotation/grouping, not the production grouping producer.
-        with owner.begin() as connection:
-            source = connection.execute(
-                select(source_asset).where(source_asset.c.asset_key == asset.id)
-            ).one()
-            ontology = connection.execute(
-                select(ontology_release)
-                .where(ontology_release.c.project_id == created.id)
-                .order_by(ontology_release.c.version.desc())
-                .limit(1)
-            ).one()
-            connection.execute(
-                insert(source_split_assignment).values(
-                    assignment_version="assignment-1",
-                    asset_id=source.id,
-                    group_id="configuration-val",
-                    split="val",
-                    seed=7,
-                    algorithm="union-find-grouped-stratified-v2",
-                    thresholds={"phash_max_distance": 8},
-                    reason="fixture grouping",
-                    locked=True,
-                )
-            )
-            connection.execute(
-                insert(completeness_assessment).values(
-                    asset_id=source.id,
-                    revision=1,
-                    ontology_hash=completeness_context_hash(
-                        ontology.class_map, ontology.classes, "Visible packages"
-                    ),
-                    scope_completeness="exhaustive_for_scope",
-                    actor_kind="human",
-                    actor_id=Actor().id,
-                    output_truncated=False,
-                    unresolved_regions=[],
-                )
-            )
-            append_review(
-                connection,
-                asset_id=asset.id,
-                actor_kind="human",
-                actor_id=Actor().id,
-                expected_revision=1,
-                approval_state="human_accepted",
-                review_tier="human_reviewed",
-                scope_completeness="exhaustive_for_scope",
-                objects=[],
-                training_eligible=True,
-            )
-        current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
-            Reader(), created.id
-        )
-        payload = payload.model_copy(
-            update={
-                "expected_revision": current.resource.revision,
-                "setup_summary_sha256": current.setup_summary_sha256,
-            }
-        )
+    created, publisher, payload = configuration_inputs(
+        service, owner, validation_sample=validation_sample
+    )
     published = publish_configuration(publisher, payload)
     local = CanonicalLocalConfigurationRelease(publisher, configuration_pin(owner, created.id))
     request = LocalConfigurationPublish(
@@ -7974,6 +7975,9 @@ def test_local_publication_freezes_compiles_and_enqueues_configuration_bound_tra
 
     service, owner, _ = database
     created, local, request = local_configuration_inputs(service, owner, validation_sample=True)
+    snapshot = local.snapshots.read_current(Reader(), local.pin)
+    assert {item["split"] for item in snapshot["grouping"]} == {"train", "val"}
+    assert len(snapshot["grouping"]) == 2
     freeze_payload = local_freeze_payload(service, created, local, request.expected_revision)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         freeze(local, created.id, freeze_payload)
@@ -8034,6 +8038,20 @@ def test_local_publication_freezes_compiles_and_enqueues_configuration_bound_tra
     # This fixture executes the real compiler, not CPU training or HTTP bootstrap.
 
 
+def test_local_publication_cannot_freeze_without_validation_membership(database):
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner)
+    snapshot = local.snapshots.read_current(Reader(), local.pin)
+    assert {item["split"] for item in snapshot["grouping"]} == {"train"}
+    published = publish_local_configuration(local, request)
+    payload = local_freeze_payload(service, created, local, published.revision)
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="incomplete_labels"):
+        freeze(local, created.id, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert release_count(owner, created.id) == 0
+
+
 @pytest.mark.parametrize("change", ["guide", "profile", "pin"])
 def test_local_publication_refuses_stale_configuration_and_cannot_renew_by_replay(database, change):
     service, owner, _ = database
@@ -8081,7 +8099,9 @@ def test_local_publication_and_freeze_require_human_admin(database, actor):
 @pytest.mark.parametrize("operation", ["publication", "freeze"])
 def test_local_publication_and_bound_freeze_audit_failure_rolls_back(database, operation):
     service, owner, role = database
-    created, local, request = local_configuration_inputs(service, owner)
+    created, local, request = local_configuration_inputs(
+        service, owner, validation_sample=operation == "freeze"
+    )
     if operation == "freeze":
         published = publish_local_configuration(local, request)
         payload = local_freeze_payload(service, created, local, published.revision)
@@ -8174,10 +8194,15 @@ def test_local_freeze_refuses_corrupt_or_ambiguous_publication(database, failure
                 .where(canonical_event.c.id == receipt.id)
                 .values(payload=saved, **changes)
             )
-    current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
-        Reader(), created.id
-    )
-    payload = payload.model_copy(update={"expected_revision": current.resource.revision})
+    # Malformed current human receipts also make project details unavailable.
+    # Keep the known accepted revision: corrupting attribution/duplicating a row
+    # does not append a new aggregate revision.
+    if failure in {"worker", "duplicate"}:
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+                Reader(), created.id
+            )
+    assert payload.expected_revision == published.revision
     before = initial_grouping_snapshot(owner, created.id)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         freeze(local, created.id, payload)
