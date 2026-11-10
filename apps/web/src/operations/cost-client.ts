@@ -1,5 +1,5 @@
 import type { BudgetPolicy, CostTotals } from './contracts.ts';
-import { readSessionText } from './session-read.ts';
+import { readSessionResponse, readSessionText } from './session-read.ts';
 export type { CostTotals } from './contracts.ts';
 
 // Wire projection of budget_reads.BudgetPage, not the richer CostsRecord. Policy
@@ -32,6 +32,14 @@ export interface BudgetPage {
 }
 export interface BudgetExport extends BudgetPage {
   next_after: null;
+}
+export interface BudgetLimitUpdate {
+  expected_revision: number;
+  policy: BudgetPolicy;
+}
+export interface BudgetPolicyRevision {
+  project_id: string;
+  policy_revision: number;
 }
 export interface CostReadQuery {
   after?: string;
@@ -111,6 +119,33 @@ function budgetPage(value: unknown, project: string, limit: number): value is Bu
 
 export function costClient(project: string) {
   return {
+    async setLimits(update: BudgetLimitUpdate, csrfToken: string, signal: AbortSignal): Promise<BudgetPolicyRevision> {
+      const unconfirmed = () => new Error('Cost change not confirmed. Refresh records before trying again.');
+      if (!projectKey(project) || !object(update, ['expected_revision', 'policy'])
+        || !integer(update.expected_revision) || update.expected_revision < 1 || update.expected_revision >= Number.MAX_SAFE_INTEGER
+        || !policy(update.policy) || typeof csrfToken !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(csrfToken)) throw unconfirmed();
+      const expectedRevision = update.expected_revision;
+      signal.throwIfAborted();
+      let response: Response;
+      try {
+        response = await fetch(`/api/projects/${encodeURIComponent(project)}/costs/policy`, {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify(update),
+        });
+      } catch {
+        signal.throwIfAborted();
+        throw unconfirmed();
+      }
+      const body = await readSessionResponse(response, signal, 'application/json', 4096, unconfirmed);
+      let value: unknown;
+      try { value = JSON.parse(body); } catch { throw unconfirmed(); }
+      if (!object(value, ['project_id', 'policy_revision']) || value.project_id !== project
+        || !integer(value.policy_revision) || value.policy_revision !== expectedRevision + 1) throw unconfirmed();
+      // This receipt is not current policy, ledger freshness or a resume/dispatch
+      // grant. Reload authoritative reads before offering another mutation.
+      return value as unknown as BudgetPolicyRevision;
+    },
     async exportJson(signal: AbortSignal): Promise<Blob> {
       if (!projectKey(project)) throw unavailable();
       // One complete server read, not an export assembled from mutable pages.

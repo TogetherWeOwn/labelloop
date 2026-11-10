@@ -12,6 +12,12 @@ export async function readSessionText(path: string, signal: AbortSignal, mediaTy
     signal.throwIfAborted();
     throw unavailable();
   }
+  return readSessionResponse(response, signal, mediaType, maxBytes, unavailable);
+}
+
+// Writes share bounded response decoding, not the GET/retry contract. A cancelled
+// or unconfirmed mutation may already have committed; callers must reconcile it.
+export async function readSessionResponse(response: Response, signal: AbortSignal, mediaType: string, maxBytes: number, unavailable: () => Error): Promise<string> {
   if (!response.ok || response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== mediaType || response.body === null) {
     await response.body?.cancel().catch(() => undefined);
     signal.throwIfAborted();
