@@ -21,7 +21,9 @@ from .management_details import (
     SourcePairRead,
     SourcePolicyRead,
 )
+from .management_grouping import validate_group_membership
 from .management_ontology import read_catalog_publication
+from .management_ports import ManagementFailure
 from .management_references import read_references
 from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
 from .schema import (
@@ -35,7 +37,7 @@ from .schema import (
 
 def source_groups(connection: Connection, project_id) -> SourceGroupsRead:
     assets = connection.execute(
-        select(source_asset.c.id, source_asset.c.asset_key)
+        select(source_asset.c.id, source_asset.c.asset_key, source_asset.c.sha256)
         .where(source_asset.c.project_id == project_id)
         .order_by(source_asset.c.id)
         .limit(10001)
@@ -100,10 +102,14 @@ def source_groups(connection: Connection, project_id) -> SourceGroupsRead:
         )
     )
     if usable:
-        splits = {}
-        for row in assignments:
-            if splits.setdefault(row.group_id, row.split) != row.split:
-                usable = False
+        try:
+            validate_group_membership(
+                connection, project_id, assets, {row.asset_id: row for row in assignments}
+            )
+        except ManagementFailure as failure:
+            if failure.error.detail != "missing_evidence":
+                raise
+            usable = False
     return SourceGroupsRead(
         images=len(assets),
         groups=len({row.group_id for row in assignments}) if usable else None,

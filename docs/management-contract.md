@@ -39,6 +39,14 @@ reference support and configured metadata keys remain null. Source image/pending
 pair facts are available, while group/split counts and assignment version are null
 unless one complete, locked, unambiguous version exists. Counts are not approval.
 Consumers must not coalesce missing evidence into a passing check or zero support.
+The current assignment pin and counts also require the same canonical membership
+constraints as freeze: exact hashes, declared ingest source groups and all persisted
+relation edges must agree, including transitive edges and excluded sources. A
+contradictory or cross-project edge withholds the assignment version/group/split
+counts instead of presenting a usable pin. Image counts and authorized pending-pair
+observations remain available. Intact groups can still be observed with pending
+suggestions; those suggestions continue to block freeze. These are SELECT-only
+observations, not assignment publication, readiness or qualification.
 
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.

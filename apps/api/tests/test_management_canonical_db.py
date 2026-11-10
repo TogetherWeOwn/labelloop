@@ -9650,6 +9650,134 @@ def test_project_detail_uses_current_ontology_assignment_counts_and_pending_pair
     assert "object_key" not in detail.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    "constraint", ["exact_hash", "declared_group", "relation", "foreign_relation", "group_split"]
+)
+def test_project_detail_withholds_assignment_pins_that_violate_canonical_groups(
+    database, constraint
+):
+    service, owner, role = database
+    created, _, source, _ = release_inputs(service, owner)
+    output = io.BytesIO()
+    Image.new("RGB", (24, 12), "black").save(output, format="PNG")
+    second_payload = AssetIngest(
+        expected_revision=2,
+        original_base64=base64.b64encode(output.getvalue()).decode(),
+        source_uri="fixture:group-summary",
+        source_group="capture-a" if constraint == "declared_group" else "capture-b",
+    )
+    if constraint == "exact_hash":
+        second_payload = image_payload(2).model_copy(update={"source_group": "capture-b"})
+    second = ingest(service, created.id, second_payload, key="group-summary-second")
+    with owner.begin() as connection:
+        second_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == second.id)
+        ).scalar_one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=second_id,
+                group_id="group-1" if constraint == "group_split" else "group-2",
+                split="train" if constraint == "group_split" else "val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=True,
+            )
+        )
+    if constraint in {"relation", "foreign_relation"}:
+        right = second_id
+        if constraint == "foreign_relation":
+            foreign = create(service, key="foreign")
+            foreign_asset = ingest(service, foreign.id, key="foreign-ingest")
+            with owner.connect() as connection:
+                right = connection.execute(
+                    select(source_asset.c.id).where(source_asset.c.asset_key == foreign_asset.id)
+                ).scalar_one()
+        with owner.begin() as connection:
+            connection.execute(
+                insert(similarity_relation).values(
+                    left_asset_id=source.id,
+                    right_asset_id=right,
+                    reason="phash",
+                    evidence="0",
+                    algorithm_version="fixture",
+                )
+            )
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    assert detail.sources.images == 2
+    assert detail.sources.groups is detail.sources.split_counts is None
+    assert detail.sources.assignment_version is None and "assignment" not in detail.versions
+    assert detail.sources.pending_pairs == []
+    assert counts(owner, created.id) == before
+    assert str(source.id) not in detail.model_dump_json()
+    if constraint == "foreign_relation":
+        assert str(right) not in detail.model_dump_json()
+
+
+def test_project_detail_keeps_valid_relation_groups_observable_with_pending_pairs(database):
+    service, owner, role = database
+    created, asset, source, _ = release_inputs(service, owner)
+    second = ingest(service, created.id, image_payload(2), key="valid-group-second")
+    with owner.begin() as connection:
+        second_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == second.id)
+        ).scalar_one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=second_id,
+                group_id="group-1",
+                split="val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture grouping",
+                locked=True,
+            )
+        )
+        connection.execute(
+            insert(similarity_relation).values(
+                left_asset_id=source.id,
+                right_asset_id=second_id,
+                reason="exact_hash",
+                evidence="",
+                algorithm_version="fixture",
+            )
+        )
+        connection.execute(
+            insert(borderline_review).values(
+                left_asset_id=source.id,
+                right_asset_id=second_id,
+                metric="phash",
+                value="9",
+                algorithm_version="fixture",
+            )
+        )
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.sources.groups == 1
+    assert detail.sources.split_counts == {"train": 0, "val": 2, "test": 0}
+    assert detail.sources.assignment_version == "assignment-1"
+    assert detail.versions["assignment"] == "assignment-1"
+    assert len(detail.sources.pending_pairs) == 1
+    assert detail.sources.pending_pairs[0].left_asset_id == asset.id
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    assert counts(owner, created.id) == before
+
+
 @pytest.mark.parametrize("mode", ["missing", "unlocked", "mixed", "tie"])
 def test_project_detail_does_not_invent_a_current_split_publication(database, mode):
     service, owner, _ = database
