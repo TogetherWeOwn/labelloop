@@ -284,7 +284,8 @@ class CanonicalManagementReads:
     def read_recipe_preview(
         self, actor: ManagementPrincipal, release_id: str, recipe_id: str, asset_id: str
     ) -> RecipePreviewRead:
-        from .management_recipe_reads import recipe_preview
+        from .management_compile_worker import frozen_release
+        from .management_recipe_reads import recipe_plan, recipe_preview
         from .model_store import variant_context
         from .schema import preprocessing_recipe, yolo_dataset_variant
 
@@ -310,9 +311,16 @@ class CanonicalManagementReads:
                         preprocessing_recipe.c.recipe_key == recipe_id,
                     )
                 ).scalar_one_or_none()
-                if variant_id is None:
-                    refuse("missing_evidence")
                 try:
+                    if variant_id is None:
+                        # Reuse the worker's full frozen-history/hash gate, in
+                        # this authorized READ ONLY snapshot and transaction.
+                        frozen, _ = frozen_release(
+                            connection.connection.driver_connection,
+                            dict(release._mapping),
+                            self.workspace_id,
+                        )
+                        return recipe_plan(frozen, recipe_id, asset_id)
                     return recipe_preview(
                         connection,
                         variant_context(connection, variant_id),

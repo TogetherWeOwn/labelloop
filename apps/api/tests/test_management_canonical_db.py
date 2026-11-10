@@ -156,6 +156,14 @@ def test_canonical_facade_http_freeze_compile_and_training_dispatch(
         assert profiles.status_code == 200 and profiles.json()["profiles"] == [
             profile.read().model_dump(mode="json")
         ]
+        planned = client.get(
+            f"/dataset-releases/{release_id}/recipes/{recipe}/preview",
+            params={"asset_id": asset.id},
+        )
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["evidence_state"] == "planned"
+        assert planned.json()["manifest_artifact_id"] is None
+        assert planned.headers["cache-control"] == "no-store"
         path = f"/dataset-releases/{release_id}/variants"
         body = {"expected_revision": 1, "recipe_id": recipe}
         headers["Idempotency-Key"] = "facade-compile"
@@ -176,6 +184,8 @@ def test_canonical_facade_http_freeze_compile_and_training_dispatch(
             params={"asset_id": asset.id},
         )
         assert preview.status_code == 200, preview.text
+        assert preview.json()["evidence_state"] == "compiled"
+        assert preview.json()["transform"] == planned.json()["transform"]
         headers["Idempotency-Key"] = "facade-training"
         body = {"expected_revision": 1, "training_profile_id": "baseline"}
         path = f"/variants/{variant_id}/training-runs"
@@ -4396,6 +4406,10 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
         )
     payload = payload.model_copy(update={"annotation_revisions": {asset.id: 3}})
     release = freeze(service, created.id, payload)
+    planned = CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+        Reader(), release.id, recipe, asset.id
+    )
+    assert planned.evidence_state == "planned" and len(planned.boxes) == 1
     accepted = compile_request(compilation, release.id, recipe=recipe)
     worker = compiler_worker
     JobRunner(
@@ -4419,6 +4433,8 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
 
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     detail = reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+    assert detail.evidence_state == "compiled"
+    assert detail.transform == planned.transform and detail.boxes[0].box == planned.boxes[0].box
     assert len(detail.boxes) == 1
     projected = detail.boxes[0]
     assert projected.box == detail.transform.apply(Box(1, 1, 11, 9))
@@ -4440,7 +4456,163 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
     assert reads.read_recipe_preview(Reader(), release.id, recipe, asset.id) == detail
 
 
-def test_recipe_preview_is_read_only_and_requires_committed_compiler_publication(
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_recipe_plan_uses_frozen_history_without_objects_jobs_or_write_privileges(
+    database, compiler_worker, monkeypatch, recipe
+):
+    from labelloop_api import management_recipe_reads
+    from labelloop_compiler.compiler import transform_document
+
+    service, owner, role = database
+    created, asset, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    before = counts(owner, created.id)
+
+    def unexpected(*args):
+        pytest.fail("planning must not use object storage or compiled publication")
+
+    monkeypatch.setattr(compiler_worker.objects, "read", unexpected)
+    monkeypatch.setattr(management_recipe_reads, "verified_variant", unexpected)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, recipe, asset.id
+        )
+    finally:
+        readonly.dispose()
+    assert detail.evidence_state == "planned"
+    assert detail.manifest_artifact_id is detail.validation_artifact_id is None
+    assert detail.boxes == [] and detail.excluded_images == 0
+    assert detail.checks[0].passed is True
+    assert all(check.passed is None for check in detail.checks[1:])
+    assert transform_document(detail.transform)["output_size"] == (320 if "320" in recipe else 640)
+    assert counts(owner, created.id) == before
+    with owner.begin() as connection:
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM worker_job WHERE project_key="
+                    "(SELECT project_key FROM project WHERE id=:id)"
+                ),
+                {"id": created.id},
+            ).scalar_one()
+            == 0
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="rejected",
+            review_tier="human_reviewed",
+            scope_completeness="partial",
+            objects=[],
+        )
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Actor(), release.id, recipe, asset.id
+        )
+        == detail
+    )
+    assert "fixture:" not in detail.model_dump_json() and "sha256/" not in detail.model_dump_json()
+
+
+@pytest.mark.parametrize("case", ["foreign_source", "foreign_workspace", "duplicate"])
+def test_recipe_plan_refuses_foreign_identity_and_duplicate_freeze(database, compiler_worker, case):
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    workspace = service.workspace_id
+    if case == "foreign_source":
+        foreign = create(service, key="other-project")
+        asset = ingest(service, foreign.id, key="other-ingest")
+    elif case == "foreign_workspace":
+        workspace = uuid4()
+    else:
+        with owner.begin() as connection:
+            receipt = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.aggregate_id == created.id,
+                        canonical_event.c.event_type == "management.freeze_release",
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{key: value for key, value in receipt.items() if key != "id"}
+                )
+            )
+    with pytest.raises(
+        ManagementFailure, match="not_found" if case == "foreign_workspace" else "missing_evidence"
+    ):
+        CanonicalManagementReads(service.engine, workspace).read_recipe_preview(
+            Reader(), release.id, "full-letterbox-320-v1", asset.id
+        )
+
+
+def test_recipe_plan_rehashes_frozen_history_instead_of_trusting_matching_receipt(
+    database, compiler_worker
+):
+    from copy import deepcopy
+
+    service, owner, _ = database
+    created, asset, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    with owner.begin() as connection:
+        row = (
+            connection.execute(
+                select(canonical_dataset_release).where(
+                    canonical_dataset_release.c.release_key == release.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+        receipt = (
+            connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.aggregate_id == created.id,
+                    canonical_event.c.event_type == "management.freeze_release",
+                )
+            )
+            .mappings()
+            .one()
+        )
+        fake_key = "forged-frozen-snapshot"
+        forged = deepcopy(receipt["payload"])
+        forged["result"]["id"] = fake_key
+        forged["evidence"]["canonical_snapshot_sha256"] = "0" * 64
+        connection.execute(
+            insert(canonical_dataset_release).values(
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"id", "release_key", "hashes"}
+                },
+                release_key=fake_key,
+                hashes={**row["hashes"], "canonical_snapshot_sha256": "0" * 64},
+            )
+        )
+        connection.execute(
+            insert(canonical_event).values(
+                **{key: value for key, value in receipt.items() if key not in {"id", "payload"}},
+                payload=forged,
+            )
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Reader(), fake_key, "full-letterbox-320-v1", asset.id
+        )
+
+
+def test_recipe_preview_is_read_only_and_distinguishes_plans_from_committed_publication(
     database, compilation, compiler_worker
 ):
     from labelloop_compiler.compiler import transform_document
@@ -4451,13 +4623,13 @@ def test_recipe_preview_is_read_only_and_requires_committed_compiler_publication
     )
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     recipe = "full-letterbox-320-v1"
-    with pytest.raises(ManagementFailure, match="missing_evidence"):
-        reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+    planned = reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+    assert planned.evidence_state == "planned"
+    assert planned.manifest_artifact_id is planned.validation_artifact_id is None
 
     def sink(connection, current, artifacts):
         compiler_worker.publish(connection, current, artifacts)
-        with pytest.raises(ManagementFailure, match="missing_evidence"):
-            reads.read_recipe_preview(Reader(), release.id, recipe, asset.id)
+        assert reads.read_recipe_preview(Reader(), release.id, recipe, asset.id) == planned
 
     compiler_worker.store.complete(lease, ("compilation",), sink)
     before = publication_state(owner, accepted)
@@ -4473,6 +4645,7 @@ def test_recipe_preview_is_read_only_and_requires_committed_compiler_publication
         readonly.dispose()
     assert detail == reads.read_recipe_preview(Actor(), release.id, recipe, asset.id)
     assert detail.recipe_id == recipe and detail.recipe_revision == 1
+    assert detail.evidence_state == "compiled" and planned.transform == detail.transform
     assert detail.boxes == [] and detail.source_asset_id == asset.id
     assert detail.source_width == 24 and detail.source_height == 12
     assert transform_document(detail.transform) == record["manifest"]["samples"][0]["transform"]
@@ -4509,8 +4682,14 @@ def test_recipe_preview_isolates_release_recipe_and_source(database, compilation
                 Reader(), release_id, "full-letterbox-320-v1", asset.id
             )
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert (
+        reads.read_recipe_preview(
+            Reader(), release.id, "full-letterbox-640-v1", asset.id
+        ).evidence_state
+        == "planned"
+    )
     for recipe, asset_id in [
-        ("full-letterbox-640-v1", asset.id),
+        ("unconfigured-recipe", asset.id),
         ("full-letterbox-320-v1", "unknown"),
     ]:
         with pytest.raises(ManagementFailure, match="missing_evidence"):

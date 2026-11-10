@@ -89,6 +89,25 @@ def pinned_release(connection: psycopg.Connection, lease: CompileLease, workspac
         job = cur.fetchone()
         if job is None or canonical_json(job["input"]) != canonical_json(inputs):
             raise ValueError("compile inputs differ from the durable job")
+    candidate, asset_ids = frozen_release(connection, release, workspace_id)
+    if (
+        release["hashes"].get("canonical_snapshot_sha256") != inputs["canonical_snapshot_sha256"]
+        or inputs["release_revision"] != 1
+        or release["assignment_version"] != inputs["assignment_version"]
+        or candidate.ontology.ontology_id != inputs["ontology_id"]
+    ):
+        raise ValueError("compile inputs differ from the frozen release")
+    recipe = resolve_recipe(inputs["recipe"]["recipe_id"])
+    if canonical_json(asdict(recipe)) != canonical_json(inputs["recipe"]):
+        raise ValueError("recipe differs from the code-owned policy")
+    return release, candidate, asset_ids
+
+
+def frozen_release(connection: psycopg.Connection, release: dict, workspace_id: UUID):
+    """Validate attributed frozen history within the caller's owned read snapshot."""
+    if not release["frozen"]:
+        raise ValueError("missing frozen release")
+    with connection.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT payload FROM canonical_event WHERE event_type='management.freeze_release' "
             "AND aggregate_id=%s AND actor_kind='human' AND payload->>'workspace_id'=%s "
@@ -108,12 +127,9 @@ def pinned_release(connection: psycopg.Connection, lease: CompileLease, workspac
             or freezes[0]["payload"]["result"] != expected_resource
             or freezes[0]["payload"]["evidence"].get("acceptance_policy_id")
             != "canonical-training-eligibility-v1"
+            or not release["hashes"].get("canonical_snapshot_sha256")
             or freezes[0]["payload"]["evidence"].get("canonical_snapshot_sha256")
-            != inputs["canonical_snapshot_sha256"]
-            or release["hashes"].get("canonical_snapshot_sha256")
-            != inputs["canonical_snapshot_sha256"]
-            or inputs["release_revision"] != 1
-            or release["assignment_version"] != inputs["assignment_version"]
+            != release["hashes"]["canonical_snapshot_sha256"]
         ):
             raise ValueError("missing frozen snapshot authority")
         cur.execute(
@@ -121,7 +137,7 @@ def pinned_release(connection: psycopg.Connection, lease: CompileLease, workspac
             (release["ontology_id"], release["project_id"]),
         )
         ontology = cur.fetchone()
-        if ontology is None or ontology["ontology_key"] != inputs["ontology_id"]:
+        if ontology is None:
             raise ValueError("missing pinned ontology")
         pins, exclusions = release["sample_revisions"], release["excluded_asset_ids"]
         identities = set(pins) | set(exclusions)
@@ -231,14 +247,11 @@ def pinned_release(connection: psycopg.Connection, lease: CompileLease, workspac
         json.dumps(asdict(candidate), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     if (
-        snapshot != inputs["canonical_snapshot_sha256"]
+        snapshot != release["hashes"]["canonical_snapshot_sha256"]
         or candidate.ontology_hash() != release["ontology_hash"]
     ):
         raise ValueError("frozen snapshot digest mismatch")
-    recipe = resolve_recipe(inputs["recipe"]["recipe_id"])
-    if canonical_json(asdict(recipe)) != canonical_json(inputs["recipe"]):
-        raise ValueError("recipe differs from the code-owned policy")
-    return release, candidate, {row["asset_key"]: row["id"] for row in assets}
+    return candidate, {row["asset_key"]: row["id"] for row in assets}
 
 
 @dataclass(frozen=True)

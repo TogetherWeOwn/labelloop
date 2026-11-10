@@ -19,7 +19,7 @@ remain small `Resource` summaries; they are not sufficient screen details.
 | `readProject` | `GET /projects/{project_id}` | Scope, class definitions/aliases/parents/exclusions/mirror safety, explicit proposed/admin-approved provenance, references with validity/source/permitted-use metadata, structured guide, source-group counts and pending pairs, setup approvals and version pins |
 | `readFreezePlan` | `GET /projects/{project_id}/freeze-plan` | Server-selected eligible annotation revision membership, ontology, split assignment and expected project revision; null payload plus explicit checks when not ready |
 | `readDatasetRelease` | `GET /dataset-releases/{release_id}` | Exact source hashes/revisions/splits, class support, exclusions, quarantine, checks, provenance, prior release and immutable manifest artifact/hash |
-| `readRecipePreview` | `GET /dataset-releases/{release_id}/recipes/{recipe_id}/preview?asset_id=...` | Compiler-produced `AffineTransform`, already-transformed boxes, actual raster dimensions/gains/padding/forward/inverse, small/clipped/excluded target counts and validation artifacts |
+| `readRecipePreview` | `GET /dataset-releases/{release_id}/recipes/{recipe_id}/preview?asset_id=...` | Frozen-source planning or verified compiler geometry, explicitly distinguished by `evidence_state`; core `AffineTransform`, transformed boxes, size flags and nullable publication artifacts |
 | `listTrainingProfiles` | `GET /projects/{project_id}/training-profiles` | Server-approved local profiles: ID/version, recipe, initialization hash, epochs and pinned safe arguments |
 | `readTrainingRun` | `GET /training-runs/{run_id}` | Profile/version, dataset/variant lineage, requested/resolved arguments and mismatches, hashed core checkpoints with development validation, retention evidence and progress/failure |
 | `readEvaluation` | `GET /evaluations/{evaluation_id}` | Actual core original-frame `EvaluationReport` for candidate/incumbent: class support, slices, coverage loss and policy; separate qualification/check evidence, nullable thresholds, final-test opening count |
@@ -53,6 +53,33 @@ or changing the default application. Actions checks all three tracked artifacts
 for drift before checking the client. Composed schema publication is not final
 adapter integration or route availability; do not hand-edit a second client from
 these tables.
+
+## Frozen recipe planning (unmounted)
+
+Before a variant is published, `readRecipePreview` returns `evidence_state: planned`
+for selected training/validation sources of an owned, attributed frozen dataset.
+It reuses the compiler worker's historical snapshot loader, reconstructing and
+rehashing exact source, annotation, ontology and locked-assignment pins inside
+one SELECT-only repeatable-read transaction. Newer reviews do not replace frozen
+labels. Final-test sources, unselected exclusions, foreign sources, missing or
+ambiguous receipts and changed frozen content fail closed.
+
+Planning resolves only the two code-owned full-frame recipes. Core geometry
+supplies actual raster-edge transforms and target-size flags. A target below
+four derived pixels is flagged `exclude`; targets at or below six pixels are
+counted as tiny. An all-below-minimum source is forecast as excluded, while a
+mixture of retained and below-minimum targets explicitly fails the geometric
+size check rather than hiding the difficult target or labeling it background.
+No annotation, source, grouping, recipe, job or release is changed.
+
+A plan has null manifest/validation artifacts and unknown compiler-publication
+and model-qualification checks. It decodes no pixels, validates no file and does
+not prove a nonempty compiled validation set. On committed compiler publication,
+the same route returns `evidence_state: compiled` with the existing fenced
+publication checks and artifacts. Invalid published evidence never falls back
+to a plan. This is frozen full-frame geometry planning, not editable crop/ROI
+planning or a preview of unpinned labels, and does not enable real admission or
+default mounting.
 
 ## Local model publication (unmounted)
 

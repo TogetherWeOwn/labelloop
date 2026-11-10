@@ -2163,6 +2163,15 @@
             "title": "Clipped Targets",
             "type": "integer"
           },
+          "evidence_state": {
+            "default": "compiled",
+            "enum": [
+              "planned",
+              "compiled"
+            ],
+            "title": "Evidence State",
+            "type": "string"
+          },
           "excluded_images": {
             "minimum": 0.0,
             "title": "Excluded Images",
