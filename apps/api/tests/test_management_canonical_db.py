@@ -108,6 +108,227 @@ def database(tmp_path):
 
 
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_canonical_facade_http_freeze_compile_and_training_dispatch(
+    database, compilation, compiler_worker, restricted_auth_store, auth_account, recipe
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+    from labelloop_api.management_training import ApprovedTrainingProfile
+    from labelloop_api.management_workers import compilation_runner
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    # Admission, annotations and grouping remain explicit independent fixture setup.
+    created, asset, _, payload = release_inputs(service, owner)
+    profile = ApprovedTrainingProfile(UUID(created.id), "baseline", 1, recipe, "1" * 64)
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id, profiles=(profile,)
+    )
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        path = f"/projects/{created.id}/dataset-releases"
+        assert client.post(path, json=payload.model_dump(mode="json")).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "facade-freeze",
+        }
+        denied = client.post(
+            path, json=payload.model_dump(mode="json"), headers={"Idempotency-Key": "facade-freeze"}
+        )
+        assert denied.status_code == 403 and release_count(owner, created.id) == 0
+        frozen = client.post(path, json=payload.model_dump(mode="json"), headers=headers)
+        assert frozen.status_code == 201, frozen.text
+        assert (
+            client.post(path, json=payload.model_dump(mode="json"), headers=headers).json()
+            == frozen.json()
+        )
+        release_id = frozen.json()["id"]
+        detail = client.get(f"/dataset-releases/{release_id}")
+        assert detail.status_code == 200 and detail.json()["resource"] == frozen.json()
+        assert client.get(f"/projects/{created.id}").status_code == 200
+        assert client.get(f"/projects/{created.id}/freeze-plan").status_code == 200
+        profiles = client.get(f"/projects/{created.id}/training-profiles")
+        assert profiles.status_code == 200 and profiles.json()["profiles"] == [
+            profile.read().model_dump(mode="json")
+        ]
+        path = f"/dataset-releases/{release_id}/variants"
+        body = {"expected_revision": 1, "recipe_id": recipe}
+        headers["Idempotency-Key"] = "facade-compile"
+        accepted = client.post(path, json=body, headers=headers)
+        assert accepted.status_code == 202, accepted.text
+        assert client.post(path, json=body, headers=headers).json() == accepted.json()
+        job_id = accepted.json()["job_id"]
+        observed = client.get(f"/resources/job/{job_id}")
+        assert observed.status_code == 200 and observed.json()["state"] == "queued"
+        assert compilation_runner(
+            compiler_worker.store, compiler_worker.objects, service.workspace_id, job_id=job_id
+        ).run_once("facade-compiler")
+        assert client.get(f"/resources/job/{job_id}").json()["state"] == "completed"
+        variant_id = accepted.json()["resource"]["id"]
+        assert client.get(f"/resources/variant/{variant_id}").status_code == 200
+        preview = client.get(
+            f"/dataset-releases/{release_id}/recipes/{recipe}/preview",
+            params={"asset_id": asset.id},
+        )
+        assert preview.status_code == 200, preview.text
+        headers["Idempotency-Key"] = "facade-training"
+        body = {"expected_revision": 1, "training_profile_id": "baseline"}
+        path = f"/variants/{variant_id}/training-runs"
+        trained = client.post(path, json=body, headers=headers)
+        assert trained.status_code == 202, trained.text
+        assert client.post(path, json=body, headers=headers).json() == trained.json()
+        receipt = training_receipts(owner, variant_id)
+        assert len(receipt) == 1 and receipt[0].actor_id == identity
+        assert len(compile_receipts(owner, release_id)) == 1
+        assert client.get(f"/resources/job/{trained.json()['job_id']}").json()["state"] == "queued"
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.get(f"/projects/{created.id}").status_code == 401
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_canonical_facade_http_completed_model_reads_and_evaluation_dispatch(
+    database, compilation, compiler_worker, restricted_auth_store, auth_account, recipe
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    evaluation, model_id, release_id, training_lease = prepared_evaluation(
+        database, compilation, compiler_worker, recipe
+    )
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id, protocols=evaluation.protocols
+    )
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "facade-evaluation",
+        }
+        export = client.get(f"/models/{model_id}/export")
+        assert export.status_code == 200 and export.json()["recipe_id"] == recipe
+        run_id = training_lease.input["request"]["run_id"]
+        training = client.get(f"/training-runs/{run_id}")
+        assert training.status_code == 200, training.text
+        assert training.json()["resource"]["state"] == "completed"
+        body = {
+            "expected_revision": 1,
+            "dataset_release_id": release_id,
+            "protocol_id": "development",
+        }
+        path = f"/models/{model_id}/evaluations"
+        accepted = client.post(path, json=body, headers=headers)
+        assert accepted.status_code == 202, accepted.text
+        assert client.post(path, json=body, headers=headers).json() == accepted.json()
+        jobs, receipts = evaluation_intent_state(owner, model_id)
+        assert len(jobs) == len(receipts) == 1 and receipts[0].actor_id == identity
+        project_id = str(evaluation.protocols[0].project_id)
+        page = client.get(f"/projects/{project_id}/resources", params={"kind": "job"})
+        assert page.status_code == 200, page.text
+        assert accepted.json()["job_id"] in {item["id"] for item in page.json()["items"]}
+        assert export.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_canonical_facade_keeps_admission_and_registry_unavailable(
+    database, restricted_auth_store, auth_account, role
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created = create(service)
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "facade-admission",
+        }
+        admission = client.post(
+            f"/projects/{created.id}/assets",
+            json=image_payload().model_dump(mode="json"),
+            headers=headers,
+        )
+        assert admission.status_code == (503 if role == "admin" else 403)
+        headers["Idempotency-Key"] = "facade-promotion"
+        promotion = client.post(
+            f"/projects/{created.id}/promotions",
+            json={
+                "expected_revision": 1,
+                "recipe_id": "full-letterbox-320-v1",
+                "candidate_id": "candidate",
+                "qualification_id": "untrusted",
+                "expected_incumbent_id": None,
+                "reason": "Fixture refusal",
+            },
+            headers=headers,
+        )
+        assert promotion.status_code == (503 if role == "admin" else 403)
+        registry = client.get(f"/projects/{created.id}/registry/full-letterbox-320-v1")
+        assert registry.status_code == 503 and registry.json() == {
+            "detail": "management_unavailable"
+        }
+        assert counts(owner, created.id) == before
+        assert not list(service.store.root.rglob("*"))
+
+
+@pytest.mark.parametrize("role", ["admin", "reviewer"])
+def test_canonical_facade_http_reads_preserve_workspace_isolation(
+    database, restricted_auth_store, auth_account, role
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created = create(service)
+    foreign = CanonicalManagementOperations(service.engine, service.store, uuid4())
+    with owner.begin() as connection:
+        connection.execute(principal.update().where(principal.c.id == identity).values(role=role))
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: foreign), base_url=origin) as client:
+        assert (
+            client.post("/auth/login", json=credentials, headers={"origin": origin}).status_code
+            == 200
+        )
+        assert client.get("/projects").json()["items"] == []
+        for suffix in (
+            "",
+            "/freeze-plan",
+            "/references/lifecycle",
+            "/training-profiles",
+            "/registry/full-letterbox-320-v1",
+        ):
+            result = client.get(f"/projects/{created.id}{suffix}")
+            assert result.status_code == 404 and result.json() == {"detail": "not_found"}
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_registered_compiler_claims_only_requested_job_and_publishes(
     database, compilation, compiler_worker, recipe
 ):

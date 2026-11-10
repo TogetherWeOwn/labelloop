@@ -46,6 +46,38 @@ configures disposable grants; neither request-time adapter uses it. This does
 queue dispatch or the project-to-export acceptance path. Newly added cases require
 exact-head Actions verification; test source is not a passing result.
 
+### Opt-in canonical operations assembly
+
+`labelloop_api.management_operations.CanonicalManagementOperations` is a trusted
+server-side assembly for the delivered adapters, usable as
+`create_app(management_operations=lambda: operations)`. It takes one canonical
+engine, object store and workspace UUID plus immutable, bounded project-scoped
+training-profile and development-protocol tuples. Construction does no database,
+object or provider I/O. Existing canonical create/setup/reference/freeze methods
+are inherited unchanged. Explicit read and async methods delegate to the existing
+snapshot validators and transaction adapters; the latter always use
+`JobStore.enqueue_in_transaction`. No request, environment switch or generic
+callback selects a queue, workspace, profile arguments or execution engine.
+
+This assembly is **not final production binding**. Asset admission explicitly
+returns `management_unavailable` after authorization; the independently tested
+canonical ingest adapter is not enabled here. Promotions and registry projection
+also remain unavailable pending consumption of the single qualified registry
+producer. No alternate registry/qualification policy is implemented. Default
+`main.app` remains unmounted, and no runtime role, grant, migration, worker startup,
+provider call, setup publication or deployment is introduced.
+
+New disposable Actions cases commission shared restricted-session/CSRF-backed
+freeze → compile → native compiler publication → training intent at both sizes,
+plus completed synthetic model/training/export HTTP reads and development
+submission at both sizes. They check replay, actor attribution, queued/completed
+job observations, reviewer mutation refusal, unchanged denied-operation state and
+workspace isolation. Source admission, annotations/grouping and ML artifacts are
+explicit fixture preparation outside this HTTP slice. These cases do not prove
+real admission, actual HTTP-to-CPU training/evaluation completion, full project
+publication, registry composition or model quality. Unit delegation/configuration
+cases prove wiring only; exact-head Actions must verify all new cases.
+
 ### Disposable authentication-role contract
 
 The composition fixture exercises the delivered `AuthStore` without changing its
