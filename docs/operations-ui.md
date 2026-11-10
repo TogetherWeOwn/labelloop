@@ -1,5 +1,23 @@
 # Operational view fixture boundary
 
+## Authenticated limit edits — integration and verification pending
+
+`POST /projects/{project_key}/costs/policy` now exposes only existing policy limits
+and the autonomous-spend flag, with expected revision, human-admin session and
+same-origin CSRF. Its BudgetStore transaction preserves pricing, pixel-provider
+permissions, paused state and all reservations, and appends the authenticated actor
+through the existing immutable policy journal. Unknown projects and unconfigured
+budgets reject instead of creating defaults. Concurrent edits use the existing
+head lock and only one expected revision can succeed. No pause clearing, retry,
+reservation, provider call or paid dispatch is introduced. A successful edit does
+not make a stale dry run valid or claim that a paused project resumed.
+
+New HTTP adapter/OpenAPI and disposable PostgreSQL commit/reconnect, isolation,
+race and rollback controls await Actions. The session CostsView still disables
+commands: UI wiring, explicit resume and normal authenticated product mounting
+remain unfinished. No new schema/migration, dependency, design or policy engine.
+REA: reuse BudgetStore CAS, audit append and server-owned session authorization.
+
 ## Original operation pricing in shown-row CSV
 
 Session ledger entries now retain each operation's validated original

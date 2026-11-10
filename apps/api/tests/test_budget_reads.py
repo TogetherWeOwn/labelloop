@@ -14,12 +14,12 @@ from test_auth import password_hash as password_hash
 from test_auth import store as store
 from test_budget_store import ADMIN, LLM, claim, request, reserve
 
-from labelloop_api import budget_reads
+from labelloop_api import budget_commands, budget_reads
 from labelloop_api import budget_schema as db
 from labelloop_api.budget_store import DispatchIntent, digest
 from labelloop_api.main import app
 from labelloop_api.schema import project
-from labelloop_core.budget import BudgetPolicy, LedgerEntry, SpendApproval
+from labelloop_core.budget import BudgetPolicy, BudgetRefused, LedgerEntry, SpendApproval
 
 PATH = "/projects/budget-fixture/costs"
 postgres_budget = budget_tests.store
@@ -867,3 +867,302 @@ def test_postgres_summary_retains_writer_lock_until_outer_commit(postgres_budget
             .where(db.head.c.project_id == "budget-fixture")
             .with_for_update(nowait=True)
         ).one()
+
+
+LIMITS_PATH = PATH + "/policy"
+LIMITS_UPDATE = {
+    "expected_revision": 1,
+    "policy": asdict(BudgetPolicy(0, None, 50, True)),
+}
+
+
+@pytest.fixture
+def limits_api(monkeypatch, http, store):
+    calls = []
+
+    def set_limits(project_key, **kwargs):
+        calls.append((project_key, kwargs))
+        return 2
+
+    monkeypatch.setattr(budget_commands, "auth_store", lambda: store)
+    monkeypatch.setattr(
+        budget_commands, "BudgetStore", lambda engine: SimpleNamespace(set_limits=set_limits)
+    )
+    return http, calls
+
+
+def test_limit_command_uses_session_actor_and_strict_policy(limits_api):
+    client, calls = limits_api
+    csrf = login(client, "admin").json()["csrf_token"]
+    actor = client.get("/auth/me").json()
+    response = client.post(
+        LIMITS_PATH, json=LIMITS_UPDATE, headers={"origin": ORIGIN, "x-csrf-token": csrf}
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"project_id": "budget-fixture", "policy_revision": 2}
+    assert len(calls) == 1
+    project_key, kwargs = calls[0]
+    assert project_key == "budget-fixture"
+    assert kwargs["actor"].id == actor["id"]
+    assert kwargs["actor"].kind == "human" and kwargs["actor"].role == "admin"
+    assert kwargs["expected_revision"] == 1
+    assert kwargs["policy"] == BudgetPolicy(0, None, 50, True)
+
+
+@pytest.mark.parametrize(
+    "principal", [None, "reviewer", "worker-core", "worker-ml", "worker-llm", "worker-platform"]
+)
+def test_limit_command_denies_nonadmin_before_budget_access(limits_api, store, principal):
+    client, calls = limits_api
+    headers = {}
+    if principal == "reviewer":
+        csrf = login(client, principal).json()["csrf_token"]
+        headers = {"origin": ORIGIN, "x-csrf-token": csrf}
+    elif principal:
+        headers = {"authorization": "Bearer " + worker_token(store, principal)}
+    response = client.post(LIMITS_PATH, json=LIMITS_UPDATE, headers=headers)
+    assert response.status_code == (401 if principal is None else 403)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"origin": ORIGIN}, {"origin": "https://foreign.example", "x-csrf-token": "invalid"}],
+)
+def test_limit_command_requires_origin_and_csrf(limits_api, headers):
+    client, calls = limits_api
+    login(client, "admin")
+    assert client.post(LIMITS_PATH, json=LIMITS_UPDATE, headers=headers).status_code == 403
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"expected_revision": 0},
+        {"expected_revision": True},
+        {"expected_revision": "1"},
+        {"actor": "forged"},
+        {"project_id": "foreign"},
+        {"prices": {}},
+        {"pixel_providers": ["foreign"]},
+        {"resume": True},
+        {
+            "policy": {
+                "monthly_limit": -1,
+                "iteration_limit": None,
+                "operation_limit": 1,
+                "autonomous_spend": False,
+            }
+        },
+        {
+            "policy": {
+                "monthly_limit": True,
+                "iteration_limit": None,
+                "operation_limit": 1,
+                "autonomous_spend": False,
+            }
+        },
+        {
+            "policy": {
+                "monthly_limit": 1.5,
+                "iteration_limit": None,
+                "operation_limit": 1,
+                "autonomous_spend": False,
+            }
+        },
+        {
+            "policy": {
+                "monthly_limit": 1,
+                "iteration_limit": None,
+                "operation_limit": 1,
+                "autonomous_spend": "false",
+            }
+        },
+        {"policy": {}},
+        {"policy": LIMITS_UPDATE["policy"] | {"prices": {}}},
+    ],
+)
+def test_limit_command_rejects_forged_or_invalid_input(limits_api, change):
+    client, calls = limits_api
+    csrf = login(client, "admin").json()["csrf_token"]
+    response = client.post(
+        LIMITS_PATH,
+        json=LIMITS_UPDATE | change,
+        headers={"origin": ORIGIN, "x-csrf-token": csrf},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "detail"),
+    [
+        (BudgetRefused("budget_not_configured"), 404, "cost_scope_not_found"),
+        (sa.exc.NoResultFound(), 404, "cost_scope_not_found"),
+        (BudgetRefused("policy_conflict"), 409, "cost_state_rejected"),
+        (ValueError("private policy"), 409, "cost_state_rejected"),
+        (SQLAlchemyError("private storage"), 503, "costs_unavailable"),
+    ],
+)
+def test_limit_command_redacts_store_failures(monkeypatch, limits_api, error, status, detail):
+    client, _ = limits_api
+
+    def reject(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        budget_commands, "BudgetStore", lambda engine: SimpleNamespace(set_limits=reject)
+    )
+    csrf = login(client, "admin").json()["csrf_token"]
+    response = client.post(
+        LIMITS_PATH, json=LIMITS_UPDATE, headers={"origin": ORIGIN, "x-csrf-token": csrf}
+    )
+    assert response.status_code == status
+    assert response.json() == {"detail": detail}
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_limit_command_openapi_is_bounded_body_not_authority_fields():
+    contract = app.openapi()
+    route = contract["paths"][LIMITS_PATH.replace("budget-fixture", "{project_key}")]["post"]
+    assert route["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BudgetLimitUpdate"
+    )
+    body = contract["components"]["schemas"]["BudgetLimitUpdate"]
+    assert body["additionalProperties"] is False
+    assert set(body["properties"]) == {"expected_revision", "policy"}
+    assert body["properties"]["expected_revision"]["minimum"] == 1
+
+
+def budget_rows(engine):
+    with engine.connect() as connection:
+        return {
+            table.name: connection.execute(sa.select(table).order_by(*table.primary_key.columns))
+            .mappings()
+            .all()
+            for table in db.metadata.sorted_tables
+        }
+
+
+@pytest.mark.parametrize("pause", [None, "insufficient_credits", "estimate_overrun"])
+def test_postgres_limit_http_recovers_preserves_private_policy_and_rejects_replay(
+    monkeypatch, store, postgres_budget, pause
+):
+    budget_tests.configure_review(postgres_budget)
+    reserve(postgres_budget)
+    with postgres_budget.engine.begin() as connection:
+        connection.execute(
+            sa.update(db.head)
+            .where(db.head.c.project_id == "budget-fixture")
+            .values(pause_reason=pause)
+        )
+    monkeypatch.setattr(
+        budget_commands, "auth_store", lambda: SimpleNamespace(engine=postgres_budget.engine)
+    )
+    monkeypatch.setattr(
+        budget_reads, "auth_store", lambda: SimpleNamespace(engine=postgres_budget.engine)
+    )
+    before = budget_rows(postgres_budget.engine)
+    original = before[db.head.name][0]
+    payload = LIMITS_UPDATE | {"expected_revision": original["revision"]}
+    with TestClient(app, base_url=ORIGIN) as client:
+        csrf = login(client, "admin").json()["csrf_token"]
+        actor = client.get("/auth/me").json()
+        headers = {"origin": ORIGIN, "x-csrf-token": csrf}
+        response = client.post(LIMITS_PATH, json=payload, headers=headers)
+        assert response.status_code == 200
+        assert response.json() == {
+            "project_id": "budget-fixture",
+            "policy_revision": original["revision"] + 1,
+        }
+        after = budget_rows(postgres_budget.engine)
+        head = after[db.head.name][0]
+        assert head == dict(original) | {
+            "revision": original["revision"] + 1,
+            "policy": original["policy"] | {"limits": payload["policy"]},
+        }
+        for name in before.keys() - {db.head.name, db.event.name}:
+            assert after[name] == before[name]
+        added = [row for row in after[db.event.name] if row not in before[db.event.name]]
+        assert len(after[db.event.name]) == len(before[db.event.name]) + 1
+        assert all(row in after[db.event.name] for row in before[db.event.name])
+        assert len(added) == 1
+        event = added[0]
+        assert event["action"] == "policy" and event["record"] == head["policy"]
+        assert event["principal_id"] == actor["id"] and event["principal_kind"] == "human"
+        assert event["policy_revision"] == head["revision"]
+        assert client.post(LIMITS_PATH, json=payload, headers=headers).status_code == 409
+        assert budget_rows(postgres_budget.engine) == after
+    with TestClient(app, base_url=ORIGIN) as client:
+        login(client, "admin")
+        recovered = client.get(PATH)
+        assert recovered.status_code == 200
+        assert recovered.json()["policy"] == payload["policy"]
+        assert recovered.json()["pause_reason"] == pause
+        assert recovered.json()["policy_revision"] == head["revision"]
+    assert budget_rows(postgres_budget.engine) == after
+    with pytest.raises(BudgetRefused, match="stale_dry_run"):
+        claim(postgres_budget)
+    assert budget_rows(postgres_budget.engine) == after
+
+
+@pytest.mark.parametrize("key", ["missing", "unconfigured", "orphan"])
+def test_postgres_limit_http_does_not_create_or_infer_project_scope(
+    monkeypatch, store, postgres_budget, key
+):
+    with postgres_budget.engine.begin() as connection:
+        connection.execute(
+            sa.insert(project).values(
+                project_key="unconfigured",
+                workspace_id=uuid4(),
+                task="detect",
+                scope="fixture",
+                domain="licence-clean",
+            )
+        )
+        connection.execute(
+            sa.insert(db.head).values(
+                project_id="orphan", revision=1, policy={"limits": asdict(BudgetPolicy(1, 1, 1))}
+            )
+        )
+    monkeypatch.setattr(
+        budget_commands, "auth_store", lambda: SimpleNamespace(engine=postgres_budget.engine)
+    )
+    before = budget_rows(postgres_budget.engine)
+    with TestClient(app, base_url=ORIGIN) as client:
+        csrf = login(client, "admin").json()["csrf_token"]
+        response = client.post(
+            f"/projects/{key}/costs/policy",
+            json=LIMITS_UPDATE,
+            headers={"origin": ORIGIN, "x-csrf-token": csrf},
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "cost_scope_not_found"}
+    assert budget_rows(postgres_budget.engine) == before
+
+
+def test_postgres_limit_http_rolls_back_head_when_event_append_fails(
+    monkeypatch, store, postgres_budget
+):
+    monkeypatch.setattr(
+        budget_commands, "auth_store", lambda: SimpleNamespace(engine=postgres_budget.engine)
+    )
+    original = budget_tests.BudgetStore._event
+
+    def fail(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise SQLAlchemyError("private after event insert")
+
+    before = budget_rows(postgres_budget.engine)
+    monkeypatch.setattr(budget_tests.BudgetStore, "_event", fail)
+    with TestClient(app, base_url=ORIGIN) as client:
+        csrf = login(client, "admin").json()["csrf_token"]
+        response = client.post(
+            LIMITS_PATH, json=LIMITS_UPDATE, headers={"origin": ORIGIN, "x-csrf-token": csrf}
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "costs_unavailable"}
+    assert budget_rows(postgres_budget.engine) == before

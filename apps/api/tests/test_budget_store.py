@@ -864,3 +864,47 @@ FOR EACH ROW EXECUTE FUNCTION reject_budget_test_event();
     ):
         with pytest.raises(DBAPIError), store.engine.begin() as connection:
             connection.execute(statement)
+
+
+def test_limit_edits_race_on_the_existing_head_and_preserve_private_policy(store):
+    configure_review(store)
+    with store.engine.connect() as connection:
+        original = connection.execute(sa.select(db.head)).mappings().one()
+        events = connection.execute(sa.select(db.event)).mappings().all()
+    barrier = Barrier(2)
+    policies = (BudgetPolicy(0, None, 50, True), BudgetPolicy(50, 50, 0, False))
+
+    def change(policy):
+        barrier.wait(timeout=20)
+        try:
+            return store.set_limits(
+                "budget-fixture",
+                actor=ADMIN,
+                expected_revision=original["revision"],
+                policy=policy,
+            )
+        except BudgetRefused as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(change, policies))
+    assert results.count(original["revision"] + 1) == 1
+    assert results.count("policy_conflict") == 1
+    with store.engine.connect() as connection:
+        head = connection.execute(sa.select(db.head)).mappings().one()
+        after = connection.execute(sa.select(db.event)).mappings().all()
+    assert head["revision"] == original["revision"] + 1
+    assert {k: v for k, v in head["policy"].items() if k != "limits"} == {
+        k: v for k, v in original["policy"].items() if k != "limits"
+    }
+    winner = policies[results.index(head["revision"])]
+    assert head["policy"]["limits"] == {
+        "monthly_limit": winner.monthly_limit,
+        "iteration_limit": winner.iteration_limit,
+        "operation_limit": winner.operation_limit,
+        "autonomous_spend": winner.autonomous_spend,
+    }
+    assert len(after) == len(events) + 1
+    assert all(row in after for row in events)
+    added = next(row for row in after if row not in events)
+    assert added["record"] == head["policy"] and added["principal_id"] == ADMIN.id

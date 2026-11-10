@@ -6,7 +6,43 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Original per-operation pricing in shown-row CSV — verification pending
+## Authenticated limits-only budget command — verification pending
+
+`POST /projects/{project_key}/costs/policy` accepts an expected existing policy
+revision and the four typed budget-limit fields behind human-admin sessions and
+same-origin CSRF. The existing BudgetStore head lock serializes CAS edits and
+appends the session actor's immutable policy event atomically. The command retains
+all existing pricing, provider permissions, pause state, reservations and history.
+It never creates a budget, resumes paid stages, reserves work or dispatches I/O.
+Changing limits invalidates old dry runs and unsent claims through the existing
+policy-revision checks, not a new dispatch engine. Null and zero retain their core
+semantics; an unset limit disables paid work, not an unlimited spending grant.
+
+New adapter/OpenAPI and disposable PostgreSQL controls cover role/CSRF denial,
+forged fields, strict values, redacted failures, unknown/unconfigured/orphan scope,
+commit/reconnect, retained private policy and pauses, replay rejection, stale
+claims, concurrent edits and post-event failure rollback. These await exact-head
+Actions. UI command wiring and explicit resume remain unfinished; the session
+view still disables spending commands. No schema/migration, dependency, provider
+call, production operation or new design. REA: reuse the existing policy writer,
+head lock, immutable journal and authentication boundary.
+
+## Session audit lifetime and pricing — verified baseline
+
+Exact `7234f0b840115fb18f557dfb23a9ec36d2be48e0`
+[CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42734259446),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42734259132) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42734259138) passed.
+[Web-build](https://github.com/TogetherWeOwn/labelloop/actions/runs/42734259446/job/129559567267)
+verified the eight new desktop/mobile `SessionAuditLog` lifetime controls, plus
+original cost-pricing/CSV and all earlier web controls. Unit, both-recipe
+PostgreSQL ML smoke, migration cycles/all four parents and dev-stack also passed.
+Totals not extracted. These results supersede prior pending labels for those
+controls, not the new limits command, authenticated product mounting, expanded
+restore or milestone acceptance. Intercepted browser transport is not real login;
+role props never authorize access. Required reviews and pinned merge remain gates.
+
+## Original per-operation pricing in shown-row CSV — verified baseline
 
 The session cost adapter retains each validated operation's original price-table
 version through independent page appends. Shown-row CSV appends a `Price version`

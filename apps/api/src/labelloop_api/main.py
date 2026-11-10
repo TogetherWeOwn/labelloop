@@ -17,6 +17,7 @@ from labelloop_api.annotation_reads import router as annotation_router
 from labelloop_api.audit_reads import router as audit_reads_router
 from labelloop_api.auth import authentication_boundary, router, validation_error
 from labelloop_api.automatic_review_api import router as automatic_review_router
+from labelloop_api.budget_commands import router as budget_commands_router
 from labelloop_api.budget_reads import router as budget_reads_router
 from labelloop_api.registry_api import router as registry_router
 
@@ -28,6 +29,7 @@ app.include_router(registry_router)
 app.include_router(annotation_router)
 app.include_router(automatic_review_router)
 app.include_router(budget_reads_router)
+app.include_router(budget_commands_router)
 app.include_router(audit_reads_router)
 logger = logging.getLogger(__name__)
 
