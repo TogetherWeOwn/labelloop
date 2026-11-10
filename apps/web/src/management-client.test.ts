@@ -42,6 +42,50 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('publishes and reads explicit configuration pins with fixed transport', async () => {
+    const { request, result } = mockRequest();
+    const csrf = vi.fn(() => 'csrf');
+    const client = new ManagementClient(csrf);
+    const snapshot = {
+      expected_revision: 5, version: 'v1', setup_summary_sha256: 'a'.repeat(64),
+      reason: 'Reviewed local configuration',
+    };
+    await client.publishConfigurationSnapshot({
+      project_id: 'project', 'idempotency-key': 'snapshot', body: snapshot,
+    });
+    expect(request).toHaveBeenLastCalledWith('/api/projects/project/configuration-snapshots', {
+      method: 'POST', headers: {
+        Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'snapshot',
+      }, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      body: JSON.stringify(snapshot),
+    });
+    await expect(client.readConfigurationSnapshot({
+      project_id: 'project/other', version: 'v1&v2',
+    })).resolves.toEqual(result);
+    expect(request).toHaveBeenLastCalledWith(
+      '/api/projects/project%2Fother/configuration-snapshots/v1%26v2', {
+        method: 'GET', headers: { Accept: 'application/json' },
+        credentials: 'same-origin', cache: 'no-store', redirect: 'error', body: undefined,
+      },
+    );
+    const publication = {
+      expected_revision: 6, configuration: { version: 'v1', snapshot_sha256: 'b'.repeat(64) },
+      reason: 'Controlled local preparation',
+    };
+    await client.publishLocalConfiguration({
+      project_id: 'project', 'idempotency-key': 'local', body: publication,
+    });
+    expect(request).toHaveBeenLastCalledWith('/api/projects/project/local-configuration-releases', {
+      method: 'POST', headers: {
+        Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'local',
+      }, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      body: JSON.stringify(publication),
+    });
+    expect(csrf).toHaveBeenCalledTimes(2);
+  });
+
   it('reads the approved setup digest without publication authority', async () => {
     const { request } = mockRequest();
     const result = {

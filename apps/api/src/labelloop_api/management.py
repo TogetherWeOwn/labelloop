@@ -13,12 +13,15 @@ from .management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
     ClassCatalogPublish,
+    ConfigurationSnapshotPublish,
+    ConfigurationSnapshotRead,
     EvaluationStart,
     ExportRead,
     GuideDraft,
     Identifier,
     InitialSourceGrouping,
     JobAccepted,
+    LocalConfigurationPublish,
     ManagementError,
     ProjectCreate,
     PromotionRequest,
@@ -301,6 +304,53 @@ def management_router(
             actor, idempotency_key, "publish_anchor_pack", project_id, payload
         )
         return invoke(lambda: service.publish_anchor_pack(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/configuration-snapshots",
+        response_model=Resource,
+        operation_id="publishConfigurationSnapshot",
+    )
+    def publish_configuration_snapshot(
+        project_id: Identifier,
+        payload: ConfigurationSnapshotPublish,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_configuration_snapshot", project_id, payload
+        )
+        return invoke(lambda: service.publish_configuration_snapshot(actor, context, payload))
+
+    @router.get(
+        "/projects/{project_id}/configuration-snapshots/{version}",
+        response_model=ConfigurationSnapshotRead,
+        operation_id="readConfigurationSnapshot",
+    )
+    def read_configuration_snapshot(
+        project_id: Identifier,
+        version: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> ConfigurationSnapshotRead:
+        return invoke(lambda: service.read_configuration_snapshot(actor, project_id, version))
+
+    @router.post(
+        "/projects/{project_id}/local-configuration-releases",
+        response_model=Resource,
+        operation_id="publishLocalConfiguration",
+    )
+    def publish_local_configuration(
+        project_id: Identifier,
+        payload: LocalConfigurationPublish,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_local_configuration", project_id, payload
+        )
+        return invoke(lambda: service.publish_local_configuration(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/references",

@@ -18,12 +18,15 @@ from .management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
     ClassCatalogPublish,
+    ConfigurationSnapshotPublish,
+    ConfigurationSnapshotRead,
     Contract,
     EvaluationStart,
     ExportRead,
     GuideDraft,
     InitialSourceGrouping,
     JobAccepted,
+    LocalConfigurationPublish,
     ManagementError,
     ProjectCreate,
     PromotionRequest,
@@ -139,6 +142,24 @@ class ManagementOperations(Protocol):
 
     def publish_anchor_pack(
         self, actor: ManagementPrincipal, context: MutationContext, payload: AnchorPackPublish
+    ) -> Resource: ...
+
+    def publish_configuration_snapshot(
+        self,
+        actor: ManagementPrincipal,
+        context: MutationContext,
+        payload: ConfigurationSnapshotPublish,
+    ) -> Resource: ...
+
+    def read_configuration_snapshot(
+        self, actor: ManagementPrincipal, project_id: str, version: str
+    ) -> ConfigurationSnapshotRead: ...
+
+    def publish_local_configuration(
+        self,
+        actor: ManagementPrincipal,
+        context: MutationContext,
+        payload: LocalConfigurationPublish,
     ) -> Resource: ...
 
     def enroll_reference(

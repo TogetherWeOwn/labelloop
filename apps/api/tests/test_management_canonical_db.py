@@ -8038,6 +8038,193 @@ def test_local_publication_freezes_compiles_and_enqueues_configuration_bound_tra
     # This fixture executes the real compiler, not CPU training or HTTP bootstrap.
 
 
+@pytest.mark.parametrize("side", [320, 640])
+def test_configuration_http_publishes_verifies_and_binds_freeze_and_training(
+    database, compilation, compiler_worker, restricted_auth_store, auth_account, side
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal as auth_principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_configuration import ConfigurationTrainingBinding
+    from labelloop_api.management_operations import CanonicalManagementOperations
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, publisher, request = configuration_inputs(service, owner, validation_sample=True)
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id, profiles=publisher.profiles
+    )
+    origin = "https://testserver"
+    path = f"/projects/{created.id}"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.get(path + "/configuration-snapshots/v1").status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "snapshot-http",
+        }
+        body = request.model_dump(mode="json")
+        assert (
+            client.post(
+                path + "/configuration-snapshots", json=body, headers={"origin": origin}
+            ).status_code
+            == 403
+        )
+        response = client.post(path + "/configuration-snapshots", json=body, headers=headers)
+        assert response.status_code == 200
+        assert (
+            client.post(path + "/configuration-snapshots", json=body, headers=headers).json()
+            == response.json()
+        )
+        summary_response = client.get(path + "/configuration-snapshots/v1")
+        assert summary_response.status_code == 200
+        assert summary_response.headers["cache-control"] == "no-store"
+        summary = summary_response.json()
+        pin = summary["configuration"]
+        assert pin == configuration_pin(owner, created.id).model_dump(mode="json")
+        assert summary["runtime_binding"] is None and summary["qualification"] == "not_assessed"
+        assert set(summary) == {
+            "project_id",
+            "configuration",
+            "setup_summary_sha256",
+            "training_profile_ids",
+            "runtime_binding",
+            "qualification",
+        }
+        assert client.get(path + "/configuration-snapshots/missing").status_code == 422
+        local_body = {
+            "expected_revision": response.json()["revision"],
+            "configuration": pin,
+            "reason": "Controlled local preparation",
+        }
+        headers["Idempotency-Key"] = "local-http"
+        # A valid client pin alone never creates a server runtime binding.
+        assert (
+            client.post(
+                path + "/local-configuration-releases", json=local_body, headers=headers
+            ).status_code
+            == 503
+        )
+        operations = replace(
+            operations,
+            configurations=(
+                ConfigurationTrainingBinding(
+                    UUID(created.id), pin["version"], pin["snapshot_sha256"]
+                ),
+            ),
+        )
+        assert client.get(path + "/freeze-plan").json()["payload"] is None
+        assert (
+            client.post(
+                path + "/local-configuration-releases",
+                json={**local_body, "runtime_binding": "local_ultralytics"},
+                headers=headers,
+            ).status_code
+            == 422
+        )
+        publication = client.post(
+            path + "/local-configuration-releases", json=local_body, headers=headers
+        )
+        assert publication.status_code == 200 and publication.json()["state"] == "frozen"
+        assert (
+            client.post(
+                path + "/local-configuration-releases", json=local_body, headers=headers
+            ).json()
+            == publication.json()
+        )
+        plan_response = client.get(path + "/freeze-plan")
+        assert (
+            plan_response.status_code == 200
+            and plan_response.headers["cache-control"] == "no-store"
+        )
+        plan = plan_response.json()
+        assert plan["configuration"] == pin
+        assert plan["payload"]["expected_revision"] == publication.json()["revision"]
+        assert set(plan["payload"]["annotation_revisions"]) == {
+            item["asset_id"]
+            for item in publisher.read_current(Reader(), configuration_pin(owner, created.id))[
+                "grouping"
+            ]
+        }
+        headers["Idempotency-Key"] = "freeze-http"
+        frozen = client.post(path + "/dataset-releases", json=plan["payload"], headers=headers)
+        assert frozen.status_code == 201
+        assert (
+            client.post(path + "/dataset-releases", json=plan["payload"], headers=headers).json()
+            == frozen.json()
+        )
+        compiled = compile_request(
+            compilation, frozen.json()["id"], recipe=f"full-letterbox-{side}-v1"
+        )
+        assert JobRunner(
+            compiler_worker.store,
+            "compile_variant",
+            (Stage("compilation", compiler_worker.compile),),
+            compiler_worker.publish,
+            job_id=compiled.job_id,
+        ).run_once("fixture-http-compiler")
+        headers["Idempotency-Key"] = "train-http"
+        training = client.post(
+            f"/variants/{compiled.resource.id}/training-runs",
+            json={"expected_revision": 1, "training_profile_id": f"baseline-{side}"},
+            headers=headers,
+        )
+        assert training.status_code == 202
+        (job,) = training_jobs(owner, created.id)
+        assert job.input["configuration"]["snapshot_sha256"] == pin["snapshot_sha256"]
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.get(path + "/configuration-snapshots/v1").json() == summary
+        assert client.get(path + "/freeze-plan").json()["configuration"] == pin
+        assert (
+            client.post(
+                path + "/local-configuration-releases", json=local_body, headers=headers
+            ).status_code
+            == 403
+        )
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.get(path + "/configuration-snapshots/v1").status_code == 401
+    # Annotation/grouping remain explicit fixtures; no CPU or admission proof here.
+
+
+@pytest.mark.parametrize("change", ["setup", "profile", "foreign_workspace"])
+def test_configuration_public_summary_and_bound_plan_refuse_changed_authority(database, change):
+    from labelloop_api.management_configuration import CanonicalConfigurationSnapshots
+
+    service, owner, _ = database
+    created, local, request = local_configuration_inputs(service, owner, validation_sample=True)
+    publication = publish_local_configuration(local, request)
+    snapshots = local.snapshots
+    if change == "setup":
+        save_step_draft(service, created.id, "scope", publication.revision, key="after-local")
+    elif change == "profile":
+        snapshots = replace(
+            snapshots, profiles=(replace(snapshots.profiles[0], epochs=2), *snapshots.profiles[1:])
+        )
+    else:
+        snapshots = CanonicalConfigurationSnapshots(
+            replace(service, workspace_id=uuid4()), UUID(created.id), snapshots.profiles
+        )
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure):
+        snapshots.read_summary(Reader(), local.pin.version)
+    plan = replace(local, snapshots=snapshots)
+    if change == "foreign_workspace":
+        with pytest.raises(ManagementFailure, match="not_found"):
+            plan.read_freeze_plan(Reader())
+    else:
+        assert plan.read_freeze_plan(Reader()).payload is None
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
 def test_local_publication_cannot_freeze_without_validation_membership(database):
     service, owner, _ = database
     created, local, request = local_configuration_inputs(service, owner)

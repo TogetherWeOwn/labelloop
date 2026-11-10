@@ -18,6 +18,9 @@ export type ClassDraftInput = { "aliases": Array<string>; "definition": string; 
 export type ClassInput = { "definition": string; "name": string; "stable_id": string };
 export type ClassMetrics = { "false_positives": number; "map50": number | null; "map50_95": number | null; "precision": number | null; "predictions": number; "recall": number | null; "support": number; "supported": boolean; "true_positives": number };
 export type ClassRead = { "aliases": Array<string>; "approval": "proposed" | "admin_approved" | null; "definition": string; "exclusions": Array<string> | null; "mirror_safe": boolean | null; "name": string; "parent_id": string | null; "positive_examples": number | null; "stable_id": string };
+export type ConfigurationSnapshotPin = { "snapshot_sha256": string; "version": string };
+export type ConfigurationSnapshotPublish = { "expected_revision": number; "reason": string; "setup_summary_sha256": string; "version": string };
+export type ConfigurationSnapshotRead = { "configuration": ConfigurationSnapshotPin; "project_id": string; "qualification"?: "not_assessed"; "runtime_binding"?: null; "setup_summary_sha256": string; "training_profile_ids": Array<string> };
 export type Coverage = { "asset_id": string; "covered_fraction": number; "partially_covered_targets": number; "uncovered_targets": number };
 export type Crop = { "height": number; "width": number; "x": number; "y": number };
 export type EvaluationDetail = { "candidate_id": string; "checks": Array<CheckRead>; "incumbent_id": string | null; "incumbent_report": EvaluationReport | null; "minimum_class_support": number | null; "opened_final_test_count": number; "qualification": "unqualified" | "evaluating" | "qualified"; "qualification_id": string | null; "reason": string; "report": EvaluationReport | null; "resource": Resource };
@@ -25,12 +28,13 @@ export type EvaluationReport = { "class_map_sha256": string; "coverage": Array<C
 export type EvaluationStart = { "dataset_release_id": string; "expected_revision": number; "protocol_id": string };
 export type ExclusionRead = { "asset_ids": Array<string>; "reason": string };
 export type ExportRead = { "artifact_id": string; "artifact_sha256": string; "format": "onnx"; "input_hw": [number, number]; "model_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "weights_sha256": string };
-export type FreezePlanRead = { "checks": Array<CheckRead>; "exclusions": Array<ExclusionRead>; "payload": ReleaseFreeze | null; "project_id": string };
+export type FreezePlanRead = { "checks": Array<CheckRead>; "configuration"?: ConfigurationSnapshotPin | null; "exclusions": Array<ExclusionRead>; "payload": ReleaseFreeze | null; "project_id": string };
 export type GuideDraft = { "annotation_guide": string; "background": string; "exhaustive_for_scope": boolean; "expected_revision": number; "extent": "visible"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type GuideRead = { "background": string; "exhaustive_for_scope": boolean; "extent": "visible" | "estimated"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type InferencePolicy = { "agnostic_nms"?: boolean; "conf"?: number; "imgsz": number; "iou"?: number; "max_det"?: number; "nms"?: "external" | "end2end" };
 export type InitialSourceGrouping = { "annotation_revisions": Record<string, unknown>; "expected_revision": number; "ontology_id": string; "source_policy_sha256": string };
 export type JobAccepted = { "job_id": string; "resource": Resource };
+export type LocalConfigurationPublish = { "configuration": ConfigurationSnapshotPin; "expected_revision": number; "reason": string };
 export type ManagementError = { "detail": "authentication_required" | "permission_denied" | "invalid_request" | "management_unavailable" | "not_found" | "revision_conflict" | "idempotency_conflict" | "incomplete_labels" | "unsupported_classes" | "missing_evidence" | "incompatible_recipe" | "shape_mismatch" | "qualification_required" | "external_conflict" | "transport_failure" };
 export type Matrix3 = [[number, number, number], [number, number, number], [number, number, number]];
 export type Metrics = { "images": number; "map50": number | null; "map50_95": number | null; "per_class": Record<string, ClassMetrics>; "precision": number | null; "recall": number | null; "support": number };
@@ -154,6 +158,16 @@ export class ManagementClient {
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
+  publishConfigurationSnapshot(input: { "project_id": string; "idempotency-key": string; body: ConfigurationSnapshotPublish }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/configuration-snapshots`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  readConfigurationSnapshot(input: { "project_id": string; "version": string }): Promise<ConfigurationSnapshotRead> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/configuration-snapshots/${encodeURIComponent(input["version"])}`;
+    return this.request<ConfigurationSnapshotRead>(path, "GET");
+  }
+
   freezeRelease(input: { "project_id": string; "idempotency-key": string; body: ReleaseFreeze }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/dataset-releases`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
@@ -162,6 +176,11 @@ export class ManagementClient {
   readFreezePlan(input: { "project_id": string }): Promise<FreezePlanRead> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/freeze-plan`;
     return this.request<FreezePlanRead>(path, "GET");
+  }
+
+  publishLocalConfiguration(input: { "project_id": string; "idempotency-key": string; body: LocalConfigurationPublish }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/local-configuration-releases`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
   promoteModel(input: { "project_id": string; "idempotency-key": string; body: PromotionRequest }): Promise<PromotionResult> {

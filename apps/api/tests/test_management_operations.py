@@ -63,7 +63,6 @@ def test_facade_has_every_typed_port_and_keeps_configuration_immutable(operation
         "accept_reference",
         "revalidate_reference",
         "withdraw_reference",
-        "freeze_release",
     ],
 )
 def test_setup_mutations_reuse_canonical_implementation_unchanged(name):
@@ -88,7 +87,6 @@ def test_setup_mutations_reuse_canonical_implementation_unchanged(name):
             "read_reference_lifecycle",
             "read_anchor_pack",
             "read_release",
-            "read_freeze_plan",
             "read_recipe_preview",
             "read_training",
             "read_evaluation",

@@ -6,6 +6,46 @@ transaction/queue adapters are integrated. Recording-port tests prove dispatch
 and serialization only, not persistence, concurrency, authorization within a
 project, or the CPU project-to-export acceptance path.
 
+## Explicit local configuration (opt-in only)
+
+`publishConfigurationSnapshot`, `POST /projects/{project_id}/configuration-snapshots`,
+accepts the expected project revision, a new version, the current approved setup
+summary digest and a reason. It reuses the canonical snapshot publisher: current
+five-step setup, human anchors, locked source-group provenance and trusted server
+training/recipe/checkpoint/inference profiles are rechecked and pinned atomically
+with attributed audit. A response is an acknowledgment of the draft project revision,
+not activation. Exact retries acknowledge historical receipts without renewing them.
+
+`readConfigurationSnapshot`, `GET /projects/{project_id}/configuration-snapshots/{version}`,
+resolves the explicitly selected version's stored pin, then verifies the complete
+receipt and freshly prepared current evidence in one SELECT-only repeatable snapshot.
+It returns only project/version/digest, approved setup digest, profile IDs and explicit
+`runtime_binding: null` / `qualification: not_assessed`. It exposes no internal snapshot,
+source locations, provider data or retrieval authority. Stale, duplicate, corrupt or
+missing evidence refuses; it never silently selects another version.
+
+`publishLocalConfiguration`, `POST /projects/{project_id}/local-configuration-releases`,
+accepts an expected project revision, explicit configuration pin and reason. The
+trusted application must separately configure the exact project/version/digest in
+`CanonicalManagementOperations.configurations`; a request cannot create that binding
+or select a backend. The existing local-only publisher verifies current evidence and
+records fixed `local_ultralytics` preparation authority, with automatic acceptance off,
+quality unassessed and promotion targets null. Both mutations require shared human-admin
+sessions/CSRF and attributed revision/idempotency controls; reviewers can read only.
+
+For a server-bound project, `readFreezePlan` and `freezeRelease` use the same local
+publication verifier as bound training submission. Planning is SELECT-only and returns
+its verified `configuration` pin alongside authoritative membership; POST repeats all
+checks under canonical project/source locks and retains the pin in its freeze receipt.
+No active publication, stale setup/profile/source evidence or mismatched pin grants
+clearance. Unbound callers retain the existing draft refusal. Dataset releases still
+need eligible labels and nonempty validation membership. Application construction
+performs no I/O and does not auto-register workers or mount management by default.
+This is local preparation, not a measured pilot, bulk-reference retrieval, qualification,
+automatic acceptance, production runtime provisioning or real asset-admission clearance.
+`readProject.published_release_id` remains null rather than conflating this scoped local
+configuration with the complete project-release/pilot lifecycle.
+
 ## Detail reads
 
 All reads require the shared authenticated human principal (admin or reviewer),

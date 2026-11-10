@@ -6,10 +6,8 @@ route, selects a provider, qualifies a model or enables automatic acceptance.
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Annotated
 
-from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from .management_canonical import refuse
 from .management_configuration import (
@@ -18,14 +16,11 @@ from .management_configuration import (
     profile_snapshots,
     read_current_configuration,
 )
-from .management_contracts import Mutation, ReleaseFreeze, Resource
+from .management_contracts import LocalConfigurationPublish, ReleaseFreeze, Resource
+from .management_freeze_plan import freeze_plan
 from .management_ports import MutationContext
-from .schema import canonical_event
-
-
-class LocalConfigurationPublish(Mutation):
-    configuration: ConfigurationSnapshotPin
-    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+from .management_reads import CanonicalManagementReads, authorize_reader
+from .schema import canonical_event, project
 
 
 def verify_local_publication(receipt, owned, workspace_id, revision, pin):
@@ -200,6 +195,26 @@ class CanonicalLocalConfigurationRelease:
                 },
             )
             return result
+
+    def read_freeze_plan(self, actor):
+        authorize_reader(actor)
+        service = self.snapshots.mutations
+        rows = CanonicalManagementReads(service.engine, service.workspace_id).project_rows()
+        with service.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                owned = connection.execute(
+                    select(project, rows.c.revision.label("management_revision"))
+                    .join(rows, project.c.id == rows.c.id)
+                    .where(project.c.id == self.snapshots.project_id)
+                ).one_or_none()
+                if owned is None:
+                    refuse("not_found")
+                return freeze_plan(
+                    connection, owned, owned.management_revision, configuration_release=self
+                )
 
     def freeze_release(self, actor, context, payload):
         service = self.snapshots.mutations

@@ -30,7 +30,9 @@ def unavailable_plan(project_id: str, reason: str, exclusions: list[ExclusionRea
     )
 
 
-def freeze_plan(connection: Connection, project_row, project_revision: int) -> FreezePlanRead:
+def freeze_plan(
+    connection: Connection, project_row, project_revision: int, *, configuration_release=None
+) -> FreezePlanRead:
     project_id = str(project_row.id)
     # The published request can carry at most 10,000 selected revisions. Bound
     # preparation too; a larger project requires an explicit selection surface.
@@ -109,11 +111,19 @@ def freeze_plan(connection: Connection, project_row, project_revision: int) -> F
     try:
         # No storage or DB writes; the domain constructor validates the same
         # complete membership and geometry that POST will later freeze.
-        freeze_candidate(connection, project_row, payload, "freeze-plan", lock_sources=False)
+        freeze_candidate(
+            connection,
+            project_row,
+            payload,
+            "freeze-plan",
+            lock_sources=False,
+            configuration_release=configuration_release,
+        )
     except ManagementFailure as failure:
         return unavailable_plan(project_id, failure.error.detail, exclusions)
     return FreezePlanRead(
         project_id=project_id,
+        configuration=configuration_release.pin if configuration_release is not None else None,
         payload=payload,
         checks=[
             CheckRead(

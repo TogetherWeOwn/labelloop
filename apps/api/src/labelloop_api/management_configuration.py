@@ -7,10 +7,9 @@ current snapshot provenance; no freeze or current-release clearance is granted.
 import json
 from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
-from typing import Annotated
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import TypeAdapter
 from sqlalchemy import String, cast, select, text
 
 from labelloop_compiler.compiler import resolve_recipe
@@ -18,7 +17,13 @@ from labelloop_core.json_records import canonical_json
 from labelloop_core.training import InferencePolicy
 
 from .management_canonical import CanonicalManagementMutations, refuse
-from .management_contracts import Contract, Digest, Identifier, Mutation, Resource
+from .management_contracts import (
+    ConfigurationSnapshotPin,
+    ConfigurationSnapshotPublish,
+    ConfigurationSnapshotRead,
+    Identifier,
+    Resource,
+)
 from .management_grouping import load_grouping
 from .management_ports import MutationContext
 from .management_project_reads import project_detail
@@ -26,17 +31,6 @@ from .management_reads import CanonicalManagementReads, authorize_reader
 from .management_setup import draft_sha256, read_setup_approvals
 from .management_training import ApprovedTrainingProfile
 from .schema import canonical_event, project
-
-
-class ConfigurationSnapshotPin(Contract):
-    version: Identifier
-    snapshot_sha256: Digest
-
-
-class ConfigurationSnapshotPublish(Mutation):
-    version: Identifier
-    setup_summary_sha256: Digest
-    reason: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
 def profile_snapshots(profiles, project_id):
@@ -283,8 +277,23 @@ class CanonicalConfigurationSnapshots:
         profile_snapshots(self.profiles, self.project_id)
 
     def read_current(self, actor, pin):
+        return self._read(actor, pin=pin)[0]
+
+    def read_summary(self, actor, version):
         authorize_reader(actor)
-        pin = ConfigurationSnapshotPin.model_validate(pin.model_dump(mode="json"))
+        version = TypeAdapter(Identifier).validate_python(version)
+        snapshot, pin = self._read(actor, version=version)
+        return ConfigurationSnapshotRead(
+            project_id=str(self.project_id),
+            configuration=pin,
+            setup_summary_sha256=snapshot["setup_summary_sha256"],
+            training_profile_ids=[item["id"] for item in snapshot["training_profiles"]],
+        )
+
+    def _read(self, actor, *, pin=None, version=None):
+        authorize_reader(actor)
+        if pin is not None:
+            pin = ConfigurationSnapshotPin.model_validate(pin.model_dump(mode="json"))
         service = self.mutations
         owned = CanonicalManagementReads(service.engine, service.workspace_id).project_rows()
         with service.engine.connect().execution_options(
@@ -299,7 +308,33 @@ class CanonicalConfigurationSnapshots:
                 ).one_or_none()
                 if row is None:
                     refuse("not_found")
-                return read_current_configuration(
+                if pin is None:
+                    receipts = connection.execute(
+                        select(canonical_event.c.payload)
+                        .where(
+                            canonical_event.c.aggregate_id == str(row.id),
+                            canonical_event.c.event_type
+                            == "management.publish_configuration_snapshot",
+                        )
+                        .limit(1001)
+                    ).all()
+                    if len(receipts) > 1000:
+                        refuse("management_unavailable")
+                    try:
+                        pins = [
+                            ConfigurationSnapshotPin(
+                                version=item.payload["evidence"]["version"],
+                                snapshot_sha256=item.payload["evidence"]["snapshot_sha256"],
+                            )
+                            for item in receipts
+                        ]
+                    except (KeyError, TypeError, ValueError):
+                        refuse("missing_evidence")
+                    matching = [item for item in pins if item.version == version]
+                    if len(matching) != 1:
+                        refuse("missing_evidence")
+                    pin = matching[0]
+                snapshot = read_current_configuration(
                     connection,
                     row,
                     service.workspace_id,
@@ -307,6 +342,7 @@ class CanonicalConfigurationSnapshots:
                     profile_snapshots(self.profiles, self.project_id),
                     pin,
                 )
+                return snapshot, pin
 
     def publish(self, actor, context, payload):
         service = self.mutations

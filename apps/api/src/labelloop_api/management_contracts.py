@@ -50,6 +50,32 @@ class Mutation(Contract):
     expected_revision: Revision
 
 
+class ConfigurationSnapshotPin(Contract):
+    version: Identifier
+    snapshot_sha256: Digest
+
+
+class ConfigurationSnapshotPublish(Mutation):
+    version: Identifier
+    setup_summary_sha256: Digest
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class LocalConfigurationPublish(Mutation):
+    configuration: ConfigurationSnapshotPin
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class ConfigurationSnapshotRead(Contract):
+    project_id: Identifier
+    configuration: ConfigurationSnapshotPin
+    setup_summary_sha256: Digest
+    training_profile_ids: Annotated[list[Identifier], Field(min_length=1, max_length=32)]
+    # A current snapshot summary is not local activation or qualification.
+    runtime_binding: None = None
+    qualification: Literal["not_assessed"] = "not_assessed"
+
+
 class ScopeDraft(Mutation):
     name: Annotated[str, Field(min_length=1, max_length=256)]
     scope: Annotated[str, Field(min_length=1, max_length=8192)]

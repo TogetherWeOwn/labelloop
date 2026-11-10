@@ -11,15 +11,20 @@ from labelloop_worker_core.jobs import JobStore
 from .management_canonical import CanonicalManagementMutations, refuse
 from .management_compilation import CanonicalManagementCompilation
 from .management_compile_worker import CompilationObjects
-from .management_configuration import ConfigurationTrainingBinding
+from .management_configuration import CanonicalConfigurationSnapshots, ConfigurationTrainingBinding
+from .management_configuration_release import CanonicalLocalConfigurationRelease
 from .management_contracts import (
     AssetIngest,
+    ConfigurationSnapshotPublish,
+    ConfigurationSnapshotRead,
     EvaluationStart,
     ExportRead,
     InitialSourceGrouping,
     JobAccepted,
+    LocalConfigurationPublish,
     PromotionRequest,
     PromotionResult,
+    ReleaseFreeze,
     Resource,
     ResourceKind,
     ResourcePage,
@@ -41,7 +46,7 @@ from .management_details import (
 from .management_evaluation import ApprovedDevelopmentProtocol, CanonicalManagementEvaluation
 from .management_grouping_publication import CanonicalInitialGrouping
 from .management_ports import ManagementPrincipal, MutationContext
-from .management_reads import CanonicalManagementReads
+from .management_reads import CanonicalManagementReads, authorize_reader
 from .management_training import ApprovedTrainingProfile, CanonicalManagementTraining
 
 
@@ -79,6 +84,54 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
 
     def _evaluation(self) -> CanonicalManagementEvaluation:
         return CanonicalManagementEvaluation(self, JobStore.enqueue_in_transaction, self.protocols)
+
+    def _snapshots(self, project_id):
+        profiles = tuple(p for p in self.profiles if str(p.project_id) == project_id)
+        if not profiles:
+            refuse("management_unavailable")
+        return CanonicalConfigurationSnapshots(self, profiles[0].project_id, profiles)
+
+    def _local_configuration(self, project_id):
+        binding = next((b for b in self.configurations if str(b.project_id) == project_id), None)
+        if binding is None:
+            return None
+        return CanonicalLocalConfigurationRelease(self._snapshots(project_id), binding.pin())
+
+    def publish_configuration_snapshot(
+        self,
+        actor: ManagementPrincipal,
+        context: MutationContext,
+        payload: ConfigurationSnapshotPublish,
+    ) -> Resource:
+        self.authorize(actor, context, "publish_configuration_snapshot", context.target_id, payload)
+        return self._snapshots(context.target_id).publish(actor, context, payload)
+
+    def read_configuration_snapshot(
+        self, actor: ManagementPrincipal, project_id: str, version: str
+    ) -> ConfigurationSnapshotRead:
+        authorize_reader(actor)
+        return self._snapshots(project_id).read_summary(actor, version)
+
+    def publish_local_configuration(
+        self,
+        actor: ManagementPrincipal,
+        context: MutationContext,
+        payload: LocalConfigurationPublish,
+    ) -> Resource:
+        self.authorize(actor, context, "publish_local_configuration", context.target_id, payload)
+        local = self._local_configuration(context.target_id)
+        if local is None:
+            refuse("management_unavailable")
+        return local.publish(actor, context, payload)
+
+    def freeze_release(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: ReleaseFreeze
+    ) -> Resource:
+        self.authorize(actor, context, "freeze_release", context.target_id, payload)
+        local = self._local_configuration(context.target_id)
+        if local is not None:
+            return local.freeze_release(actor, context, payload)
+        return super().freeze_release(actor, context, payload)
 
     def ingest_asset(
         self, actor: ManagementPrincipal, context: MutationContext, payload: AssetIngest
@@ -160,6 +213,10 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         return self._reads().read_release(actor, release_id)
 
     def read_freeze_plan(self, actor: ManagementPrincipal, project_id: str) -> FreezePlanRead:
+        authorize_reader(actor)
+        local = self._local_configuration(project_id)
+        if local is not None:
+            return local.read_freeze_plan(actor)
         return self._reads().read_freeze_plan(actor, project_id)
 
     def read_recipe_preview(

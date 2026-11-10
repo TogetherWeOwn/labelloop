@@ -18,6 +18,7 @@ from labelloop_core.training import Checkpoint
 from .management_contracts import (
     ClassDraftInput,
     ClassInput,
+    ConfigurationSnapshotPin,
     Contract,
     Digest,
     Identifier,
@@ -204,6 +205,7 @@ class ReleaseDetail(Contract):
 
 class FreezePlanRead(Contract):
     project_id: Identifier
+    configuration: ConfigurationSnapshotPin | None = None
     # Selected from authoritative eligible revisions at this project revision.
     # A POST must recheck these under lock, not trust this read as approval.
     payload: ReleaseFreeze | None

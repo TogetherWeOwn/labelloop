@@ -126,6 +126,27 @@ ANCHOR_PACK = {
     "reason": "Reviewed current source-bound anchors",
 }
 MUTATIONS = [
+    (
+        "/projects/p/configuration-snapshots",
+        "publish_configuration_snapshot",
+        {
+            "expected_revision": 4,
+            "version": "v1",
+            "setup_summary_sha256": "a" * 64,
+            "reason": "Reviewed configuration snapshot",
+        },
+        200,
+    ),
+    (
+        "/projects/p/local-configuration-releases",
+        "publish_local_configuration",
+        {
+            "expected_revision": 5,
+            "configuration": {"version": "v1", "snapshot_sha256": "b" * 64},
+            "reason": "Controlled local preparation",
+        },
+        200,
+    ),
     ("/projects/p/reference-packs", "publish_anchor_pack", ANCHOR_PACK, 200),
     (
         "/projects/p/source-assignments/initial",
@@ -425,6 +446,7 @@ def test_reference_acceptance_refuses_replacement_and_forged_authority(field, va
 
 
 READS = [
+    "/projects/p/configuration-snapshots/v1",
     "/projects",
     "/projects/p/resources?kind=variant",
     "/resources/model/m",
@@ -473,6 +495,15 @@ class RecordingOperations:
                 )
             if operation in {"list_projects", "list_resources"}:
                 return ResourcePage(items=[resource])
+            if operation == "read_configuration_snapshot":
+                from labelloop_api.management_contracts import ConfigurationSnapshotRead
+
+                return ConfigurationSnapshotRead(
+                    project_id="p",
+                    configuration={"version": "v1", "snapshot_sha256": "b" * 64},
+                    setup_summary_sha256="a" * 64,
+                    training_profile_ids=["baseline"],
+                )
             if operation == "read_export":
                 return ExportRead(
                     model_id="m",
@@ -980,8 +1011,29 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 33
-    assert sum(len(methods) for methods in spec["paths"].values()) == 34
+    assert len(spec["paths"]) == 36
+    assert sum(len(methods) for methods in spec["paths"].values()) == 37
+    for path, method, operation in (
+        ("/projects/{project_id}/configuration-snapshots", "post", "publishConfigurationSnapshot"),
+        (
+            "/projects/{project_id}/configuration-snapshots/{version}",
+            "get",
+            "readConfigurationSnapshot",
+        ),
+        (
+            "/projects/{project_id}/local-configuration-releases",
+            "post",
+            "publishLocalConfiguration",
+        ),
+    ):
+        assert spec["paths"][path][method]["operationId"] == operation
+    for name in (
+        "ConfigurationSnapshotPin",
+        "ConfigurationSnapshotPublish",
+        "ConfigurationSnapshotRead",
+        "LocalConfigurationPublish",
+    ):
+        assert f"export type {name} =" in client
     assert (
         spec["paths"]["/projects/{project_id}/reference-packs/{pack_id}/versions/{version}"]["get"][
             "operationId"
