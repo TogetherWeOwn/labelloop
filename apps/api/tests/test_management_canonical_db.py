@@ -7413,7 +7413,10 @@ def evidence_approval(service, project_id, plan):
 
 def approved_setup_inputs(service, owner):
     created, asset, source, plan = anchor_pack_inputs(service, owner, setup_step="all")
-    publish_pack(service, created.id, plan)
+    current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    publish_pack(service, created.id, plan, revision=current.resource.revision)
     approve_step(
         service, created.id, evidence_approval(service, created.id, plan), key="approve-evidence"
     )
@@ -7422,6 +7425,28 @@ def approved_setup_inputs(service, owner):
             service, created.id, step_approval(service, created.id, step), key=f"approve-{step}"
         )
     return created, asset, source, plan
+
+
+def test_complete_setup_pack_requires_revision_after_all_draft_and_catalog_writes(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner, setup_step="all")
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    current = reads.read_project(Reader(), created.id)
+    assert current.resource.revision == 9
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_pack(service, created.id, plan, revision=4)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert pack_receipts(owner, created.id) == []
+    published = publish_pack(service, created.id, plan, revision=current.resource.revision)
+    assert published.revision == 10
+    (receipt,) = pack_receipts(owner, created.id)
+    assert receipt.expected_revision == current.resource.revision
+    assert receipt.payload["aggregate_revision"] == published.revision
+    assert receipt.payload["result"]["revision"] == published.revision
+    after = reads.read_project(Reader(), created.id)
+    assert after.setup_summary_sha256 is None and after.approved_steps == []
+    assert after.published_release_id is None
 
 
 def test_approved_setup_summary_is_select_only_and_not_project_publication(database):
