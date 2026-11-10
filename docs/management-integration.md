@@ -89,6 +89,27 @@ Deployment code retains connection/client lifecycle and must supply the independ
 provisioned least-privilege roles. These factories neither inspect nor establish
 SQL/storage IAM isolation and never read deployment credentials or select endpoints.
 
+The canonical mutation boundary and all three worker publication boundaries reuse
+one effective audit-write query. It checks table UPDATE/DELETE/TRUNCATE and UPDATE
+on any audit column before mutation/publication; column grants must not pass as an
+append-only runtime. Four unit query/wiring regressions and disposable PostgreSQL
+cases cover payload/attribution column grants, table writes, unchanged failed
+publication state and recovery after revocation. Effective grant execution awaits
+exact-head Actions. This is a narrow refusal guard, not a complete role, membership,
+DDL, storage-IAM or credential audit, and does not provision or alter any live grant.
+
+The checked-in Compose stack remains local development scaffolding: it shares
+bootstrap database/storage settings, starts the default unmounted API, and parks
+worker processes rather than dispatching management jobs. Do not deploy that stack
+as a least-privilege management installation. An operational binding still needs
+independent auth/API/worker connection identities, restricted storage capabilities,
+trusted per-lane composition and separately accepted admission/mounting evidence.
+Any staging/preview binding must also inventory every billed runtime, start on
+demand with SHA-bound readiness and a bounded use window, and retain native
+stop/scale-to-zero plus failure/cancellation cleanup evidence. No always-on staging
+runtime, keep-alive, alarm, schedule or new recurring spend is authorized here;
+production is unchanged.
+
 The API assembly gives grouping only a frozen `read(key)` port backed by the bounded,
 content-addressed MinIO reader. Its separate admission store always refuses writes;
 asset admission and registry operations remain unavailable. This narrows the exposed

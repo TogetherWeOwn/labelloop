@@ -53,6 +53,8 @@ from labelloop_api.schema import (
 )
 from labelloop_compiler.ingest import LocalObjectStore
 
+AUDIT_WRITE_GRANTS = ("UPDATE", "UPDATE (payload)", "UPDATE (actor_id)", "DELETE", "TRUNCATE")
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("LABELLOOP_MANAGEMENT_DB_TESTS") != "1",
     reason="requires disposable Actions Postgres with migrated schema",
@@ -1798,8 +1800,9 @@ def test_evaluation_publication_refuses_mismatched_saved_report(
     assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
 
 
+@pytest.mark.parametrize("grant", AUDIT_WRITE_GRANTS)
 def test_evaluation_publication_rechecks_intent_and_runtime_audit_authority(
-    database, compilation, compiler_worker
+    database, compilation, compiler_worker, grant
 ):
     from copy import deepcopy
 
@@ -1815,7 +1818,7 @@ def test_evaluation_publication_rechecks_intent_and_runtime_audit_authority(
         )
     assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
     with database[1].begin() as connection:
-        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{database[2]}"'))
+        connection.execute(text(f'GRANT {grant} ON canonical_event TO "{database[2]}"'))
     with pytest.raises(ValueError, match="must not rewrite"):
         compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
     assert evaluation_publication_state(database[1], lease)[:4] == ([], [], [], 0)
@@ -3303,13 +3306,16 @@ def test_training_saved_artifact_resumes_without_backend_or_object_access(
     assert not runner.run_once("replacement")
 
 
-def test_training_publication_denies_broad_audit_runtime(database, compilation, compiler_worker):
+@pytest.mark.parametrize("grant", AUDIT_WRITE_GRANTS)
+def test_training_publication_denies_broad_audit_runtime(
+    database, compilation, compiler_worker, grant
+):
     worker, _, _, _, accepted, lease, record = prepared_training_publication(
         database, compilation, compiler_worker
     )
     compiler_worker.store.save_stage(lease, "training", record)
     with database[1].begin() as connection:
-        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{database[2]}"'))
+        connection.execute(text(f'GRANT {grant} ON canonical_event TO "{database[2]}"'))
     with pytest.raises(ValueError, match="must not rewrite"):
         compiler_worker.store.complete(lease, ("training",), worker.publish)
     assert training_publication_state(database[1], accepted)[:4] == (None, [], [], 0)
@@ -4378,11 +4384,14 @@ def test_compiler_storage_failure_does_not_publish_and_retries_real_compiler(
     assert publication_state(owner, accepted)[3].status == "succeeded"
 
 
-def test_compiler_publication_refuses_broad_audit_runtime(database, compilation, compiler_worker):
+@pytest.mark.parametrize("grant", AUDIT_WRITE_GRANTS)
+def test_compiler_publication_refuses_broad_audit_runtime(
+    database, compilation, compiler_worker, grant
+):
     _, owner, role = database
     _, _, _, accepted, lease, _ = prepared_compilation(database, compilation, compiler_worker)
     with owner.begin() as connection:
-        connection.execute(text(f'GRANT UPDATE ON canonical_event TO "{role}"'))
+        connection.execute(text(f'GRANT {grant} ON canonical_event TO "{role}"'))
     with pytest.raises(ValueError, match="must not rewrite"):
         compiler_worker.store.complete(lease, ("compilation",), compiler_worker.publish)
     assert publication_state(owner, accepted)[:3] == (None, 0, [])
@@ -11911,6 +11920,30 @@ def test_runtime_event_mutation_is_denied_and_owner_connection_fails_closed(data
     with pytest.raises(ManagementFailure, match="management_unavailable"):
         create(replace(service, engine=owner), key="unsafe-role")
     assert counts(owner, created.id) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("grant", AUDIT_WRITE_GRANTS)
+def test_canonical_mutation_refuses_effective_audit_write_grants(database, grant):
+    service, owner, role = database
+    created = create(service)
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {grant} ON canonical_event TO "{role}"'))
+    if grant.startswith("UPDATE ("):
+        with service.engine.connect() as connection:
+            table_update, column_update = connection.execute(
+                text(
+                    "SELECT has_table_privilege(current_user, 'canonical_event', 'UPDATE'), "
+                    "has_any_column_privilege(current_user, 'canonical_event', 'UPDATE')"
+                )
+            ).one()
+        assert table_update is False and column_update is True
+    with pytest.raises(ManagementFailure, match="management_unavailable"):
+        ingest(service, created.id)
+    assert counts(owner, created.id) == (0, 0, 1)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {grant} ON canonical_event FROM "{role}"'))
+    ingest(service, created.id)
+    assert counts(owner, created.id) == (1, 1, 2)
 
 
 def test_repeatable_snapshot_engine_is_refused_before_any_write(database):

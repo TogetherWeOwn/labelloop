@@ -15,6 +15,7 @@ from sqlalchemy import Connection, Engine, func, insert, select, text, update
 
 from labelloop_compiler.ingest import ObjectStore, imaging_toolchain
 
+from .management_audit import AUDIT_REWRITE_QUERY
 from .management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
@@ -102,12 +103,7 @@ class CanonicalManagementMutations:
         # Existing canonical events are the audit/idempotency authority. Refuse
         # owner/superuser or broad runtime grants rather than pretending that
         # application-level append-only conventions protect those records.
-        can_rewrite = connection.execute(
-            text(
-                "SELECT has_table_privilege(current_user, 'canonical_event',"
-                " 'UPDATE,DELETE,TRUNCATE')"
-            )
-        ).scalar_one()
+        can_rewrite = connection.execute(text(AUDIT_REWRITE_QUERY)).scalar_one()
         if can_rewrite:
             refuse("management_unavailable")
         transaction_lock(

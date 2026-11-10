@@ -29,6 +29,7 @@ from labelloop_core.training import (
     TrainingResult,
 )
 
+from .management_audit import AUDIT_REWRITE_QUERY
 from .management_compile_worker import (
     CompilationObjects,
     CompileContext,
@@ -400,10 +401,7 @@ class CanonicalLocalTrainingWorker:
         result = decode_training(record["result"])
         request = result.request
         with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                "SELECT has_table_privilege(current_user,'canonical_event',"
-                "'UPDATE,DELETE,TRUNCATE') AS broad"
-            )
+            cursor.execute(AUDIT_REWRITE_QUERY)
             if cursor.fetchone()["broad"]:
                 raise ValueError("training runtime must not rewrite canonical audit")
             cursor.execute(

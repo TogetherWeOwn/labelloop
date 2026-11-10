@@ -30,6 +30,8 @@ from labelloop_core.domain import (
 from labelloop_core.geometry import Box
 from labelloop_core.json_records import canonical_json
 
+from .management_audit import AUDIT_REWRITE_QUERY
+
 
 class CompileLease(Protocol):
     job_id: str
@@ -295,10 +297,7 @@ class CanonicalCompilationWorker:
         # This method is only a JobStore.complete transactional sink. It commits
         # nothing and performs no object-store or filesystem operation.
         with connection.cursor() as cur:
-            cur.execute(
-                "SELECT has_table_privilege(current_user, 'canonical_event', "
-                "'UPDATE,DELETE,TRUNCATE')"
-            )
+            cur.execute(AUDIT_REWRITE_QUERY)
             if cur.fetchone()[0]:
                 raise ValueError("compiler runtime must not rewrite canonical audit")
         release_row, release, sources = pinned_release(connection, lease, self.workspace_id)

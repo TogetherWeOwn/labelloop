@@ -25,6 +25,7 @@ from labelloop_core.json_records import canonical_json
 from labelloop_core.registry import ModelRelease
 from labelloop_core.training import InferencePolicy
 
+from .management_audit import AUDIT_REWRITE_QUERY
 from .management_compile_worker import (
     CompilationObjects,
     CompileContext,
@@ -275,10 +276,7 @@ class CanonicalLocalEvaluationPublisher:
         ):
             raise ValueError("evaluation requires a bounded owned caller transaction")
         with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                "SELECT has_table_privilege(current_user,'canonical_event',"
-                "'UPDATE,DELETE,TRUNCATE') AS broad"
-            )
+            cursor.execute(AUDIT_REWRITE_QUERY)
             if cursor.fetchone()["broad"]:
                 raise ValueError("evaluation runtime must not rewrite canonical audit")
             cursor.execute(
