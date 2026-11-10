@@ -13,11 +13,14 @@ import os
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import insert, select, text
+from sqlalchemy import create_engine, insert, select, text
+from sqlalchemy.exc import DBAPIError
 
 from labelloop_api.main import create_app
 from labelloop_api.management_configuration import ConfigurationTrainingBinding
@@ -44,6 +47,122 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("LABELLOOP_ML_SMOKE") != "1" or not os.environ.get("DATABASE_URL"),
     reason="requires the Actions CPU ML environment and migrated disposable Postgres",
 )
+
+
+@pytest.fixture
+def pipeline_worker(database, compilation):
+    from labelloop_worker_core.jobs import JobStore
+
+    service, owner, api_role = database
+    role = "pipeline_worker_" + uuid4().hex
+    with owner.begin() as connection:
+        connection.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
+        connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+        connection.execute(
+            text(
+                f"GRANT SELECT ON project, ontology_release, source_asset, "
+                f"annotation_revision, completeness_assessment, source_split_assignment, "
+                f"similarity_relation, borderline_review, reference_example, "
+                f'canonical_dataset_release, worker_job TO "{role}"'
+            )
+        )
+        connection.execute(
+            text(
+                f"GRANT SELECT, INSERT ON canonical_event, worker_stage_artifact, "
+                f"worker_application, preprocessing_recipe, yolo_dataset_variant, "
+                f"derived_sample, training_run, evaluation_run, model_release, "
+                f'model_evaluation TO "{role}"'
+            )
+        )
+        connection.execute(text(f'GRANT UPDATE ON worker_job TO "{role}"'))
+        connection.execute(
+            text(
+                f"GRANT SELECT ON preprocessing_recipe, yolo_dataset_variant, derived_sample, "
+                f"worker_stage_artifact, worker_application, training_run, evaluation_run, "
+                f'model_release, model_evaluation TO "{api_role}"'
+            )
+        )
+    options = f"-c role={role} -c statement_timeout=15000 -c lock_timeout=10000"
+    engine = create_engine(os.environ["DATABASE_URL"], connect_args={"options": options})
+    store = JobStore(
+        lambda: psycopg.connect(os.environ["DATABASE_URL"].replace("+psycopg", ""), options=options)
+    )
+    objects = SimpleNamespace(
+        read=lambda key: service.store.root.joinpath(*key.split("/")).read_bytes(),
+        put=service.store.put,
+    )
+    try:
+        yield SimpleNamespace(engine=engine, store=store, objects=objects, role=role)
+    finally:
+        engine.dispose()
+        with owner.begin() as connection:
+            connection.execute(text(f'DROP OWNED BY "{role}"'))
+            connection.execute(text(f'DROP ROLE "{role}"'))
+
+
+def assert_runtime_separation(service, worker, auth_store, api_role):
+    with service.engine.connect() as connection:
+        assert connection.scalar(text("SELECT current_user")) == api_role
+    with worker.engine.connect() as connection:
+        assert connection.scalar(text("SELECT current_user")) == worker.role
+    with worker.store.connect() as connection:
+        assert connection.execute("SELECT current_user").fetchone()[0] == worker.role
+    with auth_store.engine.connect() as connection:
+        auth_role = connection.scalar(text("SELECT current_user"))
+    assert len({api_role, worker.role, auth_role}) == 3
+    refusals = (
+        (service.engine, "UPDATE worker_job SET status=status WHERE false"),
+        *(
+            (service.engine, f"INSERT INTO {table} SELECT * FROM {table} WHERE false")
+            for table in (
+                "worker_stage_artifact",
+                "worker_application",
+                "preprocessing_recipe",
+                "yolo_dataset_variant",
+                "derived_sample",
+                "training_run",
+                "evaluation_run",
+                "model_release",
+                "model_evaluation",
+            )
+        ),
+        *(
+            (worker.engine, f"INSERT INTO {table} SELECT * FROM {table} WHERE false")
+            for table in (
+                "project",
+                "ontology_release",
+                "source_asset",
+                "annotation_revision",
+                "completeness_assessment",
+                "source_split_assignment",
+                "similarity_relation",
+                "borderline_review",
+                "reference_example",
+                "canonical_dataset_release",
+                "worker_job",
+            )
+        ),
+        (worker.engine, "UPDATE reference_example SET approved=approved WHERE false"),
+        (worker.engine, "UPDATE project SET access_policy=access_policy WHERE false"),
+        (worker.engine, "UPDATE source_asset SET source_uri=source_uri WHERE false"),
+        (worker.engine, "UPDATE annotation_revision SET actor_kind=actor_kind WHERE false"),
+        (worker.engine, "UPDATE source_split_assignment SET split=split WHERE false"),
+        (worker.engine, "SELECT * FROM auth_principal WHERE false"),
+        (service.engine, "SELECT * FROM auth_principal WHERE false"),
+        *(
+            (engine, statement)
+            for engine in (service.engine, worker.engine)
+            for statement in (
+                "UPDATE canonical_event SET actor_kind=actor_kind WHERE false",
+                "DELETE FROM canonical_event WHERE false",
+            )
+        ),
+    )
+    for engine, statement in refusals:
+        with pytest.raises(DBAPIError) as error, engine.begin() as connection:
+            connection.execute(text(statement))
+        assert error.value.orig.sqlstate == "42501", statement
+    return {"distinct_auth_api_worker_roles": True, "privilege_refusals": len(refusals)}
 
 
 @pytest.fixture
@@ -515,7 +634,7 @@ def saved_job(owner, accepted):
 
 @pytest.mark.parametrize("side", [320, 640])
 def test_management_http_runs_real_cpu_project_to_export(
-    database, compilation, compiler_worker, management_http, auth_account, tmp_path, side
+    database, pipeline_worker, management_http, restricted_auth_store, auth_account, tmp_path, side
 ):
     import torch
     from ultralytics import YOLO
@@ -526,17 +645,13 @@ def test_management_http_runs_real_cpu_project_to_export(
     from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest, predict_samples
 
     service, owner, role = database
-    with owner.begin() as connection:
-        connection.execute(
-            text(
-                f"GRANT SELECT, INSERT ON training_run, evaluation_run, "
-                f'model_release, model_evaluation TO "{role}"'
-            )
-        )
+    role_evidence = assert_runtime_separation(
+        service, pipeline_worker, restricted_auth_store[0], role
+    )
     client, headers, configure = management_http
     identity, _ = auth_account
     created, fixture, source_ids, revisions = seed_reviewed_fixture(service, owner, client, headers)
-    configure(grouping_objects=compiler_worker.objects)
+    configure(grouping_objects=pipeline_worker.objects)
     grouping_evidence, groups = publish_cpu_grouping(
         service, owner, client, headers, created.id, revisions, identity
     )
@@ -547,7 +662,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     initialization = tmp_path / "initialization.pt"
     YOLO("yolo26n.yaml").save(str(initialization))
     digest = file_digest(initialization)
-    compiler_worker.objects.put(content_key(digest), initialization.read_bytes())
+    pipeline_worker.objects.put(content_key(digest), initialization.read_bytes())
     # Trusted server settings for the existing cohort, not requested quality targets.
     profile = ApprovedTrainingProfile(
         UUID(created.id),
@@ -585,7 +700,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     )
     assert client.get(f"/resources/job/{compiled.job_id}").json()["state"] == "queued"
     compiler = compilation_runner(
-        compiler_worker.store, compiler_worker.objects, service.workspace_id, job_id=compiled.job_id
+        pipeline_worker.store, pipeline_worker.objects, service.workspace_id, job_id=compiled.job_id
     )
     assert compiler.run_once("cpu-compiler") and not compiler.run_once("cpu-compiler")
     compiled_stages = saved_job(owner, compiled)
@@ -648,9 +763,9 @@ def test_management_http_runs_real_cpu_project_to_export(
         return asdict(evidence)
 
     runner = local_training_runner(
-        compiler_worker.store,
-        service.engine,
-        compiler_worker.objects,
+        pipeline_worker.store,
+        pipeline_worker.engine,
+        pipeline_worker.objects,
         service.workspace_id,
         backend,
         exporter,
@@ -667,7 +782,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     assert all(
         0 < count < profile.inference_policy.max_det for count in exports[0].detection_counts
     )
-    exported_bytes = compiler_worker.objects.read(trained["export"]["export_key"])
+    exported_bytes = pipeline_worker.objects.read(trained["export"]["export_key"])
     assert hashlib.sha256(exported_bytes).hexdigest() == exports[0].export_sha256
     for kind in ("tensor_shapes", "target_retention", "reports"):
         (tmp_path / f"{kind}.json").write_text(json.dumps(trained["training"][kind]))
@@ -695,9 +810,9 @@ def test_management_http_runs_real_cpu_project_to_export(
         http_command(client, headers, evaluation_path, evaluation_body, "cpu-evaluation", 202)
     )
     evaluator = local_evaluation_runner(
-        compiler_worker.store,
-        service.engine,
-        compiler_worker.objects,
+        pipeline_worker.store,
+        pipeline_worker.engine,
+        pipeline_worker.objects,
         service.workspace_id,
         predict_samples,
         job_id=evaluated.job_id,
@@ -803,6 +918,10 @@ def test_management_http_runs_real_cpu_project_to_export(
         training_path, json=training_body, headers={**headers, "Idempotency-Key": "cpu-training"}
     )
     assert forbidden.status_code == 403 and forbidden.json() == {"detail": "permission_denied"}
+    assert (
+        assert_runtime_separation(service, pipeline_worker, restricted_auth_store[0], role)
+        == role_evidence
+    )
     (tmp_path / "management-pipeline.json").write_text(
         json.dumps(
             {
@@ -849,6 +968,12 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "assignments": groups,
                     "no_seeded_assignments_or_relations": True,
                     "freeze_before_configuration_refused": True,
+                },
+                "runtime_roles": {
+                    **role_evidence,
+                    "api": "canonical-human-commands-and-enqueue-no-worker-publication",
+                    "worker": "fenced-execution-no-enqueue-or-human-annotation-writes",
+                    "provisioning": "disposable-owner-created-nologin-fixtures-only",
                 },
                 "recipe": recipe,
                 "project_id": created.id,

@@ -1296,13 +1296,31 @@ No weights or images are downloaded, paid provider invoked or domain engine edit
 
 Original-byte normalized ingest deliberately remains independent fixture setup,
 using the canonical adapter directly: the HTTP admission operation stays unavailable.
-The fixture owner seeds the known annotation/completeness and materialized split
-evidence, and creates temporary test grants. Review writes use the existing
+The fixture owner seeds the known annotation/completeness evidence and creates
+temporary test grants. Initial grouping from canonical rasters and setup/configuration
+publication now use the HTTP operations described above. Review writes use the existing
 append-only revision transaction. These coarse fixture labels are not independently
-adjudicated gold. The cases do not prove setup/grouping producers, production role
+adjudicated gold. The cases do not prove the complete grouping lifecycle, production role
 provisioning, real asset-admission clearance or default app mounting. Request-time
 authentication, canonical and worker calls retain restricted roles and normal
 receipt, revision, retry, lineage and application-fence checks.
+
+The CPU cases now separate the canonical API/enqueue role from a new disposable
+NOLOGIN execution role, in addition to the existing restricted authentication role.
+Both the worker's SQLAlchemy reads and native psycopg queue/publication transactions
+use that execution role. The API reads completed evidence but cannot update a queue
+job or insert stage/application, compiler or ML publication rows. The worker can
+claim/fence/publish existing jobs, but cannot enqueue jobs, insert canonical sources,
+annotations, completeness, assignments, references or releases, or change project
+policy, source metadata, annotation attribution, split history or reference approval.
+Neither API nor worker can read authentication principals or update/delete canonical
+events. Thirty-two SQL insufficient-privilege controls run before and after each
+existing CPU cohort; exact role identities are checked through both worker connections.
+The retained pipeline artifact records these capability checks without role names.
+No extra training cohort, production role/grant, credential or deployment provisioning
+is introduced. These changed cases await exact-head Actions; disposable role separation
+is not operational provisioning, automatic dispatch or a claim of database-enforced
+event actor attribution.
 
 The expanded cases check CSRF refusal and exact HTTP replay for every command,
 queued/completed job reads, server-configured profile reads, completion attribution
