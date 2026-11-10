@@ -427,6 +427,7 @@ def test_restored_recipe_chain_rejects_tampered_preprocessing_identity():
             "id": "t",
             "run_key": "train-1",
             "variant_id": "v",
+            "input_manifest": file_manifest,
             "record": {
                 "request": {
                     "dataset_manifest_sha256": manifest_digest,
@@ -449,3 +450,116 @@ def test_restored_recipe_chain_rejects_tampered_preprocessing_identity():
         check_recipe_lineage(tables)
     tables["model_release"].rows[0]["record"]["preprocessing_sha256"] = digest(encode(policy))
     check_recipe_lineage(tables)
+    tables["training_run"].rows[0]["input_manifest"] = {
+        **file_manifest,
+        "class_map": {"a": 1},
+    }
+    with pytest.raises(ValueError, match="training input manifest"):
+        check_recipe_lineage(tables)
+
+
+def test_populated_chain_validates_with_uuid_foreign_keys_and_key_scoped_states():
+    # Row columns carry UUID foreign keys; serialized states carry public keys.
+    # Both domains must validate together on a populated capture.
+    policy = {"interpolation": "linear", "padding_color": [0, 0, 0]}
+    file_manifest = {
+        "recipe": policy,
+        "class_map": {"a": 0},
+        "file_hashes": {"class-map.json": "c" * 64},
+    }
+    manifest_digest = digest((json.dumps(file_manifest, sort_keys=True, indent=2) + "\n").encode())
+    model_record = _model_record(
+        project_id="demo",
+        recipe_id="full-320",
+        class_map_sha256="c" * 64,
+        preprocessing_sha256=digest(encode(policy)),
+    )
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["project"].rows = [{"id": "11111111-1111-1111-1111-111111111111", "project_key": "demo"}]
+    tables["preprocessing_recipe"].rows = [
+        {"id": "22222222-2222-2222-2222-222222222222", "recipe_key": "full-320", "policy": policy}
+    ]
+    tables["yolo_dataset_variant"].rows = [
+        {
+            "id": "v",
+            "recipe_id": "22222222-2222-2222-2222-222222222222",
+            "class_map": {"a": 0},
+            "file_manifest": file_manifest,
+        }
+    ]
+    tables["training_run"].rows = [
+        {
+            "id": "t",
+            "run_key": "train-1",
+            "variant_id": "v",
+            "input_manifest": file_manifest,
+            "record": {
+                "request": {
+                    "run_id": "train-1",
+                    "dataset_manifest_sha256": manifest_digest,
+                    "class_map_sha256": "c" * 64,
+                },
+                "checkpoints": [{"sha256": "a" * 64, "evaluation_run_id": "eval-1"}],
+                "selected": {"evaluation_run_id": "eval-1"},
+            },
+        }
+    ]
+    tables["evaluation_run"].rows = [
+        {
+            "id": "e1",
+            "run_key": "eval-1",
+            "training_run_id": "t",
+            "variant_id": "v",
+            "record": {
+                "run_id": "eval-1",
+                "weights_sha256": "a" * 64,
+                "policy": {"interpolation": "linear"},
+            },
+        }
+    ]
+    tables["model_release"].rows = [
+        {
+            "id": "m",
+            "release_key": "model",
+            "training_run_id": "t",
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "recipe_id": "22222222-2222-2222-2222-222222222222",
+            "record": model_record,
+        }
+    ]
+    tables["model_evaluation"].rows = [{"model_id": "m", "evaluation_id": "e1"}]
+    tables["promotion_event"].rows = [
+        {
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "recipe_id": "22222222-2222-2222-2222-222222222222",
+            "revision": 1,
+            "action": "promote",
+            "record": {
+                "before": {
+                    "project_id": "demo",
+                    "recipe_id": "full-320",
+                    "revision": 0,
+                    "champion": None,
+                    "rollback": None,
+                },
+                "after": {
+                    "project_id": "demo",
+                    "recipe_id": "full-320",
+                    "revision": 1,
+                    "champion": dict(model_record),
+                    "rollback": None,
+                },
+            },
+        }
+    ]
+    tables["registry_head"].rows = [
+        {
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "recipe_id": "22222222-2222-2222-2222-222222222222",
+            "revision": 1,
+            "champion_id": "m",
+            "rollback_id": None,
+        }
+    ]
+    check_chains(tables)

@@ -471,6 +471,8 @@ def check_recipe_lineage(tables: dict[str, TableInventory]) -> None:
             raise ValueError("training references a missing variant")
         request = _nested(_nested(run, "record"), "request")
         file_manifest = _nested(variant, "file_manifest")
+        if run.get("input_manifest") != file_manifest:
+            raise ValueError("training input manifest disagrees with restored variant")
         manifest_bytes = (json.dumps(file_manifest, sort_keys=True, indent=2) + "\n").encode()
         if digest(manifest_bytes) != request.get("dataset_manifest_sha256"):
             raise ValueError("training manifest digest disagrees with restored variant")
