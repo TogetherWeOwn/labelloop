@@ -1,8 +1,9 @@
 """Opt-in HTTP -> disposable Actions DB -> queue -> CPU, never qualification.
 
 Reuse the API's restricted session/canonical/worker roles and actual adapters.
-Admission and annotation/grouping remain explicit licence-clean fixture setup;
-this does not prove setup publication, real admission or default app mounting.
+Admission and annotation/grouping remain explicit licence-clean fixture setup.
+Configuration publication is exercised over HTTP; real admission, complete
+bootstrap, quality qualification and default app mounting are not proved.
 """
 
 import base64
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import insert, select, text
 
 from labelloop_api.main import create_app
+from labelloop_api.management_configuration import ConfigurationTrainingBinding
 from labelloop_api.management_contracts import AssetIngest, JobAccepted, ProjectCreate, Resource
 from labelloop_api.management_evaluation import ApprovedDevelopmentProtocol
 from labelloop_api.management_operations import CanonicalManagementOperations
@@ -77,6 +79,106 @@ def http_command(client, headers, path, body, key, status):
     return response.json()
 
 
+def project_detail(client, project_id):
+    response = client.get(f"/projects/{project_id}")
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    return response.json()
+
+
+def project_command(client, headers, project_id, suffix, body, key, status=200):
+    revision = project_detail(client, project_id)["resource"]["revision"]
+    return http_command(
+        client,
+        headers,
+        f"/projects/{project_id}/{suffix}",
+        {"expected_revision": revision, **body},
+        key,
+        status,
+    )
+
+
+def save_cpu_setup(client, headers, project_id, fixture, scope):
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/scope",
+        {
+            "name": "CPU interface fixture",
+            "scope": scope,
+            "domain": "software-interface",
+            "representation": "interface_element",
+            "intended_use": "Offline wiring acceptance, never quality qualification",
+            "specificity": "Coarse fixture rectangles",
+            "source_permitted_use": "Licence-clean checked-in fixture; see fixture manifest",
+        },
+        "cpu-scope",
+    )
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/guide",
+        {
+            "annotation_guide": "Fixture-only visible extents; not independent gold",
+            "extent": "visible",
+            "truncation": "Clip to visible source edges",
+            "occlusion": "Label visible extents",
+            "reflections": "Out of scope",
+            "min_target_px": 4.0,
+            "exhaustive_for_scope": True,
+            "background": "Only verified complete negatives",
+        },
+        "cpu-guide",
+    )
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/sources",
+        {"metadata_keys": ["session"], "collection_notes": "Seeded fixture split groups"},
+        "cpu-sources",
+    )
+    detail = project_detail(client, project_id)
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/classes",
+        {
+            "base_ontology_id": detail["versions"]["ontology_id"],
+            "classes": [
+                {
+                    "stable_id": item.stable_id,
+                    "name": item.name,
+                    "definition": item.definition,
+                    "aliases": [],
+                    "parent_id": None,
+                    "positive_examples": [],
+                    "exclusions": [],
+                    "mirror_safe": False,
+                }
+                for item in fixture.release.ontology.classes
+            ],
+        },
+        "cpu-classes",
+    )
+    detail = project_detail(client, project_id)
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/classes/publish",
+        {
+            "base_ontology_id": detail["versions"]["ontology_id"],
+            "draft_sha256": detail["setup_draft_sha256"]["classes"],
+            "reason": "Preserve fixture class identities",
+        },
+        "cpu-publish-classes",
+    )
+
+
 def seed_reviewed_fixture(service, owner, client, headers):
     from load_canonical import FixtureDomain
     from test_management_canonical_db import Actor, ingest
@@ -103,10 +205,15 @@ def seed_reviewed_fixture(service, owner, client, headers):
             201,
         )
     )
+    save_cpu_setup(client, headers, created.id, fixture, scope)
     with owner.connect() as connection:
         ontology = connection.execute(
-            select(ontology_release).where(ontology_release.c.project_id == UUID(created.id))
+            select(ontology_release)
+            .where(ontology_release.c.project_id == UUID(created.id))
+            .order_by(ontology_release.c.version.desc())
+            .limit(1)
         ).one()
+    ingest_revision = project_detail(client, created.id)["resource"]["revision"]
     assignment = fixture.release.assignment
     revisions, source_ids = {}, {}
     for index, sample in enumerate(fixture.release.samples):
@@ -117,7 +224,7 @@ def seed_reviewed_fixture(service, owner, client, headers):
             service,
             created.id,
             AssetIngest(
-                expected_revision=1 + index,
+                expected_revision=ingest_revision + index,
                 original_base64=base64.b64encode(original.read_bytes()).decode(),
                 source_uri="fixture:" + original.name,
                 source_group=sample.group_id,
@@ -195,21 +302,149 @@ def seed_reviewed_fixture(service, owner, client, headers):
             )
     plan = client.get(f"/projects/{created.id}/freeze-plan")
     assert plan.status_code == 200, plan.text
-    payload = plan.json()["payload"]
-    assert payload["annotation_revisions"] == revisions
-    assert payload["expected_revision"] == 1 + len(revisions)
-    assert payload["ontology_id"] == ontology.ontology_key
-    assert payload["assignment_version"] == assignment.assignment_version
-    release = Resource.model_validate(
-        http_command(
-            client, headers, f"/projects/{created.id}/dataset-releases", payload, "cpu-freeze", 201
+    assert plan.json()["payload"] is None and plan.json()["configuration"] is None
+    return created, fixture, source_ids, revisions
+
+
+def publish_cpu_configuration(client, headers, project_id, fixture, source_ids, configure):
+    detail = project_detail(client, project_id)
+    entries = {}
+    for sample in fixture.release.samples:
+        if sample.split != "train" or not sample.revision.objects:
+            continue
+        class_id = sample.revision.objects[0].class_id
+        project_command(
+            client,
+            headers,
+            project_id,
+            "references",
+            {
+                "base_ontology_id": detail["versions"]["ontology_id"],
+                "assignment_version": detail["versions"]["assignment"],
+                "asset_id": source_ids[sample.asset.asset_id],
+                "class_id": class_id,
+                "source": "Checked-in interface fixture",
+                "permitted_use": "CC0 fixture",
+                "view": "full frame",
+                "lighting": "synthetic",
+                "scale": "source pixels",
+                "validity_scope": "Fixture wiring only",
+                "confused_with": [],
+            },
+            f"cpu-reference-{len(entries)}",
+            201,
+        )
+        (reference,) = [
+            item
+            for item in project_detail(client, project_id)["references"]
+            if item["asset_id"] == source_ids[sample.asset.asset_id]
+            and item["class_id"] == class_id
+        ]
+        project_command(
+            client,
+            headers,
+            project_id,
+            "references/accept",
+            {
+                "reference_id": reference["id"],
+                "base_ontology_id": detail["versions"]["ontology_id"],
+                "assignment_version": detail["versions"]["assignment"],
+                "reason": "Accept existing source-bound fixture annotation",
+            },
+            f"cpu-accept-{len(entries)}",
+        )
+        entries[reference["id"]] = {
+            "annotation_revision": 3,
+            "scene": "interface-fixture",
+            "cluster_id": sample.group_id,
+            "validity_tags": ["fixture-only"],
+            "utility": 1.0,
+        }
+    assert entries
+    pack = {
+        "pack_id": "cpu-anchors",
+        "version": "v1",
+        "ontology_id": detail["versions"]["ontology_id"],
+        "assignment_version": detail["versions"]["assignment"],
+        "entries": entries,
+    }
+    project_command(
+        client,
+        headers,
+        project_id,
+        "reference-packs",
+        {"plan": pack, "reason": "Pin fixture human anchors"},
+        "cpu-pack",
+    )
+    summary = client.get(f"/projects/{project_id}/reference-packs/cpu-anchors/versions/v1")
+    assert summary.status_code == 200, summary.text
+    project_command(
+        client,
+        headers,
+        project_id,
+        "setup/approvals",
+        {
+            "step": "evidence",
+            "draft_sha256": summary.json()["snapshot_sha256"],
+            "anchor_pack": {k: v for k, v in pack.items() if k != "entries"},
+            "reason": "Approve fixture anchors, not independent gold",
+        },
+        "cpu-approve-evidence",
+    )
+    for step in ("scope", "classes", "guide", "sources"):
+        detail = project_detail(client, project_id)
+        project_command(
+            client,
+            headers,
+            project_id,
+            "setup/approvals",
+            {
+                "step": step,
+                "draft_sha256": detail["setup_draft_sha256"][step],
+                "reason": "Approve fixture setup intent",
+            },
+            f"cpu-approve-{step}",
+        )
+    detail = project_detail(client, project_id)
+    assert detail["setup_summary_sha256"] is not None
+    snapshot = project_command(
+        client,
+        headers,
+        project_id,
+        "configuration-snapshots",
+        {
+            "version": "v1",
+            "setup_summary_sha256": detail["setup_summary_sha256"],
+            "reason": "Pin local CPU fixture configuration",
+        },
+        "cpu-snapshot",
+    )
+    summary = client.get(f"/projects/{project_id}/configuration-snapshots/v1")
+    assert summary.status_code == 200, summary.text
+    summary = summary.json()
+    pin = summary["configuration"]
+    assert summary["qualification"] == "not_assessed" and summary["runtime_binding"] is None
+    body = {
+        "expected_revision": snapshot["revision"],
+        "configuration": pin,
+        "reason": "Activate controlled local fixture configuration",
+    }
+    path = f"/projects/{project_id}/local-configuration-releases"
+    assert (
+        client.post(
+            path, json=body, headers={**headers, "Idempotency-Key": "cpu-local"}
+        ).status_code
+        == 503
+    )
+    configure(
+        configurations=(
+            ConfigurationTrainingBinding(UUID(project_id), pin["version"], pin["snapshot_sha256"]),
         )
     )
-    detail = client.get(f"/dataset-releases/{release.id}")
-    assert detail.status_code == 200 and detail.json()["resource"] == release.model_dump(
-        mode="json"
-    )
-    return created, release, fixture, source_ids
+    assert client.get(f"/projects/{project_id}/freeze-plan").json()["payload"] is None
+    publication = http_command(client, headers, path, body, "cpu-local", 200)
+    assert publication["state"] == "frozen"
+    return pin, summary, publication
 
 
 def saved_job(owner, accepted):
@@ -255,8 +490,45 @@ def test_management_http_runs_real_cpu_project_to_export(
         )
     client, headers, configure = management_http
     identity, _ = auth_account
-    created, release, fixture, source_ids = seed_reviewed_fixture(service, owner, client, headers)
+    created, fixture, source_ids, revisions = seed_reviewed_fixture(service, owner, client, headers)
     recipe = f"full-letterbox-{side}-v1"
+    torch.set_num_threads(2)
+    torch.manual_seed(0)
+    SETTINGS.update({"sync": False})
+    initialization = tmp_path / "initialization.pt"
+    YOLO("yolo26n.yaml").save(str(initialization))
+    digest = file_digest(initialization)
+    compiler_worker.objects.put(content_key(digest), initialization.read_bytes())
+    # Trusted server settings for the existing cohort, not requested quality targets.
+    profile = ApprovedTrainingProfile(
+        UUID(created.id),
+        "cpu-baseline",
+        1,
+        recipe,
+        digest,
+        inference_policy=InferencePolicy(side, conf=0.005, max_det=1000),
+    )
+    configure(profiles=(profile,))
+    pin, configuration_summary, publication = publish_cpu_configuration(
+        client, headers, created.id, fixture, source_ids, configure
+    )
+    plan = client.get(f"/projects/{created.id}/freeze-plan")
+    assert plan.status_code == 200 and plan.headers["cache-control"] == "no-store"
+    plan = plan.json()
+    assert plan["configuration"] == pin
+    payload = plan["payload"]
+    assert payload["annotation_revisions"] == revisions
+    assert payload["expected_revision"] == publication["revision"]
+    assert payload["assignment_version"] == fixture.release.assignment.assignment_version
+    release = Resource.model_validate(
+        http_command(
+            client, headers, f"/projects/{created.id}/dataset-releases", payload, "cpu-freeze", 201
+        )
+    )
+    detail = client.get(f"/dataset-releases/{release.id}")
+    assert detail.status_code == 200 and detail.json()["resource"] == release.model_dump(
+        mode="json"
+    )
     compile_path = f"/dataset-releases/{release.id}/variants"
     compile_body = {"expected_revision": 1, "recipe_id": recipe}
     compiled = JobAccepted.model_validate(
@@ -273,24 +545,6 @@ def test_management_http_runs_real_cpu_project_to_export(
     assert {item["asset_id"] for item in manifest["samples"]} == set(source_ids.values())
     assert set(manifest["class_map"]) == set(fixture.release.ontology.class_map)
 
-    torch.set_num_threads(2)
-    torch.manual_seed(0)
-    SETTINGS.update({"sync": False})
-    initialization = tmp_path / "initialization.pt"
-    YOLO("yolo26n.yaml").save(str(initialization))
-    digest = file_digest(initialization)
-    compiler_worker.objects.put(content_key(digest), initialization.read_bytes())
-    # The existing seeded CPU fixture uses this fixed coarse-head cohort. These are
-    # trusted server profile settings, not request/model-selected quality thresholds.
-    profile = ApprovedTrainingProfile(
-        UUID(created.id),
-        "cpu-baseline",
-        1,
-        recipe,
-        digest,
-        inference_policy=InferencePolicy(side, conf=0.005, max_det=1000),
-    )
-    configure(profiles=(profile,))
     profiles = client.get(f"/projects/{created.id}/training-profiles")
     assert profiles.status_code == 200 and profiles.json()["profiles"] == [
         profile.read().model_dump(mode="json")
@@ -300,6 +554,33 @@ def test_management_http_runs_real_cpu_project_to_export(
     accepted = JobAccepted.model_validate(
         http_command(client, headers, training_path, training_body, "cpu-training", 202)
     )
+    with owner.connect() as connection:
+        job_input = connection.execute(
+            text("SELECT input FROM worker_job WHERE job_id=:id"), {"id": accepted.job_id}
+        ).scalar_one()
+        (intent,) = connection.execute(
+            text(
+                "SELECT actor_id,actor_kind,payload FROM canonical_event "
+                "WHERE aggregate_id=:id AND event_type='management.start_training'"
+            ),
+            {"id": compiled.resource.id},
+        ).all()
+        (freeze_receipt,) = connection.execute(
+            text(
+                "SELECT actor_id,actor_kind,payload FROM canonical_event "
+                "WHERE aggregate_id=:id AND event_type='management.freeze_release'"
+            ),
+            {"id": created.id},
+        ).all()
+    assert job_input == intent.payload["evidence"]["inputs"]
+    assert job_input["configuration"] == {
+        "project_id": created.id,
+        **pin,
+        "setup_summary_sha256": configuration_summary["setup_summary_sha256"],
+    }
+    assert freeze_receipt.payload["evidence"]["configuration"] == pin
+    assert intent.actor_id == freeze_receipt.actor_id == identity
+    assert intent.actor_kind == freeze_receipt.actor_kind == "human"
     paths, exports = [], []
 
     def backend(**kwargs):
@@ -430,6 +711,10 @@ def test_management_http_runs_real_cpu_project_to_export(
         connection.execute(
             principal.update().where(principal.c.id == identity).values(role="reviewer")
         )
+    summary = client.get(f"/projects/{created.id}/configuration-snapshots/v1")
+    assert summary.status_code == 200 and summary.json() == configuration_summary
+    assert summary.headers["cache-control"] == "no-store"
+    assert client.get(f"/projects/{created.id}/freeze-plan").json()["configuration"] == pin
     training_detail = client.get(f"/training-runs/{accepted.resource.id}")
     assert training_detail.status_code == 200, training_detail.text
     assert training_detail.json()["training_profile_id"] == profile.id
@@ -473,7 +758,20 @@ def test_management_http_runs_real_cpu_project_to_export(
                 "scope": "opt-in-http-disposable-db-real-cpu-not-real-admission-or-qualification",
                 "http": {
                     "identity": "restricted-shared-session",
-                    "commands": ["create", "freeze", "compile", "train", "evaluate"],
+                    "commands": [
+                        "create",
+                        "setup-drafts",
+                        "class-publication",
+                        "references",
+                        "anchor-pack",
+                        "setup-approvals",
+                        "configuration-snapshot",
+                        "local-publication",
+                        "freeze",
+                        "compile",
+                        "train",
+                        "evaluate",
+                    ],
                     "csrf_refusals": True,
                     "completed_replays": True,
                     "reviewer_reads": True,
@@ -481,6 +779,14 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "admission": "independent-canonical-fixture-setup-only",
                     "grouping_and_annotation": "seeded-fixture-not-producer-acceptance",
                     "default_mount": False,
+                },
+                "configuration": {
+                    "pin": pin,
+                    "summary": configuration_summary,
+                    "local_publication": publication,
+                    "freeze_receipt_pin": freeze_receipt.payload["evidence"]["configuration"],
+                    "training_input_pin": job_input["configuration"],
+                    "unbound_activation_refused": True,
                 },
                 "recipe": recipe,
                 "project_id": created.id,

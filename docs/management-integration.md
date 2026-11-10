@@ -103,6 +103,32 @@ not HTTP producer acceptance. Default mounting, effective project publication,
 production role provisioning, operational dispatch and registry composition remain
 incomplete; real admission retains its exact-consuming-head Security gate.
 
+### Configuration-bound HTTP-to-CPU acceptance expansion
+
+The existing two CPU pipeline cases now commission HTTP setup drafts, identity-
+preserving class publication, source-bound reference acceptance, anchor-pack
+publication, all five setup approvals, configuration snapshot/read and explicit
+local activation before freeze → compile → train/export → development evaluation.
+The initialization digest and recipe-matching inference policy are trusted server
+profile settings pinned before snapshot publication. A valid client pin alone
+cannot activate a configuration: the test first requires refusal without the
+separate server binding, then activates that exact version/digest. Freeze planning
+remains unavailable before activation and exposes the same pin afterwards.
+
+The tests require the freeze receipt, immutable training job input and attributed
+training intent to carry the exact configuration provenance. All HTTP mutations
+exercise CSRF refusal and idempotent replay; reviewer-role reload retains summary
+and artifact reads but refuses training mutation. The existing pipeline JSON now
+records snapshot identity/summary, local publication and the consumed freeze/job
+pins alongside actual CPU/export/evaluation evidence. No extra training cohort is
+added. **This expanded path awaits exact-head Actions; no new pass is claimed.**
+
+Admission and annotation/grouping are still explicit licence-clean canonical
+fixture preparation, not HTTP producer acceptance or independent gold. The
+expansion does not prove complete bootstrap, quality, retrieval, operational role
+provisioning/dispatch, registry composition or default app mounting. Default
+management and real admission remain disabled under the retained Security gate.
+
 ### Explicit internal local configuration publication
 
 `management_configuration_release.CanonicalLocalConfigurationRelease` takes an
