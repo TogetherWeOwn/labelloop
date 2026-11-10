@@ -70,6 +70,34 @@ describe('session cost display contract', () => {
     expect(scopedEntries(record, { kind: 'review_batch', id: 'operation-a' })).toEqual([]);
   });
 
+  it('retains original per-operation price versions across independent pages without inventing a shared version', async () => {
+    responses();
+    const first = await read();
+    responses(summary, { ...page, operations: [{ ...operation, operation_id: 'operation-b', price_version: 'prices-b' }], next_after: null });
+    const next = await read();
+    const combined = appendSessionCosts(first, next);
+    expect(combined.price_version).toBeNull();
+    expect(combined.entries.map((entry) => entry.price_version)).toEqual(['price-a', 'prices-b']);
+    const lines = ledgerCsv(combined.entries).split('\r\n');
+    expect(lines[0]).toContain('"Price version"');
+    expect(lines[1]).toMatch(/,"price-a"$/);
+    expect(lines[2]).toMatch(/,"prices-b"$/);
+    // Record-level pricing cannot fill missing operation history.
+    expect(ledgerCsv([{ ...first.entries[0], price_version: null }]).split('\r\n')[1]).toMatch(/,""$/);
+    const withoutPrice = { ...first.entries[0] };
+    delete withoutPrice.price_version;
+    expect(ledgerCsv([withoutPrice]).split('\r\n')[1]).toMatch(/,""$/);
+  });
+
+  it.each(['=FORMULA()', '+SUM(1)', '@SUM(1)', '-1', '  =FORMULA()', 'table, "quoted"\nversion'])('escapes original price metadata in shown-row CSV: %j', async (version) => {
+    responses(summary, { ...page, operations: [{ ...operation, price_version: version }] });
+    const record = await read();
+    expect(record.entries[0].price_version).toBe(version);
+    const escaped = version.replaceAll('"', '""');
+    expect(ledgerCsv(record.entries)).toContain(`,"${/^\s*[=+@-]/.test(version) ? "'" : ''}${escaped}"`);
+    expect(html(record).split('<tbody>')[1].split('</tbody>')[0]).not.toContain(escaped);
+  });
+
   it('retains review-job identity and pause without converting it to a refused reservation', async () => {
     responses(summary, { ...page, operations: [{ ...operation, kind: 'LLM review', annotation_job_id: '<batch>', review_pause: 'approval_exhausted', reserved_at: '2026-11-08T12:00:00.123456Z' }] });
     const record = await read();

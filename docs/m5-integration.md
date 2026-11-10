@@ -6,7 +6,22 @@ Scope is [plan v0.3](plan.md) §§11–12 and acceptance checks 16, 17, 19 and 2
 This record joins independently delivered modules; it does not commission a second
 qualification engine, registry, ledger, secret store, UI or backup tool.
 
-## Complete project cost export — verification pending
+## Original per-operation pricing in shown-row CSV — verification pending
+
+The session cost adapter retains each validated operation's original price-table
+version through independent page appends. Shown-row CSV appends a `Price version`
+column using the same separator/quote/newline and spreadsheet-formula escaping as
+all other metadata. Missing fixture/history values stay blank; no current policy,
+project-wide price version, rate or recalculated billing is substituted. The
+supplied layout and project-level unknown-price label are unchanged.
+
+New adapter/SSR controls cover mixed price versions across pages, null/missing
+history and hostile CSV text; both existing desktop/mobile intercepted-HTTP
+controls now require original versions in the downloaded file. These assertions
+await exact-head Actions. No local tests/builds, dependency, schema, spend command
+or new design component. REA: retain the existing server projection and CSV encoder.
+
+## Complete project cost export — verified baseline
 
 The admin-session-only `/projects/{project_key}/costs/export` returns typed JSON
 for every project operation in one bounded read under the existing writer-head
@@ -21,10 +36,17 @@ New session controls cover complete output beyond the first page, empty/exact-bo
 and over-bound ledgers, project isolation, authorization before reads, missing
 budgets, later invalid bindings, redacted outer rollback and typed OpenAPI.
 Disposable PostgreSQL controls extend closed-client recovery and require the writer
-lock to remain held until outer commit. These new assertions await exact-head
-Actions. No local tests/builds ran. This backend JSON port is not yet consumed by
-the view: its CSV remains loaded-row-only. No spending command, migration,
-dependency, new ledger or UI design is introduced.
+lock to remain held until outer commit. The supplied view now consumes this port
+through the strict bounded session client, separately from loaded-row CSV.
+Exact-head [CI at 8346188](https://github.com/TogetherWeOwn/labelloop/actions/runs/42728450552),
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42728449242) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42728449138) passed,
+including unit, both-recipe PostgreSQL ML smoke, web/browser, migration cycles/all
+four parents and dev-stack. Seven intercepted-HTTP browser scenarios cover complete
+JSON download, independent filters and cancellation; this is not real authentication
+or normal product mounting. Earlier pending labels are superseded for that head.
+Totals not extracted. No local tests/builds, spending command, migration,
+dependency, new ledger or UI design.
 REA: reuse the existing validated projection and writer lock, not a paged export
 that can silently mix independent reads.
 

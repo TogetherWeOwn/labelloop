@@ -1,5 +1,16 @@
 # Operational view fixture boundary
 
+## Original operation pricing in shown-row CSV
+
+Session ledger entries now retain each operation's validated original
+`price_version` from the server. Shown-row CSV appends a `Price version` column;
+independent pages may legitimately contain different versions. Null or absent
+fixture/history metadata exports an empty cell, never today's pricing or an
+inferred shared version. The existing CSV encoder escapes separators, quotes,
+newlines and formula-leading text. The view layout and project-level unknown-price
+label are unchanged. Adapter and desktop/mobile download controls await Actions;
+this does not connect policy/resume commands or authenticated product routing.
+
 ## Delivered surface
 
 `apps/web/src/operations/` implements the accepted Costs, Audit log and M5

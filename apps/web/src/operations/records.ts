@@ -52,9 +52,9 @@ export function approvalLabel(entry: CostEntry): string {
 // Neutralize spreadsheet formulas as well as CSV separators, quotes and newlines.
 export function ledgerCsv(entries: readonly CostEntry[]): string {
   const cell = (value: string) => `"${(/^\s*[=+@-]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`;
-  return [['UTC', 'Operation', 'Kind', 'Object', 'Recipe', 'Approved by', 'Estimate USD', 'Actual USD', 'State', 'Result'],
+  return [['UTC', 'Operation', 'Kind', 'Object', 'Recipe', 'Approved by', 'Estimate USD', 'Actual USD', 'State', 'Result', 'Price version'],
     ...entries.map((e) => [e.at ?? '', e.operation_id, e.kind ?? '', e.object_id ?? '', e.recipe_id ?? '', approvalLabel(e),
-      usd(e.estimate), actualCostLabel(e), e.state, e.result]),
+      usd(e.estimate), actualCostLabel(e), e.state, e.result, e.price_version ?? '']),
   ].map((row) => row.map(cell).join(',')).join('\r\n');
 }
 

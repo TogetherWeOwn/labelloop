@@ -38,7 +38,7 @@ export async function sessionCostsRecord(project: string, summaryQuery: CostSumm
     entries: page.operations.map((entry) => ({
       operation_id: entry.operation_id, project_id: project, iteration_id: entry.iteration_id,
       object_id: entry.annotation_job_id, recipe_id: null, month: entry.month, at: entry.reserved_at,
-      kind: entry.kind, approved_by: entry.approved_by, reserved_autonomously: entry.reserved_autonomously,
+      kind: entry.kind, approved_by: entry.approved_by, reserved_autonomously: entry.reserved_autonomously, price_version: entry.price_version,
       estimate: entry.estimate, actual: entry.actual, exposure: entry.exposure, state: entry.state,
       result: entry.review_pause === 'approval_exhausted' ? `${results[entry.state]} · review paused: approval exhausted` : results[entry.state],
     })),

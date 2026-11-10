@@ -70,7 +70,8 @@ for (const width of [1280, 390]) {
       expect(csv.split('\r\n').find((row) => row.includes('"operation-a"'))).toContain('"","operation-a","","",""');
       expect(csv).toContain('"Unconfirmed"');
       expect(csv).toContain('"$0.00"');
-      expect(csv).not.toContain('private-price-version');
+      expect(csv.split('\r\n')[0]).toContain('"Price version"');
+      expect(csv.split('\r\n').slice(1).every((row) => row.endsWith(',"private-price-version"'))).toBe(true);
       expect(requests).toHaveLength(2);
       expect(requests[0].searchParams.toString()).toBe('month=2026-11&iteration_id=iteration-a');
       expect(requests[1].searchParams.toString()).toBe('limit=50');

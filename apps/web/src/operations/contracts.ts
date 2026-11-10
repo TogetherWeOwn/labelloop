@@ -28,6 +28,8 @@ export interface CostEntry {
   kind: OperationKind | null;
   approved_by: string | null;
   reserved_autonomously?: boolean;
+  // Original operation metadata; absent fixture/history is not today's pricing.
+  price_version?: string | null;
   exposure?: number;
   estimate: number;
   // Refusals are durable dispatch attempts, not core LedgerEntry reservations.
