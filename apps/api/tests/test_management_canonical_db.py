@@ -7282,7 +7282,24 @@ def anchor_pack_inputs(service, owner, *, setup_step=None):
     created, asset, source, enrollment = reference_inputs(
         service, owner, complete=False, split="train"
     )
-    if setup_step is not None:
+    if setup_step == "all":
+        saved = save_scope(
+            service, created.id, scope_payload(2).model_copy(update={"scope": "Visible packages"})
+        )
+        saved = save_guide(service, created.id, guide_payload(saved.revision))
+        saved = save_sources(service, created.id, source_policy_payload(saved.revision))
+        save_catalog(service, created.id, catalog_payload(service, created.id, saved.revision))
+        saved = publish_catalog(service, created.id, publication_payload(service, created.id))
+        current = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+            Reader(), created.id
+        )
+        enrollment = enrollment.model_copy(
+            update={
+                "expected_revision": saved.revision,
+                "base_ontology_id": current.versions["ontology_id"],
+            }
+        )
+    elif setup_step is not None:
         saver, draft = {
             "scope": (
                 save_scope,
@@ -7308,7 +7325,10 @@ def anchor_pack_inputs(service, owner, *, setup_step=None):
             objects=objects,
         )
         ontology = connection.execute(
-            select(ontology_release).where(ontology_release.c.project_id == created.id)
+            select(ontology_release)
+            .where(ontology_release.c.project_id == created.id)
+            .order_by(ontology_release.c.version.desc())
+            .limit(1)
         ).one()
         connection.execute(
             insert(completeness_assessment).values(
@@ -7389,6 +7409,110 @@ def evidence_approval(service, project_id, plan):
         ),
         reason="Reviewed source-bound human anchors",
     )
+
+
+def approved_setup_inputs(service, owner):
+    created, asset, source, plan = anchor_pack_inputs(service, owner, setup_step="all")
+    publish_pack(service, created.id, plan)
+    approve_step(
+        service, created.id, evidence_approval(service, created.id, plan), key="approve-evidence"
+    )
+    for step in ("scope", "classes", "guide", "sources"):
+        approve_step(
+            service, created.id, step_approval(service, created.id, step), key=f"approve-{step}"
+        )
+    return created, asset, source, plan
+
+
+def test_approved_setup_summary_is_select_only_and_not_project_publication(database):
+    from labelloop_api.management_setup import approved_setup_summary_sha256
+
+    service, owner, role = database
+    created, _, _, _ = approved_setup_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.approved_steps == ["classes", "evidence", "guide", "scope", "sources"]
+    assert len(detail.setup_summary_sha256) == 64
+    assert detail.resource.state == "draft" and detail.published_release_id is None
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    before = initial_grouping_snapshot(owner, created.id)
+    with owner.begin() as connection:
+        row = connection.execute(select(project).where(project.c.id == created.id)).one()
+        assert detail.setup_summary_sha256 == approved_setup_summary_sha256(
+            row, detail.approved_steps, detail.setup_draft_sha256, detail.versions
+        )
+        assert "auto_accept_qualification" not in row.access_policy
+        assert "setup_summary_sha256" not in row.access_policy
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    assert reads.read_project(Reader(), created.id) == detail
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("step", ["scope", "guide", "sources"])
+def test_approved_setup_summary_disappears_after_a_byte_identical_draft_save(database, step):
+    service, owner, _ = database
+    created, _, _, _ = approved_setup_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.read_project(Reader(), created.id)
+    assert before.setup_summary_sha256 is not None
+    if step == "scope":
+        save_scope(
+            service,
+            created.id,
+            scope_payload(before.resource.revision).model_copy(update={"scope": before.scope}),
+            key="edit-step",
+        )
+    else:
+        save_step_draft(service, created.id, step, before.resource.revision, key="edit-step")
+    after = reads.read_project(Reader(), created.id)
+    assert after.setup_summary_sha256 is None and after.approved_steps == []
+    assert after.published_release_id is None
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+
+
+@pytest.mark.parametrize("change", ["receipt", "source", "assignment"])
+def test_approved_setup_summary_never_masks_corrupt_or_stale_evidence(database, change):
+    service, owner, _ = database
+    created, _, source, _ = approved_setup_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_project(Reader(), created.id).setup_summary_sha256 is not None
+    with owner.begin() as connection:
+        if change == "receipt":
+            receipt = connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.aggregate_id == created.id,
+                    canonical_event.c.event_type == "management.approve_setup_step",
+                    canonical_event.c.payload["evidence"]["step"].as_string() == "guide",
+                )
+            ).one()
+            evidence = {**receipt.payload["evidence"], "reason": ""}
+            connection.execute(
+                canonical_event.update()
+                .where(canonical_event.c.id == receipt.id)
+                .values(payload={**receipt.payload, "evidence": evidence})
+            )
+        elif change == "source":
+            connection.execute(
+                source_asset.update().where(source_asset.c.id == source.id).values(sha256="f" * 64)
+            )
+        else:
+            connection.execute(
+                insert(source_split_assignment).values(
+                    assignment_version="later-assignment",
+                    asset_id=source.id,
+                    group_id="later",
+                    split="train",
+                    seed=0,
+                    algorithm="fixture-v1",
+                    thresholds={},
+                    reason="new evidence",
+                    locked=True,
+                )
+            )
+    with pytest.raises(ManagementFailure):
+        reads.read_project(Reader(), created.id)
 
 
 def test_evidence_approval_pins_current_pack_without_publication_or_freeze_clearance(database):
@@ -7541,6 +7665,42 @@ def test_evidence_approval_is_rechecked_and_replay_never_renews_it(database, cha
     before = counts(owner, created.id)
     assert approve_step(service, created.id, payload) == approved
     assert counts(owner, created.id) == before
+
+
+def test_approved_setup_summary_uses_shared_admin_reviewer_and_logout_boundary(
+    database, restricted_auth_store, auth_account
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal as auth_principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, _, _ = approved_setup_inputs(service, owner)
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    origin = "https://testserver"
+    path = f"/projects/{created.id}"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.get(path).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200
+        response = client.get(path)
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        summary = response.json()
+        assert len(summary["setup_summary_sha256"]) == 64
+        assert summary["published_release_id"] is None and summary["resource"]["state"] == "draft"
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.get(path).json() == summary
+        headers = {"origin": origin, "x-csrf-token": login.json()["csrf_token"]}
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.get(path).status_code == 401
 
 
 def test_evidence_approval_uses_shared_session_csrf_and_current_role(

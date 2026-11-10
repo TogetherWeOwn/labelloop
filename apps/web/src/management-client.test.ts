@@ -42,6 +42,32 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('reads the approved setup digest without publication authority', async () => {
+    const { request } = mockRequest();
+    const result = {
+      setup_summary_sha256: 'a'.repeat(64),
+      published_release_id: null,
+      resource: { state: 'draft' },
+    };
+    request.mockResolvedValue({ ok: true, json: () => Promise.resolve(result) });
+    const csrf = vi.fn(() => 'csrf');
+    const client = new ManagementClient(csrf);
+    await expect(client.readProject({ project_id: 'project/../other' }))
+      .resolves.toEqual(result);
+    expect(request).toHaveBeenCalledWith(
+      '/api/projects/project%2F..%2Fother',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        body: undefined,
+      },
+    );
+    expect(csrf).not.toHaveBeenCalled();
+  });
+
   it('reads historical reference recovery pins without mutation authority', async () => {
     const { request, result } = mockRequest();
     const csrf = vi.fn(() => 'csrf');

@@ -25,7 +25,12 @@ from .management_grouping import validate_group_membership
 from .management_ontology import read_catalog_publication
 from .management_ports import ManagementFailure
 from .management_references import read_references
-from .management_setup import draft_sha256, published_catalog_content, read_setup_approvals
+from .management_setup import (
+    approved_setup_summary_sha256,
+    draft_sha256,
+    published_catalog_content,
+    read_setup_approvals,
+)
 from .schema import (
     borderline_review,
     canonical_event,
@@ -359,6 +364,7 @@ def project_detail(
         approved_steps=approvals
         if draft or guide or catalog or published or source_policy or references
         else None,
+        setup_summary_sha256=approved_setup_summary_sha256(project_row, approvals, pins, versions),
         versions=versions,
         published_release_id=None,
         saved_at=receipts[0].created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

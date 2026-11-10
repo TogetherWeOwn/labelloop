@@ -195,6 +195,19 @@ approval. A tied latest revision is ambiguous and refuses; older distinct approv
 history remains valid history, not a current fallback. This check adds no new
 approval or publication authority and changes no historical request serialization.
 
+`readProject` supplies `setup_summary_sha256` only when all five setup steps have
+current verified approvals. The versioned deterministic digest binds the project
+and workspace, all five approved content digests and receipt revisions, and the
+current ontology/assignment pins. Draft/catalog loaders and the evidence-pack
+verifier run first inside the same authorized SELECT-only repeatable snapshot.
+Missing steps return null; inconsistent or stale evidence refuses rather than
+producing a partially verified summary. Editing a draft clears the summary with
+its approvals. The digest is computed, never persisted as another authority.
+It is an approved-setup **summary**, not a project release, executable configuration,
+pilot assessment, source-policy/grouping-production proof or durable grant.
+`published_release_id` stays null; recipes/runtime policies, final publication and
+bulk binding still require their own validated producer composition.
+
 This supplies current evidence validation and bounded approval, not automatic
 bulk-job binding, retrieval or freeze clearance. A consuming
 transaction must own its snapshot and locking policy; a successful read is not a

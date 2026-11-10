@@ -170,6 +170,32 @@ registry composition and final mounting remain incomplete. This approval grants 
 pilot quality, retrieval, automatic acceptance or freeze clearance; default mounting
 and real admission remain disabled.
 
+### Approved setup summary (opt-in, not publication)
+
+Exact `891a65e229039db7f535f9deca9e33d41064b9bb` passed
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42814247214):
+[866 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42814247214/job/129823195761),
+[1,945 unit cases / 967 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42814247214/job/129823195866),
+and the remaining CI, CodeQL and gitleaks checks. Approval receipt integrity is
+verified there, not the summary increment below or complete bootstrap acceptance.
+
+The existing project read now computes `setup_summary_sha256` after verifying all
+five approvals and their draft/catalog/current-pack evidence. It binds canonical
+project/workspace identity, approved content digests and receipt revisions, and
+current ontology/assignment versions. No new row, operation or mutable summary store
+is introduced. Incomplete approvals return null; inconsistent current evidence
+refuses. It is not a project release or an executable runtime-configuration pin.
+Freeze/admission/default mounting and qualification gates are unchanged.
+
+Eight new disposable DB cases cover composed approvals, deterministic SELECT-only
+projection, three draft-edit invalidations, corrupt receipt/stale source/assignment
+refusals, and shared-session admin/reviewer/no-store/logout reads. The fixture
+explicitly seeds grouping; it does not prove full grouping-to-setup publication.
+Pure digest and generated-client tests cover deterministic ownership/version/receipt
+binding and read-only transport. These changes await exact-head Actions. Effective
+project publication, recipe/runtime-policy binding, runtime roles/dispatch, single
+registry composition, final mounting and native reviews remain incomplete.
+
 ### Disposable authentication-role contract
 
 The composition fixture exercises the delivered `AuthStore` without changing its

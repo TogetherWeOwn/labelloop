@@ -145,6 +145,8 @@ class ProjectDetail(Contract):
         default_factory=dict
     )
     approved_steps: list[SetupStep] | None
+    # A current approved-setup summary, never project release or qualification.
+    setup_summary_sha256: Digest | None = None
     versions: dict[Identifier, Identifier]
     published_release_id: Identifier | None
     saved_at: Text

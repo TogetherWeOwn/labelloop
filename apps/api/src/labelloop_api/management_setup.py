@@ -32,6 +32,33 @@ def draft_sha256(draft: dict) -> str:
     ).hexdigest()
 
 
+def approved_setup_summary_sha256(project_row, approvals, pins, versions) -> str | None:
+    """Pin a summary already validated in one canonical read snapshot, not a release.
+
+    The caller verifies draft/publication and approval receipts, current anchor
+    evidence and materialized grouping before supplying these facts. No approval
+    or eligibility can be established from this digest alone.
+    """
+    if set(approvals) != {"scope", "guide", "classes", "sources", "evidence"}:
+        return None
+    stored = project_row.access_policy["management_setup_approvals"]
+    if (
+        set(pins) != {"scope", "guide", "classes", "sources"}
+        or not {"ontology", "ontology_id", "assignment"} <= versions.keys()
+        or any(stored[step]["draft_sha256"] != digest for step, digest in pins.items())
+    ):
+        raise ManagementFailure(ManagementError(detail="missing_evidence"))
+    return draft_sha256(
+        {
+            "schema": "approved-setup-summary-v1",
+            "project_id": str(project_row.id),
+            "workspace_id": str(project_row.workspace_id),
+            "approvals": stored,
+            "versions": versions,
+        }
+    )
+
+
 def published_catalog_content(connection: Connection, project_row, workspace_id) -> dict | None:
     receipt = read_catalog_publication(connection, project_row, workspace_id)
     if (

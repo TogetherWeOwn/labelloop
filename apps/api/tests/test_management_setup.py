@@ -200,6 +200,80 @@ class SetupApprovalTests(TestCase):
         self.assertEqual(verifier.call_args.args[3].model_dump(mode="json"), pin)
         self.assertEqual(verifier.call_args.kwargs, {"lock_sources": False})
 
+    def summary_inputs(self):
+        from labelloop_api.management_setup import approved_setup_summary_sha256
+
+        approvals = ["scope", "guide", "classes", "sources", "evidence"]
+        pins = {step: str(index) * 64 for index, step in enumerate(approvals[:-1], 1)}
+        project = SimpleNamespace(
+            id="project",
+            workspace_id="workspace",
+            access_policy={
+                "management_setup_approvals": {
+                    step: {"draft_sha256": str(index) * 64, "receipt_revision": index + 10}
+                    for index, step in enumerate(approvals, 1)
+                }
+            },
+        )
+        versions = {"ontology": "2", "ontology_id": "ontology", "assignment": "assignment"}
+        return approved_setup_summary_sha256, project, approvals, pins, versions
+
+    def test_summary_requires_all_five_verified_steps(self):
+        summary, project, approvals, pins, versions = self.summary_inputs()
+        for step in approvals:
+            with self.subTest(step=step):
+                self.assertIsNone(
+                    summary(project, [item for item in approvals if item != step], pins, versions)
+                )
+
+    def test_summary_is_deterministic_and_binds_receipts_versions_and_ownership(self):
+        from copy import deepcopy
+
+        summary, project, approvals, pins, versions = self.summary_inputs()
+        digest = summary(project, approvals, pins, versions)
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            summary(
+                project, list(reversed(approvals)), pins, dict(reversed(list(versions.items())))
+            ),
+            digest,
+        )
+        for field in ("id", "workspace_id"):
+            changed = deepcopy(project)
+            setattr(changed, field, "other")
+            self.assertNotEqual(summary(changed, approvals, pins, versions), digest)
+        for field in versions:
+            self.assertNotEqual(
+                summary(project, approvals, pins, {**versions, field: "other"}), digest
+            )
+        for step in approvals:
+            changed = deepcopy(project)
+            changed.access_policy["management_setup_approvals"][step]["receipt_revision"] += 1
+            self.assertNotEqual(summary(changed, approvals, pins, versions), digest)
+        changed = deepcopy(project)
+        changed.access_policy["management_setup_approvals"]["evidence"]["draft_sha256"] = "a" * 64
+        self.assertNotEqual(summary(changed, approvals, pins, versions), digest)
+        self.assertNotIn("setup_summary_sha256", project.access_policy)
+
+    def test_complete_summary_refuses_missing_or_inconsistent_validated_facts(self):
+        summary, project, approvals, pins, versions = self.summary_inputs()
+        for step in pins:
+            for bad in (
+                {key: value for key, value in pins.items() if key != step},
+                {**pins, step: "a" * 64},
+            ):
+                with (
+                    self.subTest(step=step, bad=bad),
+                    self.assertRaisesRegex(ManagementFailure, "missing_evidence"),
+                ):
+                    summary(project, approvals, bad, versions)
+        for field in versions:
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ManagementFailure, "missing_evidence"),
+            ):
+                summary(project, approvals, pins, {k: v for k, v in versions.items() if k != field})
+
     def test_evidence_digest_uses_current_verified_pack_not_client_scope_claims(self):
         from labelloop_api.management_setup import evidence_pack_digest
 
