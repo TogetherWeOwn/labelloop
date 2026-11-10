@@ -1109,7 +1109,23 @@ def test_postgres_limit_http_recovers_preserves_private_policy_and_rejects_repla
     assert budget_rows(postgres_budget.engine) == after
 
 
-@pytest.mark.parametrize("key", ["missing", "unconfigured", "orphan"])
+def test_postgres_limit_scope_rejects_orphan_budget_head(postgres_budget):
+    before = budget_rows(postgres_budget.engine)
+    with postgres_budget.engine.begin() as connection:
+        with pytest.raises(sa.exc.IntegrityError) as error, connection.begin_nested():
+            connection.execute(
+                sa.insert(db.head).values(
+                    project_id="orphan",
+                    revision=1,
+                    policy={"limits": asdict(BudgetPolicy(1, 1, 1))},
+                )
+            )
+        assert error.value.orig.sqlstate == "23503"
+        assert error.value.orig.diag.constraint_name == "budget_head_project_id_fkey"
+    assert budget_rows(postgres_budget.engine) == before
+
+
+@pytest.mark.parametrize("key", ["missing", "unconfigured"])
 def test_postgres_limit_http_does_not_create_or_infer_project_scope(
     monkeypatch, store, postgres_budget, key
 ):
@@ -1121,11 +1137,6 @@ def test_postgres_limit_http_does_not_create_or_infer_project_scope(
                 task="detect",
                 scope="fixture",
                 domain="licence-clean",
-            )
-        )
-        connection.execute(
-            sa.insert(db.head).values(
-                project_id="orphan", revision=1, policy={"limits": asdict(BudgetPolicy(1, 1, 1))}
             )
         )
     monkeypatch.setattr(

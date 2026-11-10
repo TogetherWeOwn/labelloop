@@ -18,14 +18,30 @@ Changing limits invalidates old dry runs and unsent claims through the existing
 policy-revision checks, not a new dispatch engine. Null and zero retain their core
 semantics; an unset limit disables paid work, not an unlimited spending grant.
 
-New adapter/OpenAPI and disposable PostgreSQL controls cover role/CSRF denial,
-forged fields, strict values, redacted failures, unknown/unconfigured/orphan scope,
-commit/reconnect, retained private policy and pauses, replay rejection, stale
-claims, concurrent edits and post-event failure rollback. These await exact-head
-Actions. UI command wiring and explicit resume remain unfinished; the session
-view still disables spending commands. No schema/migration, dependency, provider
-call, production operation or new design. REA: reuse the existing policy writer,
-head lock, immutable journal and authentication boundary.
+At `4689efd76ee631dc2f7cc25c887f0d80ba10dcee`,
+[CI failed](https://github.com/TogetherWeOwn/labelloop/actions/runs/42737492059).
+Completed sanitized [budget-step logs](https://github.com/TogetherWeOwn/labelloop/actions/runs/42737492059/job/129570230188)
+establish **3 failed, 166 passed**: all three scope cases attempted to insert an
+orphan budget head before their HTTP requests. PostgreSQL correctly rejected the
+fixture at `budget_head_project_id_fkey`; no scope-request assertion ran. The
+CPU training/proposal/qualification step was skipped after this failure. Unit,
+web-build/browser, queue/migration cycles/all four parents, dev-stack,
+[CodeQL](https://github.com/TogetherWeOwn/labelloop/actions/runs/42737491531) and
+[gitleaks](https://github.com/TogetherWeOwn/labelloop/actions/runs/42737491641) passed,
+but do not clear failed CI.
+
+The correction separates the impossible orphan state into a real PostgreSQL
+foreign-key rejection control, asserting SQLSTATE/constraint and unchanged budget
+rows after savepoint rollback. Missing and unconfigured project HTTP controls
+retain exact redacted 404 and full non-mutation assertions without invalid setup.
+No production writer, constraint, schema, migration or gate changed. Corrected
+assertions await exact-head Actions; no local tests or builds ran. Existing
+controls retain authorization/CSRF, strict inputs, private-policy/pause recovery,
+replay/stale-claim rejection, concurrent edits and post-event failure rollback.
+UI command wiring and explicit resume remain unfinished; the session view still
+disables spending commands. No dependency, provider call, production operation or
+new design. REA: reuse the existing foreign key, policy writer, head lock,
+immutable journal and authentication boundary.
 
 ## Session audit lifetime and pricing — verified baseline
 
