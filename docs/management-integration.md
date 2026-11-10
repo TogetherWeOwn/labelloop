@@ -1032,6 +1032,30 @@ substituted. Schema/client, runtime grants, default mounting and real asset admi
 are unchanged. A usable pre-compilation preview and excluded-source planning remain
 explicit gaps, as do complete runtime/setup and final HTTP acceptance.
 
+## Published export identity (partial, unmounted)
+
+`CanonicalManagementReads.read_export` resolves an owned persisted candidate in a
+single SELECT-only repeatable snapshot. It reuses the existing fenced model-store
+validator and completed-training detail validator: unique human intent and model/
+training receipts, successful current job applications, hash-checked saved stages,
+immutable profile, compiler history, checkpoint/report lineage and static export
+comparison evidence must agree. A hand-inserted model or borrowed completion
+receipt is not export authority. No object storage read, inference, export or
+artifact download occurs on this path.
+
+The existing `ExportRead` returns only the model/recipe IDs, weights and ONNX
+SHA-256, static input height/width and content-digest artifact ID. The artifact ID
+is not a storage key, URL or download grant. This is persisted execution evidence,
+not qualification, registry promotion, production availability or a fresh runtime
+verification of the bytes. Missing/inconsistent authority fails closed.
+
+Sixteen disposable Actions cases are commissioned for both sizes, precommit
+invisibility, enforced read-only access, principal/workspace isolation, failed/
+superseded jobs, duplicate intent/completion receipts, saved-stage digest mismatch
+and hand-inserted models with/without borrowed receipts. Their ML artifacts remain
+explicitly synthetic; exact-head Actions verification is required. No schema/client,
+dependency, migration, runtime grant, default mount or real asset admission changes.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |

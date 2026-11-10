@@ -257,6 +257,238 @@ def test_registered_evaluation_executes_or_resumes_and_links_once(
 
 
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_export_read_is_read_only_and_requires_committed_fenced_publication(
+    database, compilation, compiler_worker, recipe
+):
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    service, owner, role = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    model_id = "model-" + accepted.resource.id
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        reads.read_export(Reader(), model_id)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read_export(Reader(), model_id)
+
+    compiler_worker.store.complete(lease, ("training", "export"), sink)
+    before = model_publication_state(owner, accepted), training_publication_state(owner, accepted)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_export(
+            Reader(), model_id
+        )
+        assert detail == reads.read_export(Actor(), model_id)
+    finally:
+        readonly.dispose()
+    assert detail.model_dump(mode="json") == {
+        "model_id": model_id,
+        "recipe_id": recipe,
+        "weights_sha256": exported["evidence"]["weights_sha256"],
+        "artifact_sha256": exported["evidence"]["export_sha256"],
+        "format": "onnx",
+        "input_hw": exported["evidence"]["static_input_signature"][2:],
+        "artifact_id": exported["evidence"]["export_sha256"],
+    }
+    assert "sha256/" not in detail.model_dump_json()
+    assert (
+        model_publication_state(owner, accepted),
+        training_publication_state(owner, accepted),
+    ) == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"kind": "service"}, {"granted": False}, {"role": "worker_ml"}, {"id": ""}],
+)
+def test_export_read_denies_untrusted_identity_before_lookup(database, overrides):
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_export(
+            Reader(**overrides), "unknown"
+        )
+
+
+def test_export_read_hides_foreign_workspace_and_unknown_model(
+    database, compilation, compiler_worker
+):
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    service, _, _ = database
+    model_id = "model-" + accepted.resource.id
+    for workspace, key in [(uuid4(), model_id), (service.workspace_id, "unknown")]:
+        with pytest.raises(ManagementFailure, match="not_found"):
+            CanonicalManagementReads(service.engine, workspace).read_export(Reader(), key)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "generation",
+        "failed",
+        "compile_generation",
+        "duplicate_model_receipt",
+        "duplicate_training_receipt",
+        "duplicate_intent",
+    ],
+)
+def test_export_read_requires_unique_current_model_training_and_compiler_authority(
+    database, compilation, compiler_worker, change
+):
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    service, owner, _ = database
+    model_id = "model-" + accepted.resource.id
+    with owner.begin() as connection:
+        if change.startswith("duplicate_"):
+            event_type, aggregate = {
+                "duplicate_model_receipt": ("management.model_exported", model_id),
+                "duplicate_training_receipt": (
+                    "management.training_completed",
+                    accepted.resource.id,
+                ),
+                "duplicate_intent": ("management.start_training", lease.input["variant_id"]),
+            }[change]
+            receipt = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == event_type,
+                        canonical_event.c.aggregate_id == aggregate,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in receipt.items()
+                        if key not in {"id", "created_at"}
+                    }
+                )
+            )
+        else:
+            assignment = "status='failed'" if change == "failed" else "generation=generation+1"
+            connection.execute(
+                text(f"UPDATE worker_job SET {assignment} WHERE job_id=:id"),
+                {
+                    "id": lease.input["compile_job_id"]
+                    if change == "compile_generation"
+                    else lease.job_id
+                },
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_export(
+            Reader(), model_id
+        )
+
+
+def test_export_read_refuses_inconsistent_saved_stage_digest(
+    database, compilation, compiler_worker
+):
+    from psycopg.types.json import Jsonb
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    # Insert inconsistent evidence, never mutate immutable stage history. This is
+    # a corrupt persisted-record fixture, not a valid controlled export.
+    with compiler_worker.store.connect() as connection:
+        connection.execute(
+            "INSERT INTO worker_stage_artifact(job_id,stage,sha256,payload,generation) "
+            "VALUES (%s,'export',%s,%s,%s)",
+            (lease.job_id, "0" * 64, Jsonb(exported), lease.generation),
+        )
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    service, _, _ = database
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_export(
+            Reader(), "model-" + accepted.resource.id
+        )
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_export_read_refuses_hand_inserted_model_and_borrowed_receipt(
+    database, compilation, compiler_worker, receipt
+):
+    from copy import deepcopy
+
+    from labelloop_api.model_schema import model_release
+
+    publisher, accepted, lease, training, exported = prepared_model_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "training", training)
+    compiler_worker.store.save_stage(lease, "export", exported)
+    compiler_worker.store.complete(lease, ("training", "export"), publisher.publish)
+    service, owner, _ = database
+    model_id = "model-" + accepted.resource.id
+    forged_id = "model-" + uuid4().hex
+    with owner.begin() as connection:
+        row = (
+            connection.execute(select(model_release).where(model_release.c.release_key == model_id))
+            .mappings()
+            .one()
+        )
+        record = deepcopy(row["record"])
+        record["release_id"] = forged_id
+        connection.execute(
+            insert(model_release).values(
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"id", "release_key", "record"}
+                },
+                release_key=forged_id,
+                record=record,
+            )
+        )
+        if receipt:
+            original = (
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.model_exported",
+                        canonical_event.c.aggregate_id == model_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in original.items()
+                        if key not in {"id", "created_at", "aggregate_id"}
+                    },
+                    aggregate_id=forged_id,
+                )
+            )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_export(
+            Reader(), forged_id
+        )
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_training_detail_is_read_only_and_exposes_only_pinned_arguments(
     database, compilation, compiler_worker, recipe
 ):

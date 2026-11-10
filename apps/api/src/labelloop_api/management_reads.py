@@ -7,8 +7,10 @@ from uuid import UUID
 
 from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 
+from labelloop_core.json_records import canonical_json
+
 from .management_canonical import refuse
-from .management_contracts import Resource, ResourceKind, ResourcePage
+from .management_contracts import ExportRead, Resource, ResourceKind, ResourcePage
 from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
@@ -367,6 +369,63 @@ class CanonicalManagementReads:
                     refuse("not_found")
                 try:
                     return training_detail(connection, row, self.workspace_id)
+                except (KeyError, TypeError, ValueError):
+                    refuse("missing_evidence")
+
+    def read_export(self, actor: ManagementPrincipal, model_id: str) -> ExportRead:
+        from .management_evaluation import verified_model
+        from .management_training_reads import training_detail
+        from .model_schema import model_release, training_run
+
+        authorize_reader(actor)
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(model_release)
+                    .join(owned, model_release.c.project_id == owned.c.id)
+                    .where(model_release.c.release_key == model_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                try:
+                    release, job_id = verified_model(connection, row, self.workspace_id)
+                    run = connection.execute(
+                        select(training_run, literal(row.project_id).label("project_id")).where(
+                            training_run.c.id == row.training_run_id
+                        )
+                    ).one_or_none()
+                    if run is None:
+                        refuse("missing_evidence")
+                    # Reuse training's intent, compiler and saved-stage checks in
+                    # this same snapshot; an export receipt alone is not lineage.
+                    detail = training_detail(connection, run, self.workspace_id)
+                    stage = connection.execute(
+                        text(
+                            "SELECT payload,sha256 FROM worker_stage_artifact "
+                            "WHERE job_id=:id AND stage='export'"
+                        ),
+                        {"id": job_id},
+                    ).one_or_none()
+                    if (
+                        stage is None
+                        or stage.sha256 != hashlib.sha256(canonical_json(stage.payload)).hexdigest()
+                        or detail.resource.project_id != str(row.project_id)
+                        or detail.recipe_id != release.recipe_id
+                    ):
+                        refuse("missing_evidence")
+                    return ExportRead(
+                        model_id=release.release_id,
+                        recipe_id=release.recipe_id,
+                        weights_sha256=release.weights_sha256,
+                        artifact_sha256=release.export_sha256,
+                        format="onnx",
+                        input_hw=release.static_input_signature[2:],
+                        artifact_id=release.export_sha256,
+                    )
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 
