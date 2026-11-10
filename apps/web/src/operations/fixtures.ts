@@ -38,7 +38,7 @@ export const auditFixture: readonly AuditEvent[] = [
 // client-side access check. The real adapter must not download admin rows first.
 export function recordedAuditPort(authorizedEvents: readonly AuditEvent[]): AuditPort {
   const select = (query: AuditQuery) => authorizedEvents.filter((row) => query.kinds.includes(row.kind)
-    && query.principals.includes(row.principal.type)
+    && (row.principal.type === 'unknown' ? query.principals.includes('person') && query.principals.includes('service') : query.principals.includes(row.principal.type))
     && `${row.sentence} ${row.principal.name} ${row.record?.label ?? ''}`.toLowerCase().includes(query.search.toLowerCase())
     && (!query.from || row.at.slice(0, 10) >= query.from) && (!query.through || row.at.slice(0, 10) <= query.through)
   ).sort((a, b) => b.at.localeCompare(a.at));

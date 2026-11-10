@@ -1,5 +1,34 @@
 # Operational view fixture boundary
 
+## Authenticated limit edits — integration and verification pending
+
+`POST /projects/{project_key}/costs/policy` now exposes only existing policy limits
+and the autonomous-spend flag, with expected revision, human-admin session and
+same-origin CSRF. Its BudgetStore transaction preserves pricing, pixel-provider
+permissions, paused state and all reservations, and appends the authenticated actor
+through the existing immutable policy journal. Unknown projects and unconfigured
+budgets reject instead of creating defaults. Concurrent edits use the existing
+head lock and only one expected revision can succeed. No pause clearing, retry,
+reservation, provider call or paid dispatch is introduced. A successful edit does
+not make a stale dry run valid or claim that a paused project resumed.
+
+New HTTP adapter/OpenAPI and disposable PostgreSQL commit/reconnect, isolation,
+race and rollback controls await Actions. The session CostsView still disables
+commands: UI wiring, explicit resume and normal authenticated product mounting
+remain unfinished. No new schema/migration, dependency, design or policy engine.
+REA: reuse BudgetStore CAS, audit append and server-owned session authorization.
+
+## Original operation pricing in shown-row CSV
+
+Session ledger entries now retain each operation's validated original
+`price_version` from the server. Shown-row CSV appends a `Price version` column;
+independent pages may legitimately contain different versions. Null or absent
+fixture/history metadata exports an empty cell, never today's pricing or an
+inferred shared version. The existing CSV encoder escapes separators, quotes,
+newlines and formula-leading text. The view layout and project-level unknown-price
+label are unchanged. Adapter and desktop/mobile download controls await Actions;
+this does not connect policy/resume commands or authenticated product routing.
+
 ## Delivered surface
 
 `apps/web/src/operations/` implements the accepted Costs, Audit log and M5
@@ -55,7 +84,227 @@ keyboard focus. Page errors retain those rows and offer an explicit retry of the
 same cursor, never an automatic retry. Initial-query errors still use the full error
 boundary.
 
-## Not delivered: authenticated integration
+## Authenticated audit metadata — integration pending
+
+`GET /projects/{project_key}/audit-log` reads recorded review and promotion metadata
+only. Human admins can read both kinds; reviewers can read reviews only. The server
+selects permitted sources before filters, counts, paging and export; service tokens
+cannot use either read. It never returns raw decisions, reasons, corrections,
+promotion/qualification payloads. Nullable `actor_name` resolves the current auth
+directory name only by exact principal ID, never a legacy actor string equal to a
+username. Human reviews require a human directory entry; model/system reviews
+require a service entry. Unknown promotion provenance may resolve an exact ID's
+current name but remains `unknown`. Missing/incompatible identities retain the
+original actor ID and null name. Disabled accounts keep their historical display
+link; a renamed account shows its current name, not a claimed historical snapshot.
+Only names attached to visible events can match search: this is not a principal
+directory endpoint. Sentences are fixed code-owned labels. Recorded review actor
+kind is retained; historical promotion actor kind is
+`unknown`, not inferred as human. Review revision means the event's expected
+revision; promotion revision means its registry revision.
+
+The typed `AuditMetadataPage` includes a total from the same SQL statement snapshot
+as its page. Pages contain at most 100 events ordered by UTC time, kind and UUID,
+newest first. `after` is a visible event position (`kind/UUID`), not authorization:
+a foreign, hidden or filtered-out event rejects without disclosing its metadata.
+Each page is a fresh read, not a frozen cross-page history. Refresh from page one
+for newly appended events. Optional `kind`, `since`, inclusive `through`,
+`actor_kind` and `search` filters apply identically to `/audit-log/export`.
+`kind` and `actor_kind` can repeat to select a set (OR within a field, AND
+between fields). Single values remain compatible and omitted fields mean all
+authorized values. The query validates every member and bounds input to three
+kinds/five actor kinds; duplicates do not duplicate records. Page totals, cursor
+lookup and export all consume that same filtered population, never browser-side
+filtering after paging. New multi-selection controls await exact-head Actions.
+`actor_kind` selects recorded `human`, `model`, `system` or `unknown` categories;
+a shared actor identifier never changes that provenance. Search accepts 1–128
+characters and matches a case-insensitive literal actor-ID/current-name substring
+or an exact event/record UUID (hyphenated or hex). `%`, `_` and `/` have no wildcard
+meaning. It does not search private payloads, decisions, reasons or inferred record
+labels. Authorization still selects sources first; counts and cursors use
+the filtered population. Dates require explicit timezones and are normalized to
+UTC; inverted ranges reject. JSON-lines exports are fully buffered
+and capped at 1,000 events; overflow rejects with a narrower-range error, never a
+silently truncated file or a partially streamed failure.
+
+The port also includes admin-only `Budget` metadata from the existing immutable
+budget journal. Its recorded actor kind is `human` or `service`; `service` is now
+an additional exact `actor_kind` filter, not an inferred model/system category.
+Names still require exact compatible directory identities. Budget `record_id` is
+the canonical project UUID; `revision` is the recorded policy revision, not a
+ledger freshness token or operation revision. The static sentence discloses no
+action, private record, operation/claim ID, policy/pricing or provider payload.
+Native and text UUID journals share normalized hex ordering/cursor/search keys,
+while public IDs remain UUIDs. Reviewer restrictions apply before every operation,
+including budget-name search, counts and export. Nullable `refused` is `true` only
+for the writer's explicit `approval_exhausted` event; other events remain unknown,
+not successful. Budget/refusal controls passed
+[CI at 0f5d8ce](https://github.com/TogetherWeOwn/labelloop/actions/runs/42577331537),
+including unit and both-recipe PostgreSQL smoke. The synthetic refusal row proves
+projection/recovery, not actual paid-attempt emission or complete refused history.
+
+This port is **not yet mounted in AuditLog** and does not supply connection
+history, complete refused attempts, record links or the complete accepted UI projection.
+Search/filter and UUID fixture controls passed
+[CI at a3fcca5](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035),
+including [unit](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106944)
+and both-recipe [PostgreSQL smoke](https://github.com/TogetherWeOwn/labelloop/actions/runs/42568773035/job/129001106973).
+Current-name resolution/search controls passed unit and both-recipe PostgreSQL
+smoke at [fd66017](https://github.com/TogetherWeOwn/labelloop/actions/runs/42570767808),
+with **2417 unit passed, 81 skipped**. Overall CI failed separately because the
+checksum-pinned MinIO download returned HTTP 504 in dev-stack; this is not an
+overall gate PASS. No new event store, schema, dependency, spend or provider call. REA: reuse
+immutable canonical events and exact auth identities, not another audit journal.
+
+### Session-backed display adapter
+
+`sessionAuditPort(project)` now implements the supplied `AuditPort` through the
+strict session transport. It maps only server-returned rows, preserves server
+counts/cursors, uses kind-qualified event IDs, and leaves record links null.
+Missing current names fall back to the recorded actor ID. Unknown actor kind stays
+unknown even when a current name resolves; the existing neutral tag marks the
+missing provenance. Model/system/service actors share the Services display
+category while retaining exact `recorded_kind`. Nullable refusal remains nullable;
+only an explicit true receives refusal styling. Export retains the complete
+original metadata JSON lines, never just displayed pages or inferred principal types.
+
+The existing People filter maps to `human`, Services to `model/system/service`,
+and both mean no actor-kind restriction (including unknown history). Unknown
+history is not classified by a matching current name. Date controls translate exact
+calendar dates to inclusive UTC day bounds, including the final microsecond; malformed
+or inverted ranges reject. Empty selections and connection-only requests fail
+closed before network access, rather than turning into unfiltered queries or
+invented empty history. Mixed kinds select the available Review/Promotion/Budget
+journal only. Connection events, empty-selection UX, a dedicated unknown filter,
+real record navigation and authenticated shell mounting remain unfinished; this
+adapter is not complete AuditLog acceptance. Keep its identity stable within a
+project/session lifetime and replace it when either scope changes.
+
+[CI at f55fe5d](https://github.com/TogetherWeOwn/labelloop/actions/runs/42586297134)
+passed web-build (including transport lint/types/tests), unit, both-recipe ML smoke,
+queue/migration cycles/all four parents and dev-stack. CodeQL and gitleaks also
+passed that exact transport head. First adapter head `463fa17` failed web lint:
+structured Actions annotation identified an unsafe `any` argument after array
+narrowing. The boundary now validates each kind as `unknown` before string use,
+with null/numeric-member controls; adapter tests were not reached on that head.
+Next head `a747de3` passed web lint/types but failed invalid-filter export tests:
+validation threw synchronously before the promised export rejection. The export
+adapter is now async so the existing view's rejection handler receives every
+validation failure without a synchronous event-handler exception. Existing negative
+controls retain the no-network requirement. Corrected adapter/unknown-state tests
+passed [exact-head web-build at 00f157f](https://github.com/TogetherWeOwn/labelloop/actions/runs/42589224587/job/129066646885),
+including lint/types/tests and the existing fixture-browser checks. Overall CI,
+CodeQL and gitleaks passed that head; no local tests or builds ran. No new layout,
+component, token, event store, dependency, provider or spend operation. REA: reuse the supplied
+AuditLog port, session transport and existing neutral tag, not another audit journal.
+
+## Authenticated ledger read port — integration pending
+
+`GET /projects/{project_key}/costs?limit=50&after=<operation_id>` is an admin-session
+read over the existing durable budget tables. The response model is published in
+the application's generated `app.openapi()` contract as `BudgetPage`. It explicitly
+labels USD/micro-USD, current policy revision/limits and pause reason, and returns
+at most 100 operation projections plus `next_after`. Actuals remain nullable;
+confirmed zero is not unconfirmed billing. Exposure uses the existing core entry
+calculation, including retained child exposure. Raw intent, provider evidence,
+configuration and pricing payloads are not returned. Missing/unconfigured scopes
+are unavailable, not manufactured empty budgets; malformed entries fail closed.
+
+Every page takes the budget writers' existing head lock through outer commit.
+Ordering is by immutable operation identity, not timestamp or cost. `after` is only
+a position within the requested project, never authorization. Each page is a new
+consistent read, not a frozen cross-page snapshot: new operations can appear before
+a prior cursor. `policy_revision` is not a ledger revision or freshness token.
+Consumers must refresh from page one to recover the current complete collection.
+
+This read port is **not yet mounted in CostsView**. It does not supply refused-attempt
+history, scoped totals, operation display labels/links, policy-write/resume commands,
+or a complete `CostsRecord`. No paid operation is dispatched. Session, bounded
+paging, redaction, rollback and disposable PostgreSQL recovery controls passed
+[exact-head Actions at a90a230](https://github.com/TogetherWeOwn/labelloop/actions/runs/42563179534);
+no local tests ran. REA: reuse the durable ledger codec and core
+exposure property, not another budget engine.
+
+### Original reservation timestamps — integration pending
+
+Cost pages also include nullable `reserved_at`, loaded from the exact immutable
+reservation event under the writer-head lock, not from the month, policy revision
+or later billing activity. The bounded lookup covers only returned operations;
+duplicate or mismatched request/approval/autonomous history rejects the page.
+Missing historical events stay null without backfill or current-time substitution.
+The strict session transport retains UTC microseconds and rejects absent, malformed,
+non-UTC and invalid-calendar values. New adapter and disposable PostgreSQL recovery
+controls await Actions. This field is reservation time, not completion or billing
+time; it does not change operation ordering or establish a cross-page snapshot.
+Operation kind/object/recipe metadata, real navigation, complete refusal history,
+policy/resume commands and authenticated CostsView mounting remain unfinished.
+No new journal, migration, dependency or paid operation. REA: consume the existing
+reservation event, not inferred timestamps or another accounting engine.
+
+### Session-backed ledger transport
+
+`costClient(project).query({ after, limit }, signal)` reads exactly one authorized
+page through the fixed same-origin costs route. Strict wire validation rejects
+foreign project scope, unknown fields/states/units, unsafe numeric amounts,
+inconsistent actual/state/exposure, duplicate rows and malformed cursors. It
+preserves nullable actuals, confirmed zero, explicit policy zero/null limits and
+server-computed retained-child exposure; it does not calculate browser-side
+budget grants or hide insufficient-credit pauses. Session credentials are sent
+only same-origin, with no-store, redirects refused and cancellation supported.
+
+Audit and cost clients reuse one bounded fatal-UTF-8 session reader. Cost pages
+are limited to 256 KiB; transport/HTTP/parser failures are redacted and never
+retried. New network-free controls cover these boundaries and pagination,
+including policy changes between pages. First head `74e254f` failed web lint at
+`cost-client.ts:83`: a redundant assertion remained after the predicate had already
+narrowed the array. The assertion is removed without changing validation; web
+types/tests did not run on that head. Corrected-head controls and audit shared-reader
+regressions passed [web-build at cc45f78](https://github.com/TogetherWeOwn/labelloop/actions/runs/42592107909/job/129076236901).
+Overall CI, CodeQL and gitleaks passed that exact head. No local tests/builds,
+dependencies, mutation or paid operation are introduced.
+
+The wire page is deliberately not coerced into `CostsRecord`: operation kinds,
+object identities, timestamps and scoped complete totals are not delivered by
+this endpoint. No fabricated labels, policy commands, resume command or record
+links are supplied. Policy revisions are not ledger snapshots; consumers refresh
+from page one, not merge pages into a claimed atomic total. The authenticated
+shell and full CostsView mounting remain required and separately owned shell work
+is not replaced. REA: reuse the delivered durable ledger projection and audit
+transport safeguards, not another ledger or authorization engine.
+
+### Session cost display contract — verification pending
+
+`sessionCostsRecord(project, summaryQuery, pageQuery, signal)` composes the strict
+session client's complete month/iteration summary with exactly one ledger page.
+Both reads retain server authorization, bounded transport and cancellation. A
+changed policy revision, limit, autonomous flag or project pause rejects the
+combined read without retry. Matching policy does **not** prove a shared ledger
+snapshot: the summary and page each have their own consistent transaction.
+
+`CostsRecord.source: 'session'` requires authoritative summaries and retains the
+page's continuation cursor. `CostsView` consumes those summaries, never sums the
+visible page for its meters. Filters and shown-row CSV affect the page only;
+copy explicitly excludes complete-history/export and refused-attempt claims.
+Missing timestamps, kinds, objects, recipes and shared price version remain null.
+Known times are reservation times. A bound annotation job supplies review-batch
+identity, not a training-run identity; session run filtering cannot invent one.
+Retained-child exposure survives the projection, actual zero stays confirmed,
+and a paused review stays distinct from a refused reservation. Autonomous approval
+comes only from the recorded flag, never from absent approver metadata.
+
+Session records currently disable spending commands even if a fixture command
+port is passed. Policy/resume HTTP wiring, full history/export/pagination controls,
+normal authenticated application mounting and real navigation remain unfinished.
+No shell, design token, layout, endpoint, dependency or accounting engine is added.
+Network-free transport/SSR tests cover complete totals beyond the page, unknown
+metadata/CSV, retained exposure, zero actuals, review pause, mixed-policy rejection,
+foreign scope, cancellation plumbing and expired sessions. New controls await
+exact-head Actions; no local test or build ran. This supersedes the earlier claim
+that the consumer contract cannot represent server summaries, not the remaining
+full operational-acceptance gaps. REA: reuse the supplied CostsView and strict
+session client rather than fabricate a rich ledger from paged reservations.
+
+## Not delivered: complete authenticated integration
 
 Main currently has no operational read APIs. `contracts.ts` contains **projection
 ports, not generated OpenAPI contracts**. Do not treat the TypeScript types or the
@@ -94,6 +343,18 @@ Query options: `view=costs|audit|models`,
 credential or persistent configuration writes. Every page says it is a fixture.
 Fictional people, records, hashes and sample counts are licence-clean invented
 values adapted from the accepted mockups, not evidence of real qualification.
+Audit `state=session` mounts the supplied AuditLog using the production session
+transport on a fixed invented `audit-demo` scope. Browser tests intercept all API
+responses; an invented cookie marker tests transport, not login or authorization.
+Desktop/mobile cases cover server pages/counts, unknown actor provenance, escaped
+names, refusal styling, full original-metadata export and read/export filter parity.
+Failure cases cover 401, foreign project payloads and malformed exports without
+retry/private error disclosure/download. First head `cebdd2d` failed web lint
+on seven redundant non-null assertions before browser execution; those assertions
+are removed. Cookie checks use Playwright's complete `headerValue` accessor,
+not the security-filtered synchronous header map. Corrected controls await
+exact-head Actions; no browser PASS is claimed.
+This is not a product route or real-backend acceptance; do not deploy the fixture.
 Audit `state=scope-swap|freshness-refresh|deferred-page` supplies deterministic deferred
 ports for mounted lifecycle and long-table pagination regressions, not new product
 controls. Costs `background-refresh` completes an unchanged-revision read without

@@ -1,0 +1,514 @@
+"""Current assembly with real pure gates; mocked reads are not HTTP/DB acceptance."""
+
+from dataclasses import replace
+from unittest.mock import MagicMock
+
+import pytest
+from qualification_fixture import qualification_context, synthetic_final
+from test_m5_integration_contract import make_release, make_report
+
+from labelloop_api import qualification_context_store as store
+from labelloop_api.annotation_evidence_store import StoredAnnotationEvidence
+from labelloop_api.qualification_policy_store import StoredQualificationPolicy
+from labelloop_api.training_group_store import ModelInputGroups
+from labelloop_core.qualification import QualificationPolicy, QualificationTargets
+from labelloop_core.qualification_data import record_sha256
+from labelloop_core.registry import PromotionPolicy
+
+
+def setup(monkeypatch, side=320):
+    release = make_release(side, "challenger")
+    report = synthetic_final(make_report(release), run_id="final", dataset_id="final-set")
+    release = replace(release, evaluation_run_ids=(*release.evaluation_run_ids, report.run_id))
+    context = qualification_context(release, report, PromotionPolicy(1, 0.9))
+    evidence = context.evidence
+    connection = MagicMock()
+    connection.execute.return_value.scalar_one.return_value = "model-id"
+    readers = {
+        "lock_project": MagicMock(return_value="project-id"),
+        "load_release": MagicMock(return_value=release),
+        "model_input_groups": MagicMock(
+            return_value=ModelInputGroups(evidence.lineage.training_group_ids, ())
+        ),
+        "stored_report": MagicMock(return_value=report),
+        "load_qualification_policy": MagicMock(
+            return_value=StoredQualificationPolicy(
+                1, QualificationPolicy(evidence.pipeline, evidence.scope, evidence.targets)
+            )
+        ),
+        "load_final_test": MagicMock(return_value=evidence.final_test),
+        "require_development_uses": MagicMock(),
+        "load_evaluation_set": MagicMock(
+            side_effect=lambda _connection, *, project_key, dataset_key, role: {
+                "development": evidence.lineage.development,
+                "calibration": evidence.lineage.calibration,
+                "locked_final_test": evidence.final_test.dataset,
+            }[role]
+        ),
+        "load_annotation_evidence": MagicMock(
+            side_effect=[
+                StoredAnnotationEvidence(evidence.annotation_audit, None),
+                StoredAnnotationEvidence(evidence.canary_audit, record_sha256(release)),
+            ]
+        ),
+    }
+    for name, reader in readers.items():
+        monkeypatch.setattr(store, name, reader)
+    args = dict(
+        project_key=release.project_id,
+        recipe_key=release.recipe_id,
+        model_key=release.release_id,
+        evaluation_key=report.run_id,
+        qualification_key=evidence.qualification_id,
+        annotation=store.AnnotationOutcomeRef("audit-release", "audit", "measured-audit"),
+        canary=store.AnnotationOutcomeRef("canary-release", "canary", "measured-canary"),
+        lineage=evidence.lineage,
+    )
+    return connection, args, context, readers
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_assembly_uses_only_scoped_current_stored_inputs_and_real_quality_gates(monkeypatch, side):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    assert store.load_qualification_context(connection, **args) == expected
+    readers["lock_project"].assert_called_once_with(connection, args["project_key"])
+    assert connection.execute.call_args.args[0].compile().params == dict(
+        project_id_1="project-id", release_key_1=args["model_key"]
+    )
+    readers["model_input_groups"].assert_called_once_with(
+        connection, project_id="project-id", model_id="model-id"
+    )
+    readers["stored_report"].assert_called_once_with(
+        connection, readers["load_release"].return_value, args["evaluation_key"]
+    )
+    readers["load_final_test"].assert_called_once_with(
+        connection, project_key=args["project_key"], dataset_key="final-set"
+    )
+    selection = expected.evidence.final_test.assessments[0].selection
+    readers["require_development_uses"].assert_called_once_with(
+        connection,
+        project_key=args["project_key"],
+        development_set_key=selection.development_set_id,
+        calibration_set_key=selection.calibration_set_id,
+    )
+    groups = readers["load_evaluation_set"].call_args_list
+    assert [call.kwargs for call in groups] == [
+        dict(
+            project_key=args["project_key"],
+            dataset_key=selection.development_set_id,
+            role="development",
+        ),
+        dict(project_key=args["project_key"], dataset_key="final-set", role="locked_final_test"),
+    ]
+    assert all(call.args == (connection,) for call in groups)
+    calls = readers["load_annotation_evidence"].call_args_list
+    for call, reference, model in zip(
+        calls, (args["annotation"], args["canary"]), (None, args["model_key"]), strict=True
+    ):
+        assert call.args == (connection,)
+        assert call.kwargs == dict(
+            project_key=args["project_key"],
+            release_key=reference.release_key,
+            audit_key=reference.audit_key,
+            evidence_key=reference.evidence_key,
+            canary_model_key=model,
+            require_current_groups=True,
+        )
+    assert connection.execute.call_count == 1  # SELECT only; assembly grants no state change.
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_assembly_derives_lineage_from_recorded_inputs_and_selection(monkeypatch, side, calibrated):
+    from labelloop_core.evaluation_lifecycle import EvaluationSet
+
+    connection, args, expected, readers = setup(monkeypatch, side)
+    args.pop("lineage")
+    inputs = ModelInputGroups(
+        ("inherited-training", "train-group"), (), references=("recorded-reference",)
+    )
+    readers["model_input_groups"].return_value = inputs
+    calibration = None
+    if calibrated:
+        calibration = EvaluationSet(
+            "calibration-set", args["project_key"], ("calibration-group",), "calibration"
+        )
+        final = expected.current_final_test
+        assessment = final.assessments[0]
+        final = replace(
+            final,
+            assessments=(
+                replace(
+                    assessment,
+                    selection=replace(
+                        assessment.selection,
+                        calibration_run_id="calibration-run",
+                        calibration_set_id=calibration.release_id,
+                    ),
+                ),
+            ),
+        )
+        readers["load_final_test"].return_value = final
+        original = readers["load_evaluation_set"].side_effect
+        readers["load_evaluation_set"].side_effect = lambda *a, **kw: (
+            calibration if kw["role"] == "calibration" else original(*a, **kw)
+        )
+    loaded = store.load_qualification_context(connection, **args)
+    assert loaded.evidence.lineage.training_group_ids == inputs.training
+    assert loaded.evidence.lineage.reference_group_ids == inputs.references
+    assert loaded.evidence.lineage.development == expected.evidence.lineage.development
+    assert loaded.evidence.lineage.calibration == calibration
+    assert loaded.evidence.annotation_audit == expected.evidence.annotation_audit
+    readers["model_input_groups"].assert_called_once_with(
+        connection, project_id="project-id", model_id="model-id"
+    )
+    assert connection.execute.call_count == 1
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("influence", ["training", "selection", "recorded_selection", "references"])
+@pytest.mark.parametrize("role", ["final", "canary"])
+def test_derived_lineage_does_not_hide_recorded_influence(monkeypatch, side, influence, role):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    args.pop("lineage")
+    group = (
+        expected.current_final_test.dataset.group_ids[0]
+        if role == "final"
+        else expected.evidence.canary_audit.sources[0].group_id
+    )
+    inputs = readers["model_input_groups"].return_value
+    readers["model_input_groups"].return_value = replace(
+        inputs, **{influence: (*getattr(inputs, influence), group)}
+    )
+    with pytest.raises(ValueError, match="overlap|fresh"):
+        store.load_qualification_context(connection, **args)
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
+@pytest.mark.parametrize(
+    "field", ["project_key", "recipe_key", "model_key", "evaluation_key", "qualification_key"]
+)
+def test_bad_selector_is_rejected_before_lock_or_read(monkeypatch, field):
+    connection, args, _, readers = setup(monkeypatch)
+    with pytest.raises(ValueError):
+        store.load_qualification_context(connection, **(args | {field: " "}))
+    readers["lock_project"].assert_not_called()
+    connection.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("selected", [("annotation",), ("canary",), ("annotation", "canary")])
+def test_release_only_outcome_selection_retains_all_quality_gates(monkeypatch, side, selected):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    outcomes = dict(
+        annotation=StoredAnnotationEvidence(expected.evidence.annotation_audit, None),
+        canary=StoredAnnotationEvidence(
+            expected.evidence.canary_audit, record_sha256(readers["load_release"].return_value)
+        ),
+    )
+    references = {name: args[name] for name in ("annotation", "canary")}
+    selector = MagicMock(
+        side_effect=lambda _connection, **kw: next(
+            outcomes[name] for name in selected if references[name].release_key == kw["release_key"]
+        )
+    )
+    monkeypatch.setattr(store, "select_annotation_evidence", selector)
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    for name in selected:
+        args[name] = store.AnnotationOutcomeRef(references[name].release_key)
+    assert store.load_qualification_context(connection, **args) == expected
+    assert [call.kwargs for call in selector.call_args_list] == [
+        dict(
+            project_key=args["project_key"],
+            release_key=references[name].release_key,
+            canary_model_key=args["model_key"] if name == "canary" else None,
+        )
+        for name in selected
+    ]
+    assert connection.execute.call_count == 1
+    selector.side_effect = ValueError("ambiguous outcomes")
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    with pytest.raises(ValueError, match="ambiguous outcomes"):
+        store.load_qualification_context(connection, **args)
+    selector.side_effect = lambda *_a, **kw: replace(
+        outcomes["canary" if kw["canary_model_key"] else "annotation"],
+        evidence=replace(
+            outcomes["canary" if kw["canary_model_key"] else "annotation"].evidence, observations=()
+        ),
+    )
+    readers["load_annotation_evidence"].side_effect = [
+        outcomes[name] for name in ("annotation", "canary") if name not in selected
+    ]
+    with pytest.raises(ValueError, match="adverse or missing observations"):
+        store.load_qualification_context(connection, **args)
+
+
+@pytest.mark.parametrize("field", ["audit_key", "evidence_key"])
+def test_outcome_refs_reject_partial_selectors(field):
+    with pytest.raises(ValueError, match="both audit and evidence keys or neither"):
+        store.AnnotationOutcomeRef("release", **{field: "key"})
+
+
+@pytest.mark.parametrize("field", ["release_key", "audit_key", "evidence_key"])
+def test_outcome_refs_reject_empty_identity(field):
+    with pytest.raises(ValueError):
+        store.AnnotationOutcomeRef(
+            **(dict(release_key="release", audit_key="audit", evidence_key="outcome") | {field: ""})
+        )
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        "load_qualification_policy",
+        "load_release",
+        "model_input_groups",
+        "stored_report",
+        "load_final_test",
+        "require_development_uses",
+        "load_evaluation_set",
+        "load_annotation_evidence",
+    ],
+)
+@pytest.mark.parametrize("derived", [False, True])
+def test_missing_or_conflicting_record_never_yields_a_context(monkeypatch, reader, derived):
+    connection, args, _, readers = setup(monkeypatch)
+    if derived:
+        args.pop("lineage")
+    readers[reader].side_effect = ValueError("missing or current group conflict")
+    with pytest.raises(ValueError, match="missing or current group conflict"):
+        store.load_qualification_context(connection, **args)
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("role", ["development", "locked_final_test"])
+@pytest.mark.parametrize("field", ["group_ids", "release_id", "project_id", "role"])
+def test_canonical_evaluation_substitution_fails_before_outcome_reads(
+    monkeypatch, side, role, field
+):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    original = readers["load_evaluation_set"].side_effect
+
+    def substituted(*positional, **keywords):
+        dataset = original(*positional, **keywords)
+        if keywords["role"] == role:
+            value = ("hidden-real-group",) if field == "group_ids" else "foreign"
+            if field == "role":
+                value = "calibration"
+            return replace(dataset, **{field: value})
+        return dataset
+
+    readers["load_evaluation_set"].side_effect = substituted
+    with pytest.raises(ValueError, match="differ from current canonical membership"):
+        store.load_qualification_context(connection, **args)
+    readers["load_annotation_evidence"].assert_not_called()
+    assert args["lineage"] == expected.evidence.lineage
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("mutation", [None, "groups", "missing", "omitted"])
+def test_calibration_is_loaded_from_the_committed_selection(monkeypatch, side, mutation):
+    from labelloop_core.evaluation_lifecycle import EvaluationSet
+
+    connection, args, expected, readers = setup(monkeypatch, side)
+    calibration = EvaluationSet(
+        "calibration-set", args["project_key"], ("cal-group",), "calibration"
+    )
+    final = expected.evidence.final_test
+    assessment = final.assessments[0]
+    selection = replace(
+        assessment.selection, calibration_run_id="calibration", calibration_set_id="calibration-set"
+    )
+    final = replace(final, assessments=(replace(assessment, selection=selection),))
+    readers["load_final_test"].return_value = final
+    args["lineage"] = replace(args["lineage"], calibration=calibration)
+    original = readers["load_evaluation_set"].side_effect
+
+    def load(*positional, **keywords):
+        if keywords["role"] != "calibration":
+            return original(*positional, **keywords)
+        assert keywords["dataset_key"] == selection.calibration_set_id
+        if mutation == "missing":
+            raise ValueError("missing canonical calibration")
+        return (
+            replace(calibration, group_ids=("actual-cal-group",))
+            if mutation == "groups"
+            else calibration
+        )
+
+    readers["load_evaluation_set"].side_effect = load
+    if mutation == "omitted":
+        args["lineage"] = replace(args["lineage"], calibration=None)
+    if mutation is not None:
+        with pytest.raises(ValueError, match="canonical"):
+            store.load_qualification_context(connection, **args)
+        readers["load_annotation_evidence"].assert_not_called()
+    else:
+        loaded = store.load_qualification_context(connection, **args)
+        assert loaded.evidence.lineage.calibration == calibration
+        assert loaded.current_final_test == final
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_asserted_lineage_cannot_omit_compiled_training_groups(monkeypatch, side):
+    connection, args, _, readers = setup(monkeypatch, side)
+    readers["model_input_groups"].return_value = ModelInputGroups(
+        ("unreported-training-group",), ()
+    )
+    with pytest.raises(ValueError, match="omits compiled training groups"):
+        store.load_qualification_context(connection, **args)
+    readers["stored_report"].assert_not_called()
+    readers["load_annotation_evidence"].assert_not_called()
+
+
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("role", ["development", "final", "canary"])
+def test_inherited_training_groups_cannot_be_hidden_in_other_roles(monkeypatch, side, role):
+    connection, args, expected, readers = setup(monkeypatch, side)
+    evidence = expected.evidence
+    group = {
+        "development": evidence.lineage.development.group_ids[0],
+        "final": evidence.final_test.dataset.group_ids[0],
+        "canary": evidence.canary_audit.sources[0].group_id,
+    }[role]
+    groups = (*evidence.lineage.training_group_ids, group)
+    readers["model_input_groups"].return_value = ModelInputGroups(groups, ())
+    # Reporting the inherited exposure satisfies completeness but cannot make the
+    # same group independent selection/final/canary evidence.
+    args["lineage"] = replace(evidence.lineage, training_group_ids=groups)
+    with pytest.raises(ValueError, match="evaluation groups overlap|canary groups must be fresh"):
+        store.load_qualification_context(connection, **args)
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
+@pytest.mark.parametrize("field", ["project_id", "recipe_id", "release_id", "missing"])
+def test_scoped_model_substitution_fails_before_outcome_reads(monkeypatch, field):
+    connection, args, _, readers = setup(monkeypatch)
+    release = readers["load_release"].return_value
+    readers["load_release"].return_value = (
+        None if field == "missing" else replace(release, **{field: "foreign"})
+    )
+    with pytest.raises(ValueError, match="exact project, recipe and model"):
+        store.load_qualification_context(connection, **args)
+    readers["load_annotation_evidence"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["null-targets", "pipeline", "scope", "adaptation", "quarantine", "exposure", "metadata"],
+)
+def test_current_configuration_lifecycle_and_complete_model_metadata_are_gates(
+    monkeypatch, mutation
+):
+    connection, args, _, readers = setup(monkeypatch)
+    stored = readers["load_qualification_policy"].return_value
+    policy = stored.policy
+    final = readers["load_final_test"].return_value
+    if mutation == "null-targets":
+        targets = QualificationTargets()
+        policy = replace(
+            policy,
+            targets=targets,
+            pipeline=replace(policy.pipeline, acceptance_policy_sha256=record_sha256(targets)),
+        )
+    elif mutation == "pipeline":
+        policy = replace(policy, pipeline=replace(policy.pipeline, prompt_sha256="a" * 64))
+    elif mutation == "scope":
+        policy = replace(policy, scope=policy.scope[:1])
+    elif mutation == "adaptation":
+        final = final.record_adaptation("guided change", expected_revision=final.revision)
+    elif mutation == "quarantine":
+        final = final.quarantine("new group overlap", expected_revision=final.revision)
+    elif mutation == "exposure":
+        final = replace(final, assessments=())
+    else:
+        release = readers["load_release"].return_value
+        readers["load_release"].return_value = replace(release, export_sha256="a" * 64)
+    readers["load_qualification_policy"].return_value = replace(stored, policy=policy)
+    readers["load_final_test"].return_value = final
+    with pytest.raises(ValueError):
+        store.load_qualification_context(connection, **args)
+
+
+@pytest.mark.parametrize("target", ["audit", "canary"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "partial",
+        "adverse",
+        "truncated",
+        "agreement",
+        "precision",
+        "discovery",
+        "geometry",
+        "model-digest",
+    ],
+)
+def test_saved_outcomes_are_not_automatically_qualified(monkeypatch, target, mutation):
+    connection, args, expected, readers = setup(monkeypatch)
+    audit = expected.evidence.annotation_audit
+    canary = expected.evidence.canary_audit
+    outcome = audit if target == "audit" else canary
+    if mutation == "partial":
+        outcome = replace(outcome, observations=outcome.observations[:1])
+    elif mutation in {"adverse", "truncated"}:
+        field = "labels_correct" if mutation == "adverse" else "output_truncated"
+        observation = replace(outcome.observations[0], **{field: mutation == "truncated"})
+        outcome = replace(outcome, observations=(observation, *outcome.observations[1:]))
+    elif mutation == "agreement":
+        outcome = replace(outcome, truth_basis="model_agreement")
+    elif mutation != "model-digest":
+        field, value = {
+            "precision": ("correct_labels", 0),
+            "discovery": ("discovered_objects", 0),
+            "geometry": ("max_geometry_error", 0.5),
+        }[mutation]
+        measured = replace(outcome.measurements[0], **{field: value})
+        outcome = replace(outcome, measurements=(measured, *outcome.measurements[1:]))
+    if target == "audit":
+        audit = outcome
+    else:
+        canary = outcome
+    # Ordinary audit/model separation is enforced by load_annotation_evidence;
+    # the assembler additionally checks the complete candidate digest itself.
+    readers["load_annotation_evidence"].side_effect = [
+        StoredAnnotationEvidence(audit, None),
+        StoredAnnotationEvidence(
+            canary, "a" * 64 if mutation == "model-digest" else expected.evidence.release_sha256
+        ),
+    ]
+    with pytest.raises(ValueError):
+        store.load_qualification_context(connection, **args)
+
+
+@pytest.mark.parametrize(
+    "group", ["train-group", "dev-group", "final-group", "audit-group-0", "reference-group"]
+)
+def test_persisted_canary_still_needs_fresh_groups(monkeypatch, group):
+    connection, args, expected, readers = setup(monkeypatch)
+    canary = expected.evidence.canary_audit
+    source = replace(canary.sources[0], group_id=group)
+    measured = replace(canary.measurements[0], group_ids=(group,))
+    canary = replace(
+        canary,
+        sources=(source, *canary.sources[1:]),
+        measurements=(measured, *canary.measurements[1:]),
+    )
+    args["lineage"] = replace(args["lineage"], reference_group_ids=("reference-group",))
+    readers["load_annotation_evidence"].side_effect = [
+        StoredAnnotationEvidence(expected.evidence.annotation_audit, None),
+        StoredAnnotationEvidence(canary, expected.evidence.release_sha256),
+    ]
+    with pytest.raises(ValueError, match="canary groups must be fresh"):
+        store.load_qualification_context(connection, **args)

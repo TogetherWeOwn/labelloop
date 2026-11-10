@@ -170,6 +170,7 @@ def review_connection(
             }
         else:
             result.one.return_value = (100, 100)
+            result.scalar_one.return_value = "project-key"
         return result
 
     connection.execute.side_effect = execute
@@ -220,7 +221,45 @@ def test_changed_objects_need_new_completeness_decision():
             )
 
 
-def test_system_policy_auto_acceptance_is_not_categorically_forbidden():
+def test_access_policy_id_alone_cannot_authorize_system_auto_acceptance(monkeypatch):
+    from labelloop_api import revision_store
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    connection = review_connection(
+        [],
+        actor_kind="system",
+        approval_state="proposed",
+        review_tier="machine_verified_no_human_review",
+        qualification={"auto_accept_qualification": {"id": "qualified-policy"}},
+    )
+    with pytest.raises(ValueError, match="current qualification"):
+        append_review(
+            connection,
+            asset_id="asset",
+            actor_kind="system",
+            actor_id="qualified-policy",
+            expected_revision=1,
+            approval_state="auto_accepted",
+            review_tier="machine_verified_no_human_review",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            training_eligible=True,
+        )
+    assert not any(hasattr(call.args[0], "table") for call in connection.execute.call_args_list)
+
+
+def test_system_policy_auto_acceptance_is_not_categorically_forbidden(monkeypatch):
+    from labelloop_api import revision_store
+    from labelloop_core.qualification_data import ScopeCell
+
+    guard = MagicMock()
+    monkeypatch.setattr(revision_store, "require_automatic_acceptance", guard)
+    snapshot = MagicMock(return_value={"checked-policy": "snapshot"})
+    monkeypatch.setattr(revision_store, "automatic_acceptance_record", snapshot)
+    monkeypatch.setattr(revision_store, "lock_project", MagicMock())
+    automatic = revision_store.AutomaticReview(
+        "recipe", "final-evaluation", (ScopeCell("item", "source", "ordinary"),), MagicMock()
+    )
     with pytest.MonkeyPatch.context() as monkeypatch:
         from labelloop_api import revision_store
 
@@ -243,9 +282,106 @@ def test_system_policy_auto_acceptance_is_not_categorically_forbidden():
                 scope_completeness="exhaustive_for_scope",
                 objects=[],
                 training_eligible=True,
+                automatic=automatic,
             )
             == 2
         )
+    snapshot.assert_called_once()
+    assert snapshot.call_args.kwargs["qualification"] is automatic.qualification
+    assert snapshot.call_args.kwargs["scope"] == automatic.scope
+    assert snapshot.call_args.kwargs["evaluation_key"] == automatic.evaluation_key
+    assert snapshot.call_args.kwargs["revision"]["revision"] == 2
+    guard.assert_called_once()
+    assert guard.call_args.kwargs == {
+        "project_key": "project-key",
+        "recipe_key": automatic.recipe_key,
+        "scope": automatic.scope[0],
+        "evaluation_key": automatic.evaluation_key,
+        "qualification": automatic.qualification,
+    }
+
+
+@pytest.mark.parametrize(
+    "objects", [[], [{"object_id": "one", "class_id": "item", "box": [0, 0, 5, 5]}]]
+)
+@pytest.mark.parametrize(
+    "failure", ["paused scope", "adverse audit", "stale final test", "foreign project"]
+)
+def test_automatic_revision_calls_current_guard_before_any_write(monkeypatch, objects, failure):
+    from labelloop_api import revision_store
+    from labelloop_core.qualification_data import ScopeCell
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    events = []
+    monkeypatch.setattr(revision_store, "lock_project", lambda *_: events.append("project-lock"))
+    guard = MagicMock(side_effect=ValueError(failure))
+    monkeypatch.setattr(revision_store, "require_automatic_acceptance", guard)
+    connection = review_connection(
+        objects, actor_kind="model", approval_state="proposed", review_tier="unreviewed"
+    )
+    execute = connection.execute.side_effect
+
+    def observed(statement, parameters=None):
+        if "SELECT id FROM source_asset" in str(statement):
+            events.append("asset-lock")
+        return execute(statement, parameters)
+
+    connection.execute.side_effect = observed
+    automatic = revision_store.AutomaticReview(
+        "recipe", "final-evaluation", (ScopeCell("item", "source", "ordinary"),), MagicMock()
+    )
+    with pytest.raises(ValueError, match=failure):
+        append_review(
+            connection,
+            asset_id="asset",
+            actor_kind="system",
+            actor_id="service-principal",
+            expected_revision=1,
+            approval_state="auto_accepted",
+            review_tier="machine_verified_no_human_review",
+            scope_completeness="exhaustive_for_scope",
+            objects=objects,
+            training_eligible=False,
+            automatic=automatic,
+        )
+    assert events == ["project-lock", "asset-lock"]
+    assert guard.call_args.kwargs["project_key"] == "project-key"
+    assert not any(
+        getattr(call.args[0], "is_insert", False) for call in connection.execute.call_args_list
+    )
+
+
+@pytest.mark.parametrize("classes", [(), ("other",), ("item", "other")])
+def test_negative_automatic_revision_cannot_omit_or_expand_ontology_scope(monkeypatch, classes):
+    from labelloop_api import revision_store
+    from labelloop_core.qualification_data import ScopeCell
+
+    monkeypatch.setattr(revision_store, "source_uuid", lambda _conn, _key: "uuid")
+    monkeypatch.setattr(revision_store, "lock_project", MagicMock())
+    guard = MagicMock()
+    monkeypatch.setattr(revision_store, "require_automatic_acceptance", guard)
+    with pytest.raises(ValueError, match="scope"):
+        automatic = revision_store.AutomaticReview(
+            "recipe",
+            "final-evaluation",
+            tuple(ScopeCell(key, "source", "ordinary") for key in classes),
+            MagicMock(),
+        )
+        append_review(
+            review_connection(
+                [], actor_kind="system", approval_state="proposed", review_tier="unreviewed"
+            ),
+            asset_id="asset",
+            actor_kind="system",
+            actor_id="service-principal",
+            expected_revision=1,
+            approval_state="auto_accepted",
+            review_tier="machine_verified_no_human_review",
+            scope_completeness="exhaustive_for_scope",
+            objects=[],
+            automatic=automatic,
+        )
+    guard.assert_not_called()
 
 
 @pytest.mark.parametrize(

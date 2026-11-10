@@ -49,9 +49,73 @@ def check(image: str) -> None:
         ("other-path", {Path("other.json"): placeholder}, config, True),
         ("other-key", {Path("other.json"): payload}, config, True),
     ]
-    identities = []
+    cases = [(*case, "private-key") for case in cases]
+    compilation_test = Path("apps/api/tests/test_management_canonical_db.py")
+    idempotency = "compile-evaluation-640"
+    compilation = f'compile_request(compilation, release_id, key="{idempotency}")\n'
+    # Public, synthetic high-entropy text tests the generic detector, not a real key.
+    generic_canary = base64.b64encode(bytes(range(32, 64))).decode()
+    generic_payload = f'api_key = "{generic_canary}"\n'
+    cases.extend(
+        (*case, "generic-api-key")
+        for case in (
+            (
+                "idempotency-upstream-default",
+                {compilation_test: compilation},
+                'title = "baseline"\n[extend]\nuseDefault = true\n',
+                True,
+            ),
+            ("idempotency-fresh-import", {compilation_test: compilation}, config, False),
+            ("idempotency-squash-identity", {compilation_test: compilation}, config, False),
+            ("idempotency-historical-only", {compilation_test: compilation}, config, False),
+            (
+                "idempotency-historical-payload",
+                {compilation_test: generic_payload},
+                config,
+                True,
+            ),
+            (
+                "idempotency-changed-value",
+                {compilation_test: compilation.replace(idempotency, generic_canary)},
+                config,
+                True,
+            ),
+            (
+                "idempotency-prefixed-value",
+                {compilation_test: compilation.replace(idempotency, generic_canary + idempotency)},
+                config,
+                True,
+            ),
+            (
+                "idempotency-suffixed-value",
+                {compilation_test: compilation.replace(idempotency, idempotency + generic_canary)},
+                config,
+                True,
+            ),
+            (
+                "idempotency-adjacent-payload",
+                {compilation_test: compilation + generic_payload},
+                config,
+                True,
+            ),
+            ("idempotency-other-path", {Path("other.py"): compilation}, config, True),
+            (
+                "idempotency-similar-path",
+                {Path("apps/api/tests/copy_test_management_canonical_db.py"): compilation},
+                config,
+                True,
+            ),
+            (
+                "idempotency-other-rule",
+                {compilation_test: compilation + payload},
+                config,
+                True,
+            ),
+        )
+    )
+    identities = {}
     with tempfile.TemporaryDirectory(prefix="platform-scanner-regression-") as temporary:
-        for name, files, policy, expected_finding in cases:
+        for name, files, policy, expected_finding, rule_id in cases:
             repo = Path(temporary) / name
             repo.mkdir()
             for path, content in files.items():
@@ -76,10 +140,28 @@ def check(image: str) -> None:
                 subprocess.run(
                     ["git", *args], cwd=repo, env=env, check=True, capture_output=True, timeout=30
                 )
-            if name in ("fresh-import", "squash-identity"):
-                identities.append(
-                    subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, env=env).strip()
+            if name in ("idempotency-historical-only", "idempotency-historical-payload"):
+                (repo / compilation_test).unlink()
+                subprocess.run(
+                    ["git", "add", "-u"],
+                    cwd=repo,
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
                 )
+                subprocess.run(
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-m", "remove fixture"],
+                    cwd=repo,
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            if name.endswith(("fresh-import", "squash-identity")):
+                identities[name] = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, env=env
+                ).strip()
             result = subprocess.run(
                 [
                     "docker",
@@ -112,13 +194,18 @@ def check(image: str) -> None:
             if result.returncode not in (0, 1):
                 raise RuntimeError(f"Scanner unavailable for {name}: exit {result.returncode}")
             findings = json.loads((repo / "report.json").read_text())
-            detected = any(finding["RuleID"] == "private-key" for finding in findings)
+            expected_rule = "private-key" if name == "idempotency-other-rule" else rule_id
+            detected = any(finding["RuleID"] == expected_rule for finding in findings)
             if result.returncode != int(expected_finding) or detected != expected_finding:
                 raise AssertionError(f"Scanner classification failed for {name}")
             print(
-                f"PASS {name}: exit={result.returncode}, private-key finding={detected}", flush=True
+                f"PASS {name}: exit={result.returncode}, {expected_rule} finding={detected}",
+                flush=True,
             )
-    assert len(set(identities)) == 2, "Fixture commit identities must differ"
+    for prefix in ("", "idempotency-"):
+        assert identities[prefix + "fresh-import"] != identities[prefix + "squash-identity"], (
+            "Fixture commit identities must differ"
+        )
 
 
 if __name__ == "__main__":

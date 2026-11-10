@@ -3,6 +3,15 @@ title = "Labelloop secret scanning"
 [extend]
 useDefault = true
 
+# This historical compilation test uses a public idempotency key, not a credential.
+# Restrict classification to this rule, exact literal and exact test file together.
+[[allowlists]]
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/api/tests/test_management_canonical_db\.py$''']
+regexTarget = "secret"
+regexes = ['''^compile-evaluation-640$''']
+
 # Recognize the short, inert upstream example before the unchanged default
 # private-key alternative. Its 64-character minimum otherwise spans the next PEM
 # header, so an allowlist must not classify that oversized match as harmless.

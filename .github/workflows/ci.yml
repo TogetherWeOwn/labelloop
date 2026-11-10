@@ -60,7 +60,7 @@ jobs:
         run: |
           download_dir=$(mktemp -d "$RUNNER_TEMP/actionlint.XXXXXX")
           trap 'rm -rf -- "$download_dir"' EXIT
-          curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-max-time 120 \
+          curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 5 --retry-max-time 120 \
             -o "$download_dir/actionlint.tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $download_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$download_dir/actionlint.tgz" -C "$download_dir" actionlint
@@ -151,7 +151,7 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
       - name: Check upgrades from each delivered merge parent
         run: |
-          for parent in auth_budget_0001 0006_proposal_jobs; do
+          for parent in auth_budget_0001 0006_proposal_jobs qualification_0007 auth_jobs_0001; do
             uv run alembic -c apps/api/alembic.ini downgrade base
             uv run alembic -c apps/api/alembic.ini upgrade "$parent"
             uv run alembic -c apps/api/alembic.ini upgrade head
@@ -332,7 +332,7 @@ jobs:
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
       - name: Budget ledger PostgreSQL races, restart and atomic rollback
-        run: uv run pytest apps/api/tests/test_budget_store.py -v
+        run: uv run pytest apps/api/tests/test_budget_store.py apps/api/tests/test_budget_reads.py -v
         env:
           LABELLOOP_BUDGET_POSTGRES: "1"
       - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence

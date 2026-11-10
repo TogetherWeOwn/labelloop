@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import model_schema as db
+from labelloop_api.annotation_audit_store import lock_project, require_no_annotation_veto
 from labelloop_api.schema import (
     canonical_dataset_release,
     preprocessing_recipe,
@@ -160,6 +161,8 @@ def save_training(
         ):
             raise ValueError("checkpoint evaluation lineage mismatch")
     with connection.begin_nested():
+        # Keep the checkpoint ancestry snapshot ordered with audits and promotion.
+        lock_project(connection, request.project_id)
         run_id = connection.execute(
             sa.insert(db.training_run).values(
                 run_key=request.run_id,
@@ -281,6 +284,11 @@ def save_evaluation(
         .mappings()
         .one()
     )
+    # Selection/exposure snapshots include all linked evaluations. Serialize new
+    # links with their project lock so a final assessment cannot race a payload change.
+    connection.execute(
+        sa.select(project.c.id).where(project.c.id == row["project_id"]).with_for_update()
+    ).scalar_one()
     release = decode_release(row["record"])
     context = variant_context(connection, variant_id)
     if (
@@ -394,15 +402,16 @@ def change_registry(
 
     candidate_key=None requests rollback. The caller must authenticate/authorize the admin;
     this internal store deliberately does not expose principal claims through HTTP.
-    Qualification is a trusted read port, not a request body. Until authenticated,
-    locked policy/final-test/audit loaders are wired, production callers must omit it
-    and promotion fails closed. Synthetic fixtures exercise the port explicitly.
+    Qualification is a trusted read port, not a request body. Current configuration
+    and final-test state are always reloaded under the project lock. Until authenticated
+    audit/canary and pipeline-execution provenance loaders are wired, callers must omit the
+    context and promotion fails closed. Synthetic fixtures exercise the port explicitly.
     """
     if not actor_id.strip():
         raise ValueError("registry events require an authenticated actor")
-    project_id = connection.execute(
-        sa.select(project.c.id).where(project.c.project_key == project_key)
-    ).scalar_one()
+    # Audit writes take the same project lock before registry locks. No clean
+    # replacement sample can race an adverse audit into a descendant promotion.
+    project_id = lock_project(connection, project_key)
     recipe_id = connection.execute(
         sa.select(preprocessing_recipe.c.id).where(preprocessing_recipe.c.recipe_key == recipe_key)
     ).scalar_one()
@@ -428,6 +437,10 @@ def change_registry(
             load_release(connection, row["rollback_id"]),
         )
         if candidate_key is None:
+            if row["rollback_id"] is not None:
+                require_no_annotation_veto(
+                    connection, project_id=project_id, model_id=row["rollback_id"]
+                )
             changed = state.roll_back(expected_revision=expected_revision)
             champion_id, rollback_id = row["rollback_id"], row["champion_id"]
         else:
@@ -440,10 +453,30 @@ def change_registry(
                 .mappings()
                 .one()
             )
+            require_no_annotation_veto(
+                connection, project_id=project_id, model_id=candidate_row["id"]
+            )
             candidate = load_release(connection, candidate_row["id"])
             assert candidate is not None
             if policy is None or evaluation_key is None:
                 raise ValueError("promotion requires explicit gates and persisted evaluation")
+            if qualification is not None:
+                # The journal also reads persisted model reports via this module.
+                from labelloop_api.final_test_store import current_qualification_context
+                from labelloop_api.qualification_policy_store import current_policy_context
+
+                if (
+                    qualification.evidence.final_test.dataset.project_id != project_key
+                    or qualification.evidence.pipeline.project_id != project_key
+                    or qualification.evidence.pipeline.recipe_id != recipe_key
+                ):
+                    raise ValueError(
+                        "promotion qualification cannot cross project or recipe boundaries"
+                    )
+                qualification = current_policy_context(connection, qualification)
+                qualification = current_qualification_context(
+                    connection, qualification, model_id=candidate_row["id"]
+                )
             incumbent = (
                 stored_report(connection, state.champion, incumbent_evaluation_key)
                 if state.champion and incumbent_evaluation_key

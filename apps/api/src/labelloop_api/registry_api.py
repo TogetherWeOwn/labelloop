@@ -1,0 +1,303 @@
+"""Authenticated registry inspection/recovery; reads never grant qualification."""
+
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError, NoResultFound, SQLAlchemyError
+
+from labelloop_api import (
+    acceptance_store,
+    annotation_audit_store,
+    drift_service,
+    final_test_store,
+    model_store,
+    promotion_service,
+)
+from labelloop_api.auth import auth_store, require_admin, require_reviewer
+from labelloop_api.auth_store import Principal
+from labelloop_core.audit import AuditObservation
+
+router = APIRouter(tags=["registry"])
+
+
+class DriftPauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0)
+    expected_registry_revision: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    class_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+    source_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+    condition: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^\S+$")
+
+
+@router.post("/projects/{project_key}/registry/{recipe_key}/pauses", status_code=201)
+def pause_drift(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    recipe_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: DriftPauseRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = drift_service.pause_current_champion(
+                connection,
+                project_key=project_key,
+                recipe_key=recipe_key,
+                actor_id=actor.id,
+                **payload.model_dump(),
+            )
+            record = model_store.json_record(changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="drift_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="drift_pause_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="drift_unavailable") from None
+    return record
+
+
+class DriftResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0)
+    expected_registry_revision: int = Field(ge=0)
+    pause_ids: list[Annotated[str, Field(min_length=1, max_length=128, pattern=r"^\S+$")]] = Field(
+        min_length=1, max_length=100
+    )
+
+
+@router.post("/projects/{project_key}/registry/{recipe_key}/resumptions", status_code=201)
+def resume_drift(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    recipe_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: DriftResumeRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = drift_service.resume_current_champion(
+                connection,
+                project_key=project_key,
+                recipe_key=recipe_key,
+                actor_id=actor.id,
+                expected_revision=payload.expected_revision,
+                expected_registry_revision=payload.expected_registry_revision,
+                pause_ids=tuple(payload.pause_ids),
+            )
+            record = model_store.json_record(changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="drift_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="drift_resume_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="drift_unavailable") from None
+    return record
+
+
+class RollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["rollback"]
+    recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    expected_revision: int = Field(ge=0)
+
+
+class PromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["promote"]
+    recipe_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    model_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    annotation_release_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    canary_release_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    expected_revision: int = Field(ge=0)
+
+
+class FinalTestInvalidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["adapt", "quarantine"]
+    reason: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    expected_revision: int = Field(ge=0)
+
+
+def _final_test_metadata(release_key, state):
+    return {
+        "release_key": release_key,
+        "revision": state.revision,
+        "effective_role": state.effective_role,
+        "quarantined": bool(state.quarantine_reasons),
+    }
+
+
+@router.get("/projects/{project_key}/dataset-releases/{release_key}/final-test-state")
+def inspect_final_test(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # Inspect lifecycle metadata only. Even aggregate scores or pass/fail results
+    # would expose the locked final test; this read never opens an assessment.
+    try:
+        with auth_store().engine.begin() as connection:
+            state = final_test_store.load_final_test(
+                connection, project_key=project_key, dataset_key=release_key
+            )
+            record = _final_test_metadata(release_key, state)
+    except NoResultFound:
+        raise HTTPException(404, detail="final_test_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="final_test_state_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="final_test_unavailable") from None
+    return record
+
+
+@router.post("/projects/{project_key}/dataset-releases/{release_key}/final-test-events")
+def invalidate_final_test(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: FinalTestInvalidationRequest,
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # Invalidation spends or quarantines the whole persisted test. No request can
+    # register/reset its membership, expose scores, restore independence or qualify.
+    try:
+        with auth_store().engine.begin() as connection:
+            changed = final_test_store.invalidate_final_test(
+                connection,
+                project_key=project_key,
+                dataset_key=release_key,
+                action=payload.action,
+                reason=payload.reason,
+                expected_revision=payload.expected_revision,
+                actor_id=actor.id,
+            )
+            record = _final_test_metadata(release_key, changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="final_test_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="final_test_change_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="final_test_unavailable") from None
+    return record
+
+
+class AuditObservationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    asset_id: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    revision: int = Field(ge=1)
+    blind_full_image_inspected: bool
+    labels_correct: bool
+    scope_complete: bool
+    output_truncated: bool = False
+
+
+class AuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    audit_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    sample_key: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
+    observations: list[AuditObservationRequest] = Field(min_length=1, max_length=1000)
+
+
+@router.post("/projects/{project_key}/dataset-releases/{release_key}/audits", status_code=201)
+def record_audit(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    release_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: AuditRequest,
+    actor: Annotated[Principal, Depends(require_reviewer)],
+) -> dict:
+    # Observations are human claims, not qualification. Membership, independence,
+    # vetoes and sample binding come from the store; the session owns attribution.
+    observations = tuple(
+        AuditObservation(reviewer_id=actor.id, **item.model_dump()) for item in payload.observations
+    )
+    try:
+        with auth_store().engine.begin() as connection:
+            annotation_audit_store.record_annotation_audit(
+                connection,
+                project_key=project_key,
+                release_key=release_key,
+                audit_key=payload.audit_key,
+                actor_id=actor.id,
+                observations=observations,
+                sample_key=payload.sample_key,
+            )
+    except NoResultFound:
+        raise HTTPException(404, detail="audit_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="audit_rejected") from None
+    except IntegrityError:
+        raise HTTPException(409, detail="audit_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="audit_unavailable") from None
+    return {"audit_key": payload.audit_key, "recorded": True}
+
+
+@router.get("/projects/{project_key}/registry/{recipe_key}")
+def inspect_registry(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    recipe_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # The acceptance read validates project/recipe existence and takes the project
+    # lock before the registry read. Both snapshots precede the same outer commit.
+    # A champion or an empty pause history is not an automatic-acceptance grant.
+    try:
+        with auth_store().engine.begin() as connection:
+            acceptance = acceptance_store.load_acceptance(
+                connection, project_key=project_key, recipe_key=recipe_key
+            )
+            registry = model_store.load_registry(connection, project_key, recipe_key)
+            record = {
+                "registry": model_store.json_record(registry),
+                "acceptance": model_store.json_record(acceptance),
+            }
+    except NoResultFound:
+        raise HTTPException(404, detail="registry_scope_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="registry_state_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="registry_unavailable") from None
+    return record
+
+
+@router.post("/projects/{project_key}/promotions")
+def change_registry(
+    project_key: Annotated[str, Path(min_length=1, max_length=128, pattern=r"^\S+$")],
+    payload: Annotated[RollbackRequest | PromotionRequest, Body(discriminator="action")],
+    actor: Annotated[Principal, Depends(require_admin)],
+) -> dict:
+    # Only an authenticated human admin chooses candidate/population identities.
+    # Reports, outcomes, lineage, policy and qualification come from persisted evidence.
+    # Rollback still selects only the stored pointer, never a caller's candidate.
+    try:
+        with auth_store().engine.begin() as connection:
+            if isinstance(payload, PromotionRequest):
+                changed = promotion_service.promote_candidate(
+                    connection,
+                    project_key=project_key,
+                    actor_id=actor.id,
+                    require_fixture_policy=True,
+                    **payload.model_dump(exclude={"action"}),
+                )
+            else:
+                changed = model_store.change_registry(
+                    connection,
+                    project_key=project_key,
+                    recipe_key=payload.recipe_key,
+                    actor_id=actor.id,
+                    expected_revision=payload.expected_revision,
+                )
+            record = model_store.json_record(changed)
+    except NoResultFound:
+        raise HTTPException(404, detail="registry_scope_not_found") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, detail="registry_change_rejected") from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="registry_unavailable") from None
+    return record

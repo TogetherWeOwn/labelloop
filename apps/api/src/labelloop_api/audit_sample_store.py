@@ -1,0 +1,397 @@
+"""Canonical, reproducible ordinary-acceptance audit populations.
+
+The authenticated service owns authorization and the approved pipeline/sampling
+policy. This port never accepts candidate lists, confidence filters or group IDs
+from a request. Sampling is not truth, score calibration or qualification.
+"""
+
+import json
+from dataclasses import dataclass
+
+import sqlalchemy as sa
+
+from labelloop_api import qualification_schema
+from labelloop_api.automatic_review_store import load_automatic_acceptance
+from labelloop_api.qualification_store import lock_project, release_membership
+from labelloop_api.schema import (
+    annotation_revision,
+    canonical_dataset_release,
+    ontology_release,
+    review_event,
+    source_asset,
+    source_split_assignment,
+)
+from labelloop_api.source_group_store import current_release_groups
+from labelloop_core.audit import AuditCandidate, AuditSample, select_audit_sample
+from labelloop_core.domain import AnnotationRevision, DatasetObject
+from labelloop_core.geometry import Box
+from labelloop_core.qualification_data import PipelineIdentity, record_sha256, require_name
+from labelloop_core.qualification_wire import dumps, loads
+
+
+@dataclass(frozen=True)
+class FrozenAuditSample:
+    sample: AuditSample
+    population_sha256: str
+    group_ids: dict[str, str]
+
+    @property
+    def independent_groups(self) -> int:
+        return len(set(self.group_ids.values()))
+
+
+def canonical_candidate(
+    row, *, pipeline_id: str, prior_reviewers: frozenset[str]
+) -> AuditCandidate:
+    """Decode the exact frozen revision, not the source's latest revision."""
+    objects = tuple(
+        DatasetObject(
+            object_id=item["object_id"],
+            class_id=item["class_id"],
+            box=Box(*item["box"]),
+            label_state=item.get("label_state", "identified"),
+            attributes=item.get("attributes", {}),
+            occluded=item.get("occluded", False),
+            truncated_at_image_edge=item.get("truncated_at_image_edge", False),
+        )
+        for item in row["objects"]
+    )
+    for item in objects:
+        item.box.within(row["width"], row["height"])
+        if item.class_id not in row["class_map"]:
+            raise ValueError("audit object is outside the frozen ontology")
+    revision = AnnotationRevision(
+        revision=row["revision"],
+        objects=objects,
+        actor_kind=row["actor_kind"],
+        parent_revision=row["parent_revision"],
+        approval_state=row["approval_state"],
+        review_tier=row["review_tier"],
+        scope_completeness=row["scope_completeness"],
+        training_eligible=row["training_eligible"],
+        gold_eligible=row["gold_eligible"],
+    )
+    if revision.scope_completeness != "exhaustive_for_scope":
+        raise ValueError("audit population requires complete ordinary acceptances")
+    return AuditCandidate(
+        row["asset_key"], revision, pipeline_id, prior_reviewers | {row["actor_id"]}
+    )
+
+
+def freeze_audit_sample(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    release_key: str,
+    sample_key: str,
+    actor_id: str,
+    pipeline_id: str,
+    size: int,
+    seed: int,
+) -> FrozenAuditSample:
+    """Generic historical/mixed population; supplied pipeline is not original provenance.
+
+    Automatic-pipeline audit producers must use freeze_automatic_audit_sample.
+    This compatibility port preserves historical adverse and explicit fixture work;
+    its snapshots alone cannot establish original automatic-acceptance provenance.
+    """
+    return _freeze_audit_sample(
+        connection,
+        project_key=project_key,
+        release_key=release_key,
+        sample_key=sample_key,
+        actor_id=actor_id,
+        pipeline_id=pipeline_id,
+        size=size,
+        seed=seed,
+        original_pipeline=None,
+    )
+
+
+def freeze_automatic_audit_sample(
+    connection: sa.Connection,
+    *,
+    project_key: str,
+    release_key: str,
+    sample_key: str,
+    actor_id: str,
+    pipeline: PipelineIdentity,
+    size: int,
+    seed: int,
+) -> FrozenAuditSample:
+    """Require the exact original pipeline for every member before blind sampling.
+
+    A trusted service selects the complete release and typed pipeline. Missing,
+    historical, human or different-pipeline decisions fail the whole population;
+    they are never silently filtered or relabeled using current policy. This checks
+    recorded acceptance policy, not reviewer execution, scores or independent truth.
+    Commit before revealing selected audit work. Sampling remains asset-stratified,
+    not a random-independent-group error-rate estimate.
+    """
+    if not isinstance(pipeline, PipelineIdentity) or pipeline.project_id != project_key:
+        raise ValueError("automatic audit requires a typed same-project original pipeline")
+    return _freeze_audit_sample(
+        connection,
+        project_key=project_key,
+        release_key=release_key,
+        sample_key=sample_key,
+        actor_id=actor_id,
+        pipeline_id=pipeline.pipeline_id,
+        size=size,
+        seed=seed,
+        original_pipeline=pipeline,
+    )
+
+
+def _freeze_audit_sample(
+    connection,
+    *,
+    project_key,
+    release_key,
+    sample_key,
+    actor_id,
+    pipeline_id,
+    size,
+    seed,
+    original_pipeline,
+) -> FrozenAuditSample:
+    """One canonical population, grouping, selection and append implementation."""
+    for value in (actor_id, sample_key, pipeline_id):
+        require_name(value)
+    with connection.begin_nested():
+        project_id = lock_project(connection, project_key)
+        release = (
+            connection.execute(
+                sa.select(canonical_dataset_release).where(
+                    canonical_dataset_release.c.project_id == project_id,
+                    canonical_dataset_release.c.release_key == release_key,
+                    canonical_dataset_release.c.frozen,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        membership = release_membership(release["sample_revisions"])
+        if not membership or set(membership) & set(release["excluded_asset_ids"]):
+            raise ValueError("audit population must have nonempty, non-excluded frozen membership")
+        class_map = connection.execute(
+            sa.select(ontology_release.c.class_map).where(
+                ontology_release.c.id == release["ontology_id"],
+                ontology_release.c.project_id == project_id,
+            )
+        ).scalar_one()
+        rows = (
+            connection.execute(
+                sa.select(
+                    source_asset.c.id.label("asset_uuid"),
+                    source_asset.c.asset_key,
+                    source_asset.c.width,
+                    source_asset.c.height,
+                    annotation_revision,
+                    source_split_assignment.c.group_id,
+                )
+                .select_from(
+                    source_asset.join(annotation_revision).join(
+                        source_split_assignment,
+                        source_split_assignment.c.asset_id == source_asset.c.id,
+                    )
+                )
+                .where(
+                    source_asset.c.project_id == project_id,
+                    source_split_assignment.c.assignment_version == release["assignment_version"],
+                    sa.tuple_(source_asset.c.asset_key, annotation_revision.c.revision).in_(
+                        list(membership.items())
+                    ),
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(rows) != len(membership) or {row["asset_key"] for row in rows} != set(membership):
+            raise ValueError("audit population has missing canonical revisions or pinned groups")
+        checked_groups = current_release_groups(
+            connection,
+            project_id=project_id,
+            assignment_version=release["assignment_version"],
+            asset_keys=frozenset(membership),
+        )
+        if checked_groups != {row["asset_key"]: row["group_id"] for row in rows}:
+            raise ValueError("pinned groups changed during audit population preparation")
+        prior: dict[object, list[tuple[int, str]]] = {}
+        for event in connection.execute(
+            sa.select(
+                review_event.c.asset_id, review_event.c.expected_revision, review_event.c.actor_id
+            ).where(review_event.c.asset_id.in_([row["asset_uuid"] for row in rows]))
+        ):
+            prior.setdefault(event.asset_id, []).append((event.expected_revision, event.actor_id))
+        candidates = []
+        groups = {}
+        for row in sorted(rows, key=lambda item: item["asset_key"]):
+            if original_pipeline is not None:
+                original = load_automatic_acceptance(
+                    connection,
+                    project_key=project_key,
+                    asset_key=row["asset_key"],
+                    revision=row["revision"],
+                )
+                if original.policy.pipeline != original_pipeline:
+                    raise ValueError(
+                        "audit population differs from the original acceptance pipeline"
+                    )
+            require_name(row["group_id"])
+            groups[row["asset_key"]] = row["group_id"]
+            candidates.append(
+                canonical_candidate(
+                    dict(row) | {"class_map": class_map},
+                    pipeline_id=pipeline_id,
+                    prior_reviewers=frozenset(
+                        actor
+                        for revision, actor in prior.get(row["asset_uuid"], ())
+                        if revision < row["revision"]
+                    ),
+                )
+            )
+        population = AuditSample(sample_key + "-population", tuple(candidates), seed)
+        sample = select_audit_sample(tuple(candidates), sample_id=sample_key, size=size, seed=seed)
+        snapshot = {"population": json.loads(dumps(population)), "groups": groups}
+        if original_pipeline is not None:
+            snapshot["original_pipeline_sha256"] = original_pipeline.pipeline_id
+        digest = record_sha256(snapshot)
+        connection.execute(
+            sa.insert(qualification_schema.audit_sample).values(
+                project_id=project_id,
+                release_id=release["id"],
+                sample_key=sample_key,
+                actor_id=actor_id,
+                population_sha256=digest,
+                record=snapshot | {"sample": json.loads(dumps(sample))},
+            )
+        )
+        return FrozenAuditSample(
+            sample, digest, {item.asset_id: groups[item.asset_id] for item in sample.candidates}
+        )
+
+
+def load_audit_sample(
+    connection: sa.Connection,
+    *,
+    project_id: object,
+    sample_key: str,
+    release_id: object | None = None,
+    require_current_groups: bool = False,
+    original_pipeline: PipelineIdentity | None = None,
+) -> FrozenAuditSample:
+    """Historical reads preserve adverse evidence; qualification must recheck groups.
+
+    A strict read requires a producer-bound original pipeline and rechecks every
+    original decision, including unselected population members. Legacy snapshots
+    stay historical; current policy is never used to backfill their provenance.
+
+    The checked path requires the caller's project lock and retains relation-table
+    read locks through commit. A valid grouping is necessary, never sufficient for
+    independent audit truth, representative error bounds or qualification.
+    """
+    if original_pipeline is not None:
+        if not isinstance(original_pipeline, PipelineIdentity):
+            raise ValueError("automatic audit requires a typed original pipeline")
+        if lock_project(connection, original_pipeline.project_id) != project_id:
+            raise ValueError("automatic audit pipeline differs from the sample project")
+    statement = sa.select(qualification_schema.audit_sample).where(
+        qualification_schema.audit_sample.c.project_id == project_id,
+        qualification_schema.audit_sample.c.sample_key == sample_key,
+    )
+    if release_id is not None:
+        statement = statement.where(qualification_schema.audit_sample.c.release_id == release_id)
+    row = connection.execute(statement).mappings().one()
+    record = row["record"]
+    if not isinstance(record, dict) or set(record) not in (
+        {"population", "groups", "sample"},
+        {"population", "groups", "sample", "original_pipeline_sha256"},
+    ):
+        raise ValueError("invalid persisted audit population")
+    snapshot = {key: value for key, value in record.items() if key != "sample"}
+    if (
+        original_pipeline is not None
+        and record.get("original_pipeline_sha256") != original_pipeline.pipeline_id
+    ):
+        raise ValueError("audit sample lacks the exact original acceptance pipeline")
+    population = loads(json.dumps(record["population"]), AuditSample)
+    sample = loads(json.dumps(record["sample"]), AuditSample)
+    groups = record["groups"]
+    if (
+        record_sha256(snapshot) != row["population_sha256"]
+        or set(groups) != {item.asset_id for item in population.candidates}
+        or sample.sample_id != sample_key
+        or sample
+        != select_audit_sample(
+            population.candidates,
+            sample_id=sample_key,
+            size=len(sample.candidates),
+            seed=population.seed,
+        )
+    ):
+        raise ValueError("durable audit sample does not match its frozen population")
+    for value in groups.values():
+        require_name(value)
+    if require_current_groups:
+        release = (
+            connection.execute(
+                sa.select(canonical_dataset_release).where(
+                    canonical_dataset_release.c.id == row["release_id"],
+                    canonical_dataset_release.c.project_id == project_id,
+                    canonical_dataset_release.c.frozen,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        membership = release_membership(release["sample_revisions"])
+        if membership != {
+            item.asset_id: item.revision.revision for item in population.candidates
+        } or set(membership) & set(release["excluded_asset_ids"]):
+            raise ValueError("audit population no longer matches canonical release membership")
+        current = current_release_groups(
+            connection,
+            project_id=project_id,
+            assignment_version=release["assignment_version"],
+            asset_keys=frozenset(membership),
+        )
+        if current != groups:
+            raise ValueError("audit population no longer matches pinned source groups")
+    if original_pipeline is not None:
+        for candidate in population.candidates:
+            original = load_automatic_acceptance(
+                connection,
+                project_key=original_pipeline.project_id,
+                asset_key=candidate.asset_id,
+                revision=candidate.revision.revision,
+            )
+            if (
+                original.policy.pipeline != original_pipeline
+                or candidate.pipeline_id != original_pipeline.pipeline_id
+            ):
+                raise ValueError("audit population differs from the original acceptance pipeline")
+    return FrozenAuditSample(
+        sample,
+        row["population_sha256"],
+        {item.asset_id: groups[item.asset_id] for item in sample.candidates},
+    )
+
+
+def require_automatic_audit_samples(
+    connection: sa.Connection, *, pipeline: PipelineIdentity, samples: tuple[AuditSample, ...]
+) -> None:
+    """Recheck original provenance and current groups in the consuming transaction."""
+    if not isinstance(pipeline, PipelineIdentity):
+        raise ValueError("automatic audit requires a typed original pipeline")
+    project_id = lock_project(connection, pipeline.project_id)
+    for sample in samples:
+        frozen = load_audit_sample(
+            connection,
+            project_id=project_id,
+            sample_key=sample.sample_id,
+            require_current_groups=True,
+            original_pipeline=pipeline,
+        )
+        if frozen.sample != sample:
+            raise ValueError("qualification sample differs from the committed automatic audit")

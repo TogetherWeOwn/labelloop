@@ -7,7 +7,11 @@ from test_registry import model, report
 
 from labelloop_core.drift import AcceptanceState
 from labelloop_core.evaluation_lifecycle import CandidateSelection, FinalTestState
-from labelloop_core.qualification import QualificationContext, QualificationEvidence
+from labelloop_core.qualification import (
+    QualificationContext,
+    QualificationEvidence,
+    QualificationPolicy,
+)
 from labelloop_core.qualification_wire import MAX_RECORD_BYTES, dumps, loads
 from labelloop_core.registry import PromotionPolicy
 
@@ -23,6 +27,10 @@ def test_durable_roundtrip_is_deterministic_and_preserves_historical_assessments
     restored.require_qualified(release, final)
     evidence = context.evidence
     assert loads(dumps(evidence), QualificationEvidence) == evidence
+    configured = QualificationPolicy(evidence.pipeline, evidence.scope, evidence.targets)
+    assert loads(dumps(configured), QualificationPolicy) == configured
+    with pytest.raises(ValueError, match="exact configured targets"):
+        replace(configured, targets=replace(evidence.targets, min_class_support=100))
     selection = evidence.final_test.assessments[0].selection
     assert loads(dumps(selection), CandidateSelection) == selection
     adapted = evidence.final_test.record_adaptation("aggregate guided tuning", expected_revision=1)

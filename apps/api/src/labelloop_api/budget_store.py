@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from labelloop_api import budget_schema as db
 from labelloop_api.review_budget import ReviewBatch, ReviewPriceTable, ReviewUsage
+from labelloop_api.schema import project
 from labelloop_core.budget import (
     BudgetGate,
     BudgetPolicy,
@@ -267,14 +268,40 @@ class BudgetStore:
             current = head["revision"] if history else 0
             if current != expected_revision:
                 raise BudgetRefused("policy_conflict")
-            revision = current + 1
-            connection.execute(
-                sa.update(db.head)
-                .where(db.head.c.project_id == project_id)
-                .values(revision=revision, policy=value)
-            )
-            self._event(connection, actor, dict(head) | {"revision": revision}, "policy", value)
+            revision = self._replace_policy(connection, head, actor, value, current + 1)
         return revision
+
+    def _replace_policy(self, connection, head, actor, value, revision) -> int:
+        connection.execute(
+            sa.update(db.head)
+            .where(db.head.c.project_id == head["project_id"])
+            .values(revision=revision, policy=value)
+        )
+        self._event(connection, actor, dict(head) | {"revision": revision}, "policy", value)
+        return revision
+
+    def set_limits(
+        self,
+        project_id: str,
+        *,
+        actor: Principal,
+        expected_revision: int,
+        policy: BudgetPolicy,
+    ) -> int:
+        """Edit an existing policy's limits without changing prices, privacy or pauses."""
+        self._admin(actor)
+        identity(project_id)
+        nonnegative(expected_revision)
+        limits = asdict(BudgetPolicy(**asdict(policy)))
+        with self.engine.begin() as connection:
+            connection.execute(
+                sa.select(project.c.id).where(project.c.project_key == project_id)
+            ).scalar_one()
+            head = self._head(connection, project_id)
+            if head["revision"] != expected_revision:
+                raise BudgetRefused("policy_conflict")
+            value = dict(head["policy"]) | {"limits": limits}
+            return self._replace_policy(connection, head, actor, value, head["revision"] + 1)
 
     def prepare(self, request: SpendRequest, intent: DispatchIntent, *, actor: Principal) -> DryRun:
         """Persist a trusted dry-run estimate. This does not reserve or authorize I/O."""
