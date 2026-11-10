@@ -244,7 +244,7 @@ def test_first_promotion_must_start_from_the_empty_registry_state():
         },
     }
     with pytest.raises(ValueError, match="empty revision-zero"):
-        check_promotion_transition(row, first=True)
+        check_promotion_transition(row, first=True, scope=("p", "r"))
 
 
 def test_promotion_must_advance_to_a_distinct_champion():
@@ -260,7 +260,7 @@ def test_promotion_must_advance_to_a_distinct_champion():
         },
     }
     with pytest.raises(ValueError, match="distinct champion"):
-        check_promotion_transition(row, first=False)
+        check_promotion_transition(row, first=False, scope=("p", "r"))
 
 
 def test_valid_promotion_and_rollback_transitions_pass():
@@ -278,6 +278,7 @@ def test_valid_promotion_and_rollback_transitions_pass():
             },
         },
         first=True,
+        scope=("p", "r"),
     )
     check_promotion_transition(
         {
@@ -291,6 +292,7 @@ def test_valid_promotion_and_rollback_transitions_pass():
             },
         },
         first=False,
+        scope=("p", "r"),
     )
     check_promotion_transition(
         {
@@ -304,6 +306,7 @@ def test_valid_promotion_and_rollback_transitions_pass():
             },
         },
         first=False,
+        scope=("p", "r"),
     )
 
 

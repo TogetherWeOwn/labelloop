@@ -260,11 +260,15 @@ def _nested(mapping: dict, key: str) -> dict:
     return value
 
 
-def check_promotion_transition(row: dict, *, first: bool) -> None:
+def check_promotion_transition(
+    row: dict, *, first: bool, scope: tuple[str | None, str | None]
+) -> None:
     """One promotion event must advance its own before/after state by exactly one revision.
 
     The first event of a scope must record the empty revision-zero state; every event
-    must name its scope and advance champion/rollback by its own action.
+    must name its scope and advance champion/rollback by its own action. `scope` is
+    the (project_key, recipe_key) pair the row's foreign keys resolve to, matching
+    the key domain the serialized states use.
     """
     revision = row.get("revision")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
@@ -275,10 +279,7 @@ def check_promotion_transition(row: dict, *, first: bool) -> None:
         state = record.get(side)
         if not isinstance(state, dict) or set(state) != set(_REGISTRY_KEYS):
             raise ValueError("incomplete registry state in promotion audit")
-        if type(state["revision"]) is not int or (state["project_id"], state["recipe_id"]) != (
-            row["project_id"],
-            row["recipe_id"],
-        ):
+        if type(state["revision"]) is not int or (state["project_id"], state["recipe_id"]) != scope:
             raise ValueError("promotion audit scope or revision mismatch")
         states.append(state)
     before, after = states
@@ -402,9 +403,11 @@ def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
             raise ValueError("unresolved model evaluation link")
         if evaluation["training_run_id"] != model["training_run_id"]:
             raise ValueError("model evaluation link training lineage mismatch")
-        if _nested(evaluation, "record").get("weights_sha256") != _nested(model, "record").get(
-            "weights_sha256"
-        ):
+        evidence = _nested(evaluation, "record")
+        model_record = _nested(model, "record")
+        if evidence.get("weights_sha256") != model_record.get("weights_sha256") or evidence.get(
+            "policy"
+        ) != model_record.get("policy"):
             raise ValueError("model evaluation link artifact mismatch")
         linked.setdefault(link["model_id"], set()).add(evaluation["run_key"])
     for model in tables["model_release"].rows:
@@ -509,13 +512,19 @@ def check_chains(tables: dict[str, TableInventory]) -> None:
         if row["revision"] != previous + 1 or row["parent_revision"] != (previous or None):
             raise ValueError("incomplete annotation audit chain")
         revisions[row["asset_id"]] = row["revision"]
+    project_keys = {r["id"]: r["project_key"] for r in tables["project"].rows}
+    recipe_keys = {r["id"]: r["recipe_key"] for r in tables["preprocessing_recipe"].rows}
     events: dict[tuple, list[dict]] = {}
     for row in tables["promotion_event"].rows:
         key = row["project_id"], row["recipe_id"]
         chain = events.setdefault(key, [])
         if row["revision"] != len(chain) + 1:
             raise ValueError("incomplete registry audit chain")
-        check_promotion_transition(row, first=not chain)
+        check_promotion_transition(
+            row,
+            first=not chain,
+            scope=(project_keys.get(row["project_id"]), recipe_keys.get(row["recipe_id"])),
+        )
         if chain and not registry_continuity(chain[-1]["record"]["after"], row["record"]["before"]):
             raise ValueError("broken registry before/after audit chain")
         chain.append(row)
