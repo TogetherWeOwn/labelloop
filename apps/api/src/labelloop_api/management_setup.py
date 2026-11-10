@@ -19,6 +19,7 @@ INVALIDATING_OPERATIONS = (
     "resolve_source_pair",
     "discover_initial_source_pairs",
     "publish_initial_grouping",
+    "publish_source_regrouping",
     "enroll_reference",
     "accept_reference",
     "revalidate_reference",

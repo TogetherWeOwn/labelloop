@@ -14138,6 +14138,134 @@ def test_initial_grouping_publishes_locked_constraints_atomically_and_replays(da
     assert initial_grouping_snapshot(owner, created.id) == after
 
 
+def regrouping_inputs(service, created, payload, saved, version):
+    import random
+
+    from labelloop_api.management_contracts import SourceRegrouping
+
+    rng = random.Random(44)
+    image = Image.frombytes("RGB", (48, 32), rng.randbytes(48 * 32 * 3))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    asset = ingest(
+        service,
+        created.id,
+        AssetIngest(
+            expected_revision=saved.revision,
+            original_base64=base64.b64encode(output.getvalue()).decode(),
+            source_group="capture-4",
+        ),
+        key="regroup-source-4",
+    )
+    regroup = SourceRegrouping(
+        expected_revision=asset.revision,
+        ontology_id=payload.ontology_id,
+        source_policy_sha256=payload.source_policy_sha256,
+        annotation_revisions={**payload.annotation_revisions, asset.id: 1},
+        expected_assignment_version=version,
+    )
+    return asset, regroup
+
+
+def publish_regrouping(adapter, project_id, payload, actor=None, key="source-regrouping"):
+    from labelloop_api.management_regrouping import CanonicalSourceRegrouping
+
+    actor = actor or Actor()
+    regroup_adapter = CanonicalSourceRegrouping(adapter.canonical, adapter.objects)
+    context = MutationContext.bind(actor, key, "publish_source_regrouping", project_id, payload)
+    return regroup_adapter.publish(actor, context, payload)
+
+
+def test_source_regrouping_publishes_new_locked_version_and_preserves_history(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    saved = publish_grouping(adapter, created.id, payload)
+    before_assignments, _, before_events, _ = initial_grouping_snapshot(owner, created.id)
+    initial_version = before_assignments[0].assignment_version
+    _, regroup = regrouping_inputs(service, created, payload, saved, initial_version)
+    result = publish_regrouping(adapter, created.id, regroup)
+    assignments, _, events, _ = initial_grouping_snapshot(owner, created.id)
+    current = [row for row in assignments if row.assignment_version != initial_version]
+    historical = [row for row in assignments if row.assignment_version == initial_version]
+    assert result.revision == regroup.expected_revision + 1
+    assert len(historical) == 4
+    assert {row.id for row in historical} == {row.id for row in before_assignments}
+    assert len(current) == 5 and all(row.locked for row in current)
+    assert {row.split for row in current} == {"train", "val"}
+    with owner.connect() as connection:
+        assets = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                select(source_asset).where(source_asset.c.project_id == created.id)
+            )
+        }
+    by_asset = {row.asset_id: row for row in current}
+    keys = list(payload.annotation_revisions)
+    assert by_asset[assets[keys[0]]].group_id == by_asset[assets[keys[1]]].group_id
+    published = [row for row in events if row.event_type == "source_grouping_published"]
+    assert len(published) == 1
+    assert published[0].actor_kind == "system" and published[0].actor_id == Actor().id
+    receipt = next(
+        row for row in events if row.event_type == "management.publish_source_regrouping"
+    )
+    assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+    evidence = receipt.payload["evidence"]
+    assert evidence["previous_assignment_version"] == initial_version
+    assert evidence["assignment_version"] == current[0].assignment_version
+    assert evidence["declared_group_decisions"] == 1
+    assert evidence["requires_fresh_holdout"] is False
+    after = initial_grouping_snapshot(owner, created.id)
+    assert publish_regrouping(adapter, created.id, regroup) == result
+    assert initial_grouping_snapshot(owner, created.id) == after
+    stale = regroup.model_copy(update={"expected_revision": result.revision})
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_regrouping(adapter, created.id, stale, key="source-regrouping-stale")
+    assert initial_grouping_snapshot(owner, created.id) == after
+
+
+def test_source_regrouping_refuses_without_assignment_or_with_pending_pair(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    from labelloop_api.management_contracts import SourceRegrouping
+
+    early = SourceRegrouping(
+        **{
+            **payload.model_dump(),
+            "expected_assignment_version": "initial-missing",
+        }
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_regrouping(adapter, created.id, early, key="regroup-too-early")
+    assert initial_grouping_snapshot(owner, created.id) == before
+    saved = publish_grouping(adapter, created.id, payload)
+    assignments, _, _, _ = initial_grouping_snapshot(owner, created.id)
+    _, regroup = regrouping_inputs(
+        service, created, payload, saved, assignments[0].assignment_version
+    )
+    with owner.begin() as connection:
+        ids = [
+            row.id
+            for row in connection.execute(
+                select(source_asset).where(source_asset.c.project_id == created.id).limit(2)
+            )
+        ]
+        connection.execute(
+            insert(borderline_review).values(
+                left_asset_id=ids[0],
+                right_asset_id=ids[1],
+                metric="phash",
+                value="10",
+                review_state="pending",
+                algorithm_version="fixture-pending",
+            )
+        )
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_regrouping(adapter, created.id, regroup, key="regroup-pending-pair")
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
 @pytest.mark.parametrize("change", ["revision", "ontology", "policy", "annotation", "membership"])
 def test_initial_grouping_pins_refuse_before_object_access(database, change):
     from types import SimpleNamespace

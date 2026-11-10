@@ -151,6 +151,30 @@ holdout-repair shortcut is added. Embedding evidence and the complete later-inge
 metadata-edit, regrouping/quarantine lifecycle remain missing. Default application
 mounting and real asset admission stay disabled.
 
+Regrouping after first publication is an internal canonical adapter
+(`CanonicalSourceRegrouping`), not yet an HTTP operation. It consumes the
+delivered source-group lifecycle leaf under the same admin principal,
+project/retry locks, aggregate revision and replay authority as first
+grouping. The caller pins the reviewed assignment version plus the usual
+ontology, source-policy and annotation-revision pins; stale pins refuse.
+Verified human pair receipts map to leaf decisions with actor and reason
+preserved, and declared ingest source groups map to derived system
+decisions naming their ingest derivation, because the leaf recomputes
+relations from observations and decisions only. The proposal must keep
+every declaration, related decision and persisted relation inside one
+group, and every borderline pair it reports must already carry a verified
+decision; there is still no post-initial discovery path for a newly
+observed borderline band, so such evidence refuses. A regroup reproducing
+the pinned version refuses instead of recording a no-op receipt. Historical
+assignment rows and frozen releases are never rewritten; quarantined
+releases and any fresh-holdout requirement are reported in the attributed
+receipt evidence. Leaf publication events keep their system actor kind with
+the human actor ID preserved, and the human management receipt in the same
+transaction is the final audit record. Freeze-side current-version
+selection still uses its existing time-based check; aligning it with the
+leaf publication sequence remains integration work, as do the typed HTTP
+binding, metadata edits and embedding evidence.
+
 ## Internal anchor-pack preparation (not publication)
 
 `prepare_anchor_pack` assembles the existing core `ReferencePack` from current
@@ -699,7 +723,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 |---|---|
 | Remaining `save_setup`, `add_class` | Management facade: proposed reference enrollment and typed setup draft saves above are implemented separately, not generic capture payloads or approval; source admission/grouping binding and effective ontology publication/migration remain missing |
 | `accept_class`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; `accept_reference` has the separate unmounted typed operation above |
-| Remaining `resolve_pair` regrouping | The typed decision above persists compatible pair evidence only; management still owns assignment publication and revisioned split changes/quarantine using the delivered grouping policy |
+| Remaining `resolve_pair` regrouping | Internal canonical regrouping adapter above consumes the delivered lifecycle leaf with verified pair receipts and reported quarantine; typed HTTP binding and post-initial pair discovery remain management work |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |
 | `new_recipe_version` | Management facade's canonical recipe/version adapter; immutable released recipes and delivered compiler transform rules, not browser geometry |
 | `cancel_local_run` | Management facade requests cancellation through the shared fenced queue producer; the worker owns lease/fence and terminal state, no browser process kill |

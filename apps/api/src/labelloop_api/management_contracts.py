@@ -167,6 +167,12 @@ class InitialSourceGrouping(Mutation):
     annotation_revisions: Annotated[dict[Identifier, Revision], Field(min_length=2, max_length=256)]
 
 
+class SourceRegrouping(InitialSourceGrouping):
+    # The caller pins the assignment version it reviewed; a regroup never
+    # guesses which historical version is current.
+    expected_assignment_version: Annotated[str, Field(min_length=1, max_length=256)]
+
+
 class SourcePairResolve(Mutation):
     pair_id: Identifier
     decision: Literal["related", "unrelated"]

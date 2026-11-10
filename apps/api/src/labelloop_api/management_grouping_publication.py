@@ -103,7 +103,14 @@ def constrained_evidence(evidence, declarations, edges, *, reviewed=()):
 
 
 def prepare_initial_grouping(
-    connection, project_row, workspace_id, store, payload, *, allow_resolved_pairs=False
+    connection,
+    project_row,
+    workspace_id,
+    store,
+    payload,
+    *,
+    allow_resolved_pairs=False,
+    regrouping=False,
 ):
     # Import at the composition edge; this loader shares the canonical error helper.
     from .management_project_reads import source_policy_draft
@@ -140,16 +147,29 @@ def prepare_initial_grouping(
     ids = [row.id for row in assets]
     # No first-publication shortcut through any assignment/reference history.
     # Publication separately verifies resolved pairs against current discovery.
+    # Regrouping is the opposite boundary: assignment/reference history is the
+    # pinned input, but an unreviewed pending pair still refuses either path.
+    history_guards = (
+        ()
+        if regrouping
+        else (
+            (source_split_assignment, source_split_assignment.c.asset_id.in_(ids)),
+            (reference_example, reference_example.c.asset_id.in_(ids)),
+        )
+    )
     for table, predicate in (
-        (source_split_assignment, source_split_assignment.c.asset_id.in_(ids)),
-        (reference_example, reference_example.c.asset_id.in_(ids)),
+        *history_guards,
         (
             borderline_review,
             (
                 borderline_review.c.left_asset_id.in_(ids)
                 | borderline_review.c.right_asset_id.in_(ids)
             )
-            & (borderline_review.c.review_state == "pending" if allow_resolved_pairs else True),
+            & (
+                borderline_review.c.review_state == "pending"
+                if allow_resolved_pairs or regrouping
+                else True
+            ),
         ),
     ):
         if connection.execute(select(table.c.id).where(predicate).limit(1)).first() is not None:
