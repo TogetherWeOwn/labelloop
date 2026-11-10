@@ -25,14 +25,10 @@ from sqlalchemy.exc import DBAPIError
 from labelloop_api.main import create_app
 from labelloop_api.management_configuration import ConfigurationTrainingBinding
 from labelloop_api.management_contracts import AssetIngest, JobAccepted, ProjectCreate, Resource
+from labelloop_api.management_dispatch import CompilationDispatch, LocalMLDispatch
 from labelloop_api.management_evaluation import ApprovedDevelopmentProtocol
 from labelloop_api.management_operations import CanonicalManagementOperations
 from labelloop_api.management_training import ApprovedTrainingProfile
-from labelloop_api.management_workers import (
-    compilation_runner,
-    local_evaluation_runner,
-    local_training_runner,
-)
 from labelloop_api.model_store import load_release
 from labelloop_api.revision_store import append_review, completeness_context_hash
 from labelloop_api.schema import completeness_assessment, ontology_release, source_asset
@@ -699,10 +695,11 @@ def test_management_http_runs_real_cpu_project_to_export(
         http_command(client, headers, compile_path, compile_body, "cpu-compile", 202)
     )
     assert client.get(f"/resources/job/{compiled.job_id}").json()["state"] == "queued"
-    compiler = compilation_runner(
-        pipeline_worker.store, pipeline_worker.objects, service.workspace_id, job_id=compiled.job_id
+    compiler = CompilationDispatch(
+        pipeline_worker.store, pipeline_worker.objects, service.workspace_id
     )
-    assert compiler.run_once("cpu-compiler") and not compiler.run_once("cpu-compiler")
+    assert compiler.run_once(compiled.job_id, "cpu-compiler")
+    assert not compiler.run_once(compiled.job_id, "cpu-compiler")
     compiled_stages = saved_job(owner, compiled)
     manifest = compiled_stages["compilation"]["manifest"]
     assert len(manifest["samples"]) >= 16
@@ -762,16 +759,21 @@ def test_management_http_runs_real_cpu_project_to_export(
         exports.append(evidence)
         return asdict(evidence)
 
-    runner = local_training_runner(
+    ml = LocalMLDispatch(
         pipeline_worker.store,
         pipeline_worker.engine,
         pipeline_worker.objects,
         service.workspace_id,
         backend,
         exporter,
-        job_id=accepted.job_id,
+        predict_samples,
     )
-    assert runner.run_once("cpu-trainer") and not runner.run_once("cpu-trainer")
+    with pytest.raises(ValueError, match="dispatch lane"):
+        ml.run_once(compiled.job_id, "cpu-trainer")
+    with pytest.raises(ValueError, match="dispatch lane"):
+        compiler.run_once(accepted.job_id, "cpu-compiler")
+    assert ml.run_once(accepted.job_id, "cpu-trainer")
+    assert not ml.run_once(accepted.job_id, "cpu-trainer")
     trained = saved_job(owner, accepted)
     assert set(trained) == {"training", "export"}
     assert len(exports) == 1
@@ -809,15 +811,8 @@ def test_management_http_runs_real_cpu_project_to_export(
     evaluated = JobAccepted.model_validate(
         http_command(client, headers, evaluation_path, evaluation_body, "cpu-evaluation", 202)
     )
-    evaluator = local_evaluation_runner(
-        pipeline_worker.store,
-        pipeline_worker.engine,
-        pipeline_worker.objects,
-        service.workspace_id,
-        predict_samples,
-        job_id=evaluated.job_id,
-    )
-    assert evaluator.run_once("cpu-evaluator") and not evaluator.run_once("cpu-evaluator")
+    assert ml.run_once(evaluated.job_id, "cpu-evaluator")
+    assert not ml.run_once(evaluated.job_id, "cpu-evaluator")
     evaluated_stages = saved_job(owner, evaluated)
     report = evaluated_stages["evaluation"]["report"]
     selected_report = next(
@@ -968,6 +963,12 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "assignments": groups,
                     "no_seeded_assignments_or_relations": True,
                     "freeze_before_configuration_refused": True,
+                },
+                "dispatch": {
+                    "selection": "persisted-kind-and-owned-human-intent",
+                    "specific_job_only": True,
+                    "compiler_ml_lane_refusals": True,
+                    "automatic_startup": False,
                 },
                 "runtime_roles": {
                     **role_evidence,

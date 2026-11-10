@@ -340,6 +340,60 @@ def test_canonical_facade_http_reads_preserve_workspace_isolation(
             assert result.status_code == 404 and result.json() == {"detail": "not_found"}
 
 
+@pytest.mark.parametrize("refusal", ["foreign-workspace", "wrong-lane", "no-receipt", "duplicate"])
+def test_dispatch_refusals_leave_native_job_unclaimed(
+    database, compilation, compiler_worker, refusal
+):
+    from copy import deepcopy
+
+    from labelloop_api.management_dispatch import dispatch_kind
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    job_id, workspace, kinds = accepted.job_id, service.workspace_id, ("compile_variant",)
+    if refusal == "foreign-workspace":
+        workspace = uuid4()
+    elif refusal == "wrong-lane":
+        kinds = ("train_local", "evaluate_local")
+    else:
+        with owner.connect() as connection:
+            project_key = connection.execute(
+                select(project.c.project_key).where(project.c.id == UUID(created.id))
+            ).scalar_one()
+            receipt = dict(
+                connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.event_type == "management.compile_variant",
+                        canonical_event.c.payload["evidence"]["job_id"].as_string() == job_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        if refusal == "no-receipt":
+            inputs = deepcopy(receipt["payload"]["evidence"]["inputs"])
+            job_id = compiler_worker.store.enqueue(
+                project_key, "unreceipted-dispatch", "compile_variant", inputs
+            )
+        else:
+            receipt.pop("id")
+            receipt.pop("created_at")
+            with owner.begin() as connection:
+                connection.execute(insert(canonical_event).values(**receipt))
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ValueError):
+        dispatch_kind(compiler_worker.store, workspace, job_id, kinds)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    with owner.connect() as connection:
+        assert connection.execute(
+            text("SELECT status,attempts,generation FROM worker_job WHERE job_id=:id"),
+            {"id": job_id},
+        ).one() == ("queued", 0, 0)
+    assert publication_state(owner, accepted) == (None, 0, [], ("queued", 0))
+
+
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_registered_compiler_claims_only_requested_job_and_publishes(
     database, compilation, compiler_worker, recipe

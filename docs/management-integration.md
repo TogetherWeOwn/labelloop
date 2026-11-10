@@ -1081,6 +1081,34 @@ verification. Automatic dispatch, default worker startup, final app mounting,
 production grants and DB-backed actual CPU project-to-export acceptance remain
 open. Real asset admission remains disabled pending the existing Security gate.
 
+### Explicit one-job dispatch (partial, opt-in)
+
+`management_dispatch.CompilationDispatch` and `LocalMLDispatch` accept one durable
+job ID and a trusted worker identity. A SELECT-only repeatable snapshot resolves
+its persisted kind, joins its actual project/workspace and requires exactly one
+matching human intent receipt with the same actor, aggregate, project and canonical
+JSON inputs. Missing, foreign, ambiguous or mismatched evidence refuses before
+claiming a lease or accessing objects/ML. Fixed compiler versus local-ML lanes
+cannot route provider/LLM kinds or dispatch one another's jobs. Compiler composition
+receives no backend, exporter or predictor.
+
+The snapshot is a dispatch preflight, not new authorization or execution state.
+The existing runner claims only that ID; stages and the completion sink recheck
+historical intent, lineage and native lease/application fences. Completed, active,
+cancelled and retry-delayed work remains governed by the native queue. Construction
+performs no I/O; no loop, supervisor, queue scan, endpoint, automatic startup,
+credential or production role provisioning is added. Deployment-owned worker code
+must supply the existing restricted connections, object capabilities and local ML
+callbacks inside the correct process. Default entry points remain unchanged.
+
+The existing two separated-role CPU cohorts now use this dispatcher for all three
+jobs, retain replay and cross-lane refusals and record dispatch evidence. Four new
+disposable DB cases require foreign-workspace, wrong-lane, unreceipted and duplicate
+receipt refusals with no native job claim or canonical mutation. New unit contracts
+cover the fixed factory/dependency wiring, bounded reads and identity mismatches.
+These changed DB/CPU cases require exact-head Actions verification; this is not
+operational installation, database-enforced workspace isolation or qualification.
+
 ## Canonical summary reads (partial, unmounted)
 
 `CanonicalManagementReads` supplies `list_projects`, `list_resources` and `read`
