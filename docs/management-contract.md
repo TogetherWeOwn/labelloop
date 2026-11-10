@@ -95,6 +95,34 @@ metadata under an existing retry key conflicts. No metadata-edit, regrouping or
 holdout-repair shortcut is added. Embedding evidence and pair-discovery publication
 remain missing. Default application mounting and real asset admission stay disabled.
 
+## Internal anchor-pack preparation (not publication)
+
+`prepare_anchor_pack` assembles the existing core `ReferencePack` from current
+canonical evidence, not enrollment metadata alone. The trusted caller supplies an
+explicit bounded `AnchorPackPlan`: pack identity/version, current ontology and
+assignment, reference IDs, exact current annotation revisions, scene, diversity
+cluster, validity tags and finite utility. These descriptors are declarations,
+not model quality measurements, gold adjudication or automatic-acceptance grants.
+Only positive human-reviewed anchor examples are supported in this increment;
+confusion negatives, automatic expansions and gold remain separate producers.
+
+The loader requires receipt-verified current reference acceptance, owned workspace,
+complete locked grouping and canonical source inventory. Historical holdout checks
+remain in the shared reference validator. It reads each selected source's latest
+annotation and matching completeness evidence; stale pins, incomplete/rejected
+labels, unsupported classes and out-of-frame geometry fail closed. Core source-bound
+revision, memory and pack validation also require a complete positive class instance
+and refuse evaluation-group evidence. In particular, an approved reference attached
+to a verified negative image does not become a positive memory example.
+
+Mutation callers own authorization, the project lock and transaction; source locks
+synchronize with existing review writers. A read-only caller must explicitly disable
+source locking and use one repeatable snapshot. This module writes nothing and
+fetches no objects. No API operation, persisted pack, retrieval binding, project
+release, freeze clearance, admission or default mounting is added. Durable attributed
+publication and subsequent invalidation/revalidation remain required before a
+prepared pack may be consumed by bulk jobs.
+
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.
 Artifacts are application IDs authorized through the common artifact boundary.

@@ -7200,6 +7200,220 @@ def test_class_scope_guide_approvals_compose_and_projection_needs_only_select(da
     assert counts(owner, created.id) == (0, 0, 8)
 
 
+def anchor_pack_inputs(service, owner):
+    from labelloop_api.management_reference_pack import AnchorPackPlan
+
+    created, asset, source, enrollment = reference_inputs(
+        service, owner, complete=False, split="train"
+    )
+    enroll(service, created.id, enrollment)
+    objects = [{"object_id": "anchor-box", "class_id": "package", "box": [1, 1, 11, 9]}]
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=1,
+            approval_state="draft",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=objects,
+        )
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).one()
+        connection.execute(
+            insert(completeness_assessment).values(
+                asset_id=source.id,
+                revision=2,
+                ontology_hash=completeness_context_hash(
+                    ontology.class_map, ontology.classes, "Visible packages"
+                ),
+                scope_completeness="exhaustive_for_scope",
+                actor_kind="human",
+                actor_id=Actor().id,
+                output_truncated=False,
+                unresolved_regions=[],
+            )
+        )
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            objects=objects,
+            training_eligible=True,
+        )
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    reference = detail.references[0]
+    accept(
+        service,
+        created.id,
+        ReferenceAccept(
+            expected_revision=3,
+            reference_id=reference.id,
+            base_ontology_id=enrollment.base_ontology_id,
+            assignment_version=enrollment.assignment_version,
+            reason="Checked visible package",
+        ),
+    )
+    plan = AnchorPackPlan.model_validate(
+        {
+            "pack_id": "fixture-anchors",
+            "version": "v1",
+            "ontology_id": enrollment.base_ontology_id,
+            "assignment_version": enrollment.assignment_version,
+            "entries": {
+                reference.id: {
+                    "annotation_revision": 3,
+                    "scene": "fixture-studio",
+                    "cluster_id": "fixture-cluster",
+                    "validity_tags": ["visible-packages"],
+                    "utility": 1.0,
+                }
+            },
+        }
+    )
+    return created, asset, source, plan
+
+
+def prepare_pack(service, project_id, plan, *, workspace_id=None):
+    from labelloop_api.management_reference_pack import prepare_anchor_pack
+
+    with service.engine.connect().execution_options(
+        isolation_level="REPEATABLE READ"
+    ) as connection:
+        with connection.begin():
+            connection.execute(text("SET TRANSACTION READ ONLY"))
+            row = connection.execute(select(project).where(project.c.id == project_id)).one()
+            return prepare_anchor_pack(
+                connection, row, workspace_id or service.workspace_id, plan, lock_sources=False
+            )
+
+
+def test_anchor_pack_preparation_uses_source_bound_human_evidence_without_writes(database):
+    service, owner, role = database
+    created, asset, _, plan = anchor_pack_inputs(service, owner)
+    before = counts(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    pack = prepare_pack(service, created.id, plan)
+    (example,) = pack.examples
+    assert example.reference.asset_id == asset.id and example.revision.asset_id == asset.id
+    assert example.revision.project_id == created.id and example.revision.revision == 3
+    assert example.collection == "anchor" and example.kind == "positive"
+    assert example.reference.approved and example.revision.objects[0].box.x_min == 1
+    assert counts(owner, created.id) == before
+    assert (
+        CanonicalManagementReads(service.engine, service.workspace_id)
+        .read_project(Reader(), created.id)
+        .published_release_id
+        is None
+    )
+
+
+@pytest.mark.parametrize("field", ["ontology_id", "assignment_version", "annotation_revision"])
+def test_anchor_pack_preparation_requires_exact_current_pins(database, field):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    if field == "annotation_revision":
+        identifier, entry = next(iter(plan.entries.items()))
+        plan = plan.model_copy(
+            update={"entries": {identifier: entry.model_copy(update={field: 2})}}
+        )
+    else:
+        plan = plan.model_copy(update={field: "stale"})
+    with pytest.raises(ManagementFailure):
+        prepare_pack(service, created.id, plan)
+
+
+@pytest.mark.parametrize(
+    "change", ["rejected", "missing-completeness", "stale-context", "withdrawn"]
+)
+def test_anchor_pack_preparation_rechecks_current_evidence(database, change):
+    service, owner, _ = database
+    created, asset, source, plan = anchor_pack_inputs(service, owner)
+    if change == "withdrawn":
+        withdraw(
+            service,
+            created.id,
+            ReferenceWithdraw(
+                expected_revision=4, reference_id=next(iter(plan.entries)), reason="Retired fixture"
+            ),
+        )
+    else:
+        with owner.begin() as connection:
+            if change == "rejected":
+                append_review(
+                    connection,
+                    asset_id=asset.id,
+                    actor_kind="human",
+                    actor_id=Actor().id,
+                    expected_revision=3,
+                    approval_state="rejected",
+                    review_tier="human_reviewed",
+                    scope_completeness="unreviewed",
+                    objects=[],
+                )
+            elif change == "missing-completeness":
+                connection.execute(
+                    completeness_assessment.delete().where(
+                        completeness_assessment.c.asset_id == source.id
+                    )
+                )
+            else:
+                connection.execute(
+                    project.update()
+                    .where(project.c.id == created.id)
+                    .values(scope="A different scope")
+                )
+    with pytest.raises(ManagementFailure):
+        prepare_pack(service, created.id, plan)
+
+
+def test_anchor_pack_preparation_refuses_foreign_workspace(database):
+    service, owner, _ = database
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        prepare_pack(service, created.id, plan, workspace_id=str(uuid4()))
+
+
+def test_anchor_pack_preparation_does_not_upgrade_approved_negative_metadata(database):
+    from labelloop_api.management_reference_pack import AnchorPackPlan
+
+    service, owner, _ = database
+    created, _, payload = acceptance_inputs(service, owner)
+    accept(service, created.id, payload)
+    plan = AnchorPackPlan.model_validate(
+        {
+            "pack_id": "fixture-anchors",
+            "version": "v1",
+            "ontology_id": payload.base_ontology_id,
+            "assignment_version": payload.assignment_version,
+            "entries": {
+                payload.reference_id: {
+                    "annotation_revision": 2,
+                    "scene": "fixture-studio",
+                    "cluster_id": "fixture-cluster",
+                    "validity_tags": ["visible-packages"],
+                    "utility": 1.0,
+                }
+            },
+        }
+    )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        prepare_pack(service, created.id, plan)
+
+
 def reference_inputs(service, owner, **kwargs):
     created, asset, source, frozen = release_inputs(service, owner, **kwargs)
     payload = ReferenceEnroll(
