@@ -170,6 +170,44 @@ registry composition and final mounting remain incomplete. This approval grants 
 pilot quality, retrieval, automatic acceptance or freeze clearance; default mounting
 and real admission remain disabled.
 
+### Internal configuration snapshots (not executable release clearance)
+
+The approved-setup summary and immutable-source fixture repair passed on exact
+`38fe9fb0de1af0e4f40995de3cab72148865bb3e`:
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42823386009), including
+[876 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42823386009/job/129854464831).
+CodeQL, gitleaks and the remaining CI checks passed. This verifies that earlier
+summary, not the configuration preparation below or complete bootstrap acceptance.
+
+`CanonicalConfigurationSnapshots` now prepares bounded, versioned, attributed
+configuration records inside the existing canonical event transaction. It requires
+all five current approvals, the explicit setup-summary digest, current locked source
+grouping, and project-scoped immutable **server** training profiles. It records scope,
+guide, source policy, ontology/assignment and approval receipt pins, source identity /
+group / split / algorithm / thresholds, resolved recipe definitions, checkpoint hashes,
+training arguments and inference postprocessing. Records pass through the existing
+canonical JSON encoder and are capped at two megabytes and 1,000 sources; histories
+are bounded and versions cannot be reused. Shared admin/project/source/retry/revision
+locks and atomic attributed audit remain the sole write authority. Exact retry is a
+historical acknowledgment, not current configuration or evidence renewal.
+
+This is internal preparation: no public operation, schema/client change, effective
+release pointer, freeze clearance, job/worker registration or runtime consumer is
+installed. The result remains `draft`; qualification is `not_assessed`, promotion
+targets and runtime binding are null, and automatic acceptance, autonomous spend and
+external-provider access are disabled in the snapshot. It does not apply or renew
+those capabilities in live project policy. Later edits leave immutable history intact
+but invalidate current setup. No new table, migration, dependency, production grant,
+object I/O or default mounting is introduced.
+
+Seven pure contract/preparation tests cover profile ordering, project ownership,
+bounds, checkpoint/argument/postprocessing digest sensitivity, strict authority-field
+refusal, JSON-native independent copies and fail-closed incomplete evidence. Twelve
+new disposable DB cases commission exact replay, current setup/source/profile pins,
+immutable historical records after edits, unchanged freeze refusal, three stale-pin /
+version cases, nonadmin refusal, audit-grant rollback and competing revisions. They
+await exact-head Actions; no new-head DB or full acceptance result is claimed.
+
 ### Approved setup summary (opt-in, not publication)
 
 Exact `891a65e229039db7f535f9deca9e33d41064b9bb` passed

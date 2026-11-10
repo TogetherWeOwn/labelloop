@@ -7427,6 +7427,163 @@ def approved_setup_inputs(service, owner):
     return created, asset, source, plan
 
 
+def configuration_inputs(service, owner):
+    from labelloop_api.management_configuration import (
+        CanonicalConfigurationSnapshots,
+        ConfigurationSnapshotPublish,
+    )
+    from labelloop_api.management_training import ApprovedTrainingProfile
+
+    created, _, _, _ = approved_setup_inputs(service, owner)
+    detail = CanonicalManagementReads(service.engine, service.workspace_id).read_project(
+        Reader(), created.id
+    )
+    profiles = tuple(
+        ApprovedTrainingProfile(
+            UUID(created.id), f"baseline-{side}", 1, f"full-letterbox-{side}-v1", "1" * 64
+        )
+        for side in (320, 640)
+    )
+    publisher = CanonicalConfigurationSnapshots(service, UUID(created.id), profiles)
+    payload = ConfigurationSnapshotPublish(
+        expected_revision=detail.resource.revision,
+        version="v1",
+        setup_summary_sha256=detail.setup_summary_sha256,
+        reason="Pin approved setup and controlled local baseline",
+    )
+    return created, publisher, payload
+
+
+def publish_configuration(publisher, payload, *, key="configuration", actor=None):
+    actor = actor or Actor()
+    context = MutationContext.bind(
+        actor, key, "publish_configuration_snapshot", str(publisher.project_id), payload
+    )
+    return publisher.publish(actor, context, payload)
+
+
+def configuration_receipts(owner, project_id):
+    with owner.connect() as connection:
+        return connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == project_id,
+                canonical_event.c.event_type == "management.publish_configuration_snapshot",
+            )
+        ).all()
+
+
+def test_configuration_snapshot_pins_setup_grouping_and_local_profiles_without_clearance(database):
+    from labelloop_api.management_setup import draft_sha256
+
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+    result = publish_configuration(publisher, payload)
+    assert result.revision == payload.expected_revision + 1 and result.state == "draft"
+    assert publish_configuration(publisher, payload) == result
+    (receipt,) = configuration_receipts(owner, created.id)
+    evidence = receipt.payload["evidence"]
+    snapshot = evidence["snapshot"]
+    assert receipt.actor_id == Actor().id and receipt.actor_kind == "human"
+    assert snapshot["project_id"] == created.id
+    assert snapshot["workspace_id"] == str(service.workspace_id)
+    assert snapshot["setup_summary_sha256"] == payload.setup_summary_sha256
+    assert evidence["snapshot_sha256"] == draft_sha256(snapshot)
+    assert len(snapshot["grouping"]) == 1
+    assert snapshot["grouping"][0]["split"] == "train"
+    assert [item["arguments"]["imgsz"] for item in snapshot["training_profiles"]] == [320, 640]
+    assert snapshot["promotion_targets"] is None and snapshot["runtime_binding"] is None
+    assert snapshot["qualification"] == "not_assessed"
+    assert snapshot["automatic_acceptance"] is False and snapshot["autonomous_spend"] is False
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.setup_summary_sha256 == payload.setup_summary_sha256
+    assert detail.published_release_id is None
+    assert reads.read_freeze_plan(Reader(), created.id).payload is None
+    save_step_draft(service, created.id, "guide", result.revision, key="later-guide")
+    assert reads.read_project(Reader(), created.id).setup_summary_sha256 is None
+    assert configuration_receipts(owner, created.id) == [receipt]
+    # Only the audit revision and explicit subsequent edit change, not canonical history.
+    after = initial_grouping_snapshot(owner, created.id)
+    assert before[:2] == after[:2]
+
+
+@pytest.mark.parametrize("failure", ["revision", "digest", "version"])
+def test_configuration_snapshot_refuses_stale_pins_and_duplicate_versions(database, failure):
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    if failure == "version":
+        result = publish_configuration(publisher, payload)
+        payload = payload.model_copy(update={"expected_revision": result.revision})
+    elif failure == "revision":
+        payload = payload.model_copy(update={"expected_revision": payload.expected_revision - 1})
+    else:
+        payload = payload.model_copy(update={"setup_summary_sha256": "f" * 64})
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        publish_configuration(publisher, payload, key="new-configuration")
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("actor", [Actor(role="reviewer"), Actor(kind="worker"), Actor(id="")])
+def test_configuration_snapshot_refuses_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        publish_configuration(publisher, payload, actor=actor)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+@pytest.mark.parametrize("step", ["scope", "sources"])
+def test_configuration_snapshot_refuses_invalidated_setup(database, step):
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    save_step_draft(service, created.id, step, payload.expected_revision, key="changed-setup")
+    payload = payload.model_copy(update={"expected_revision": payload.expected_revision + 1})
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_configuration(publisher, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert configuration_receipts(owner, created.id) == []
+
+
+def test_configuration_snapshot_missing_audit_grant_rolls_back(database):
+    service, owner, role = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE INSERT ON canonical_event FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        publish_configuration(publisher, payload)
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert configuration_receipts(owner, created.id) == []
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_configuration_snapshot_competing_revisions_are_serialized(database, same_key):
+    service, owner, _ = database
+    created, publisher, payload = configuration_inputs(service, owner)
+    barrier = Barrier(2)
+
+    def run(index):
+        barrier.wait(timeout=10)
+        try:
+            return publish_configuration(
+                publisher, payload, key="configuration-race" if same_key else f"race-{index}"
+            )
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, range(2)))
+    if same_key:
+        assert results[0] == results[1]
+    else:
+        assert results.count("revision_conflict") == 1
+    assert len(configuration_receipts(owner, created.id)) == 1
+
+
 def test_complete_setup_pack_requires_revision_after_all_draft_and_catalog_writes(database):
     service, owner, _ = database
     created, _, _, plan = anchor_pack_inputs(service, owner, setup_step="all")
