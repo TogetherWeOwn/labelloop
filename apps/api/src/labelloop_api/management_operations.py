@@ -10,10 +10,12 @@ from labelloop_worker_core.jobs import JobStore
 
 from .management_canonical import CanonicalManagementMutations, refuse
 from .management_compilation import CanonicalManagementCompilation
+from .management_compile_worker import CompilationObjects
 from .management_contracts import (
     AssetIngest,
     EvaluationStart,
     ExportRead,
+    InitialSourceGrouping,
     JobAccepted,
     PromotionRequest,
     PromotionResult,
@@ -35,6 +37,7 @@ from .management_details import (
     TrainingProfilesRead,
 )
 from .management_evaluation import ApprovedDevelopmentProtocol, CanonicalManagementEvaluation
+from .management_grouping_publication import CanonicalInitialGrouping
 from .management_ports import ManagementPrincipal, MutationContext
 from .management_reads import CanonicalManagementReads
 from .management_training import ApprovedTrainingProfile, CanonicalManagementTraining
@@ -51,12 +54,17 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
 
     profiles: tuple[ApprovedTrainingProfile, ...] = ()
     protocols: tuple[ApprovedDevelopmentProtocol, ...] = ()
+    grouping_objects: CompilationObjects | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
         # Validate bounded immutable server configuration before serving requests.
         self._training()
         self._evaluation()
+        if self.grouping_objects is not None and not callable(
+            getattr(self.grouping_objects, "read", None)
+        ):
+            raise ValueError("grouping requires an explicit trusted object reader")
 
     def _reads(self) -> CanonicalManagementReads:
         return CanonicalManagementReads(self.engine, self.workspace_id)
@@ -73,6 +81,16 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         self.authorize(actor, context, "ingest_asset", context.target_id, payload)
         # Canonical ingest remains independently testable, not admitted here.
         refuse("management_unavailable")
+
+    def publish_initial_grouping(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
+    ) -> Resource:
+        self.authorize(actor, context, "publish_initial_grouping", context.target_id, payload)
+        if self.grouping_objects is None:
+            refuse("management_unavailable")
+        return CanonicalInitialGrouping(self, self.grouping_objects).publish(
+            actor, context, payload
+        )
 
     def compile_variant(
         self, actor: ManagementPrincipal, context: MutationContext, payload: VariantCompile

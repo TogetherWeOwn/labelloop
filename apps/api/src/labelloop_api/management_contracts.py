@@ -131,6 +131,13 @@ class SourcePolicyDraft(Mutation):
         return self
 
 
+class InitialSourceGrouping(Mutation):
+    ontology_id: Identifier
+    source_policy_sha256: Digest
+    # Zero pins the absence of a revision, not verified background.
+    annotation_revisions: Annotated[dict[Identifier, Revision], Field(min_length=2, max_length=256)]
+
+
 class SourcePairResolve(Mutation):
     pair_id: Identifier
     decision: Literal["related", "unrelated"]

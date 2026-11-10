@@ -21,6 +21,7 @@ from .management_contracts import (
     EvaluationStart,
     ExportRead,
     GuideDraft,
+    InitialSourceGrouping,
     JobAccepted,
     ManagementError,
     ProjectCreate,
@@ -116,6 +117,10 @@ class ManagementOperations(Protocol):
 
     def save_source_policy_draft(
         self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePolicyDraft
+    ) -> Resource: ...
+
+    def publish_initial_grouping(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
     ) -> Resource: ...
 
     def resolve_source_pair(

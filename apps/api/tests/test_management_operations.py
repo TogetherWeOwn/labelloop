@@ -1,7 +1,8 @@
 """Composition wiring only; real transaction/HTTP evidence lives in Actions DB cases."""
 
 import inspect
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -9,9 +10,11 @@ from sqlalchemy import create_engine, event
 
 from labelloop_api.management_canonical import CanonicalManagementMutations
 from labelloop_api.management_compilation import CanonicalManagementCompilation
+from labelloop_api.management_contracts import InitialSourceGrouping
 from labelloop_api.management_evaluation import CanonicalManagementEvaluation
+from labelloop_api.management_grouping_publication import CanonicalInitialGrouping
 from labelloop_api.management_operations import CanonicalManagementOperations
-from labelloop_api.management_ports import ManagementOperations
+from labelloop_api.management_ports import ManagementFailure, ManagementOperations, MutationContext
 from labelloop_api.management_reads import CanonicalManagementReads
 from labelloop_api.management_training import ApprovedTrainingProfile, CanonicalManagementTraining
 from labelloop_compiler.ingest import LocalObjectStore
@@ -120,6 +123,44 @@ def test_facade_refuses_mutable_or_missing_server_configuration(operations, fiel
         CanonicalManagementOperations(
             operations.engine, operations.store, operations.workspace_id, **{field: value}
         )
+
+
+def test_initial_grouping_requires_explicit_reader_and_preserves_canonical_arguments(
+    operations, monkeypatch
+):
+    from test_management_contract import Actor
+
+    actor = Actor()
+    payload = InitialSourceGrouping(
+        expected_revision=3,
+        ontology_id="ontology-1",
+        source_policy_sha256="a" * 64,
+        annotation_revisions={"a": 0, "b": 1},
+    )
+    context = MutationContext.bind(actor, "grouping", "publish_initial_grouping", "p", payload)
+    with pytest.raises(ManagementFailure, match="management_unavailable"):
+        operations.publish_initial_grouping(actor, context, payload)
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        operations.publish_initial_grouping(actor, replace(context, target_id="foreign"), payload)
+    reader = SimpleNamespace(read=lambda key: pytest.fail("composition must not read objects"))
+    configured = replace(operations, grouping_objects=reader)
+    result = object()
+    calls = []
+
+    def publish(bound, *args):
+        assert bound.canonical is configured and bound.objects is reader
+        calls.append(args)
+        return result
+
+    monkeypatch.setattr(CanonicalInitialGrouping, "publish", publish)
+    assert configured.publish_initial_grouping(actor, context, payload) is result
+    assert calls == [(actor, context, payload)]
+
+
+@pytest.mark.parametrize("reader", [object(), SimpleNamespace(read=None)])
+def test_initial_grouping_configuration_refuses_nonreaders_without_io(operations, reader):
+    with pytest.raises(ValueError, match="explicit trusted object reader"):
+        replace(operations, grouping_objects=reader)
 
 
 def test_facade_refuses_duplicate_project_profile_identities(operations):

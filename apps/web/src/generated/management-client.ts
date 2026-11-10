@@ -25,6 +25,7 @@ export type FreezePlanRead = { "checks": Array<CheckRead>; "exclusions": Array<E
 export type GuideDraft = { "annotation_guide": string; "background": string; "exhaustive_for_scope": boolean; "expected_revision": number; "extent": "visible"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type GuideRead = { "background": string; "exhaustive_for_scope": boolean; "extent": "visible" | "estimated"; "min_target_px": number; "occlusion": string; "reflections": string; "truncation": string };
 export type InferencePolicy = { "agnostic_nms"?: boolean; "conf"?: number; "imgsz": number; "iou"?: number; "max_det"?: number; "nms"?: "external" | "end2end" };
+export type InitialSourceGrouping = { "annotation_revisions": Record<string, unknown>; "expected_revision": number; "ontology_id": string; "source_policy_sha256": string };
 export type JobAccepted = { "job_id": string; "resource": Resource };
 export type ManagementError = { "detail": "authentication_required" | "permission_denied" | "invalid_request" | "management_unavailable" | "not_found" | "revision_conflict" | "idempotency_conflict" | "incomplete_labels" | "unsupported_classes" | "missing_evidence" | "incompatible_recipe" | "shape_mismatch" | "qualification_required" | "external_conflict" | "transport_failure" };
 export type Matrix3 = [[number, number, number], [number, number, number], [number, number, number]];
@@ -234,6 +235,11 @@ export class ManagementClient {
 
   saveSourcePolicyDraft(input: { "project_id": string; "idempotency-key": string; body: SourcePolicyDraft }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/sources`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  publishInitialSourceGrouping(input: { "project_id": string; "idempotency-key": string; body: InitialSourceGrouping }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/source-assignments/initial`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 

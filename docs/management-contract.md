@@ -65,6 +65,26 @@ relations. No split lock or usable assignment version comes from these observati
 publication, pending-pair handling and historical holdout protection remain separate
 transactional prerequisites.
 
+`publishInitialSourceGrouping` (`POST /projects/{project_id}/source-assignments/initial`)
+exposes the bounded first-publication adapter only in explicitly composed applications.
+The strict body pins `expected_revision`, current `ontology_id`, the source-policy
+intent digest and exact `annotation_revisions` for every source (zero means no
+revision, not verified background). The command accepts no split, seed, threshold,
+observed metadata, class counts, object key or assignment-version authority. It uses
+the existing authenticated admin/session/CSRF boundary and actor-scoped retry key.
+Reviewer reads remain available, but reviewers cannot publish assignments.
+
+Trusted server construction must supply `CanonicalManagementOperations.grouping_objects`
+with a callable `read`; the canonical upload store is not implicitly treated as a
+reader. Absent configuration returns `management_unavailable` without object or DB
+access after actor/context validation. This capability does **not** enable original
+asset admission. Object keys resolve from owned canonical rows, never requests.
+The adapter atomically commits locked assignments, conservative relation closure,
+setup/automatic-acceptance invalidation and the attributed receipt. Any prior
+assignment/reference/borderline evidence refuses; there is no regrouping or holdout
+quarantine bypass. Metadata values, embedding evidence and pair-discovery publication
+remain separate missing producers. Default application mounting remains disabled.
+
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.
 Artifacts are application IDs authorized through the common artifact boundary.

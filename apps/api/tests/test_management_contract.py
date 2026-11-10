@@ -100,7 +100,19 @@ PAIR_RESOLVE = {
     "decision": "related",
     "reason": "Reviewed source relationship",
 }
+INITIAL_GROUPING = {
+    "expected_revision": 3,
+    "ontology_id": "ontology-1",
+    "source_policy_sha256": "a" * 64,
+    "annotation_revisions": {"source-a": 1, "source-b": 0},
+}
 MUTATIONS = [
+    (
+        "/projects/p/source-assignments/initial",
+        "publish_initial_grouping",
+        INITIAL_GROUPING,
+        200,
+    ),
     ("/projects/p/source-pairs/resolve", "resolve_source_pair", PAIR_RESOLVE, 200),
     ("/projects/p/references/revalidate", "revalidate_reference", REFERENCE_REVALIDATE, 200),
     ("/projects/p/setup/classes/publish", "publish_class_catalog", CATALOG_PUBLISH, 200),
@@ -859,13 +871,52 @@ def test_reference_revalidation_refuses_identity_replacement_and_untrusted_autho
     assert service.calls == []
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("annotation_revisions", {}),
+        ("annotation_revisions", {"a": 1}),
+        ("annotation_revisions", {"a": True, "b": 0}),
+        ("annotation_revisions", {"a": -1, "b": 0}),
+        ("annotation_revisions", {"a": "1", "b": 0}),
+        ("annotation_revisions", {"": 1, "b": 0}),
+        ("annotation_revisions", {str(i): 0 for i in range(257)}),
+        ("source_policy_sha256", "bad"),
+        ("ontology_id", ""),
+        ("expected_revision", True),
+        ("split", "train"),
+        ("seed", 1),
+        ("thresholds", {}),
+        ("object_key", "forged"),
+        ("metadata", {"session": "forged"}),
+        ("class_counts", {"bird": 1}),
+        ("actor_id", "forged"),
+        ("assignment_version", "forged"),
+    ],
+)
+def test_initial_grouping_refuses_untrusted_pins_and_assignment_authority(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/source-assignments/initial",
+        json={**INITIAL_GROUPING, field: value},
+        headers={"Idempotency-Key": "initial-grouping"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     generate(tmp_path)
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 30
-    assert sum(len(methods) for methods in spec["paths"].values()) == 31
+    assert len(spec["paths"]) == 31
+    assert sum(len(methods) for methods in spec["paths"].values()) == 32
+    assert (
+        spec["paths"]["/projects/{project_id}/source-assignments/initial"]["post"]["operationId"]
+        == "publishInitialSourceGrouping"
+    )
+    assert "export type InitialSourceGrouping =" in client
     assert (
         spec["paths"]["/projects/{project_id}/source-pairs/resolve"]["post"]["operationId"]
         == "resolveSourcePair"

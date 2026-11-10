@@ -10602,6 +10602,140 @@ def test_review_writer_and_freeze_share_source_row_synchronization(database):
     assert release_count(owner, created.id) == 0
 
 
+@pytest.mark.parametrize("configured", [True, False])
+def test_initial_grouping_http_uses_shared_identity_and_explicit_trusted_reader(
+    database, restricted_auth_store, auth_account, configured
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    from labelloop_api.auth_schema import principal as auth_principal
+
+    operations = CanonicalManagementOperations(
+        service.engine,
+        service.store,
+        service.workspace_id,
+        grouping_objects=adapter.objects if configured else None,
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        path = f"/projects/{created.id}/source-assignments/initial"
+        body = payload.model_dump(mode="json")
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        assert client.post(path, json=body).status_code == 403
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-grouping",
+        }
+        assert (
+            client.post(path, json={**body, "split": "train"}, headers=headers).status_code == 422
+        )
+        assert initial_grouping_snapshot(owner, created.id) == before
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.post(path, json=body, headers=headers).status_code == 403
+        assert client.get(f"/projects/{created.id}").status_code == 200
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update().where(auth_principal.c.id == identity).values(role="admin")
+            )
+        response = client.post(path, json=body, headers=headers)
+        assert response.headers["cache-control"] == "no-store"
+        if configured:
+            assert response.status_code == 200, response.text
+            assert response.json()["revision"] == payload.expected_revision + 1
+            after = initial_grouping_snapshot(owner, created.id)
+            assert len(after[0]) == 4 and all(row.locked for row in after[0])
+            receipt = next(
+                row for row in after[2] if row.event_type == "management.publish_initial_grouping"
+            )
+            assert receipt.actor_id == identity and receipt.actor_kind == "human"
+            detail = client.get(f"/projects/{created.id}").json()
+            assert detail["sources"]["assignment_version"] == after[0][0].assignment_version
+            assert client.post(path, json=body, headers=headers).json() == response.json()
+            conflict = client.post(path, json={**body, "ontology_id": "other"}, headers=headers)
+            assert conflict.status_code == 409
+            assert initial_grouping_snapshot(owner, created.id) == after
+            no_regroup = client.post(
+                path,
+                json={**body, "expected_revision": response.json()["revision"]},
+                headers={**headers, "Idempotency-Key": "http-no-regroup"},
+            )
+            assert no_regroup.status_code == 422 and no_regroup.json() == {
+                "detail": "missing_evidence"
+            }
+            assert initial_grouping_snapshot(owner, created.id) == after
+        else:
+            assert response.status_code == 503
+            assert response.json() == {"detail": "management_unavailable"}
+            assert initial_grouping_snapshot(owner, created.id) == before
+        # Reader configuration does not enable asset admission.
+        assert (
+            client.post(
+                f"/projects/{created.id}/assets",
+                json={"expected_revision": 7, "original_base64": "aW1hZ2U=", "source_group": "new"},
+                headers={**headers, "Idempotency-Key": "no-admission"},
+            ).status_code
+            == 503
+        )
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("grant", ["source_split_assignment", "canonical_event"])
+def test_initial_grouping_http_grant_failure_is_atomic_and_recoverable(
+    database, restricted_auth_store, auth_account, grant
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, role = database
+    _, credentials = auth_account
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id, grouping_objects=adapter.objects
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-grouping-rollback",
+        }
+        path = f"/projects/{created.id}/source-assignments/initial"
+        with owner.begin() as connection:
+            connection.execute(text(f'REVOKE INSERT ON {grant} FROM "{role}"'))
+        with pytest.raises(DBAPIError):
+            client.post(path, json=payload.model_dump(mode="json"), headers=headers)
+        assert initial_grouping_snapshot(owner, created.id) == before
+        with owner.begin() as connection:
+            connection.execute(text(f'GRANT INSERT ON {grant} TO "{role}"'))
+        response = client.post(path, json=payload.model_dump(mode="json"), headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["revision"] == payload.expected_revision + 1
+        after = initial_grouping_snapshot(owner, created.id)
+        assert len(after[0]) == 4
+        assert sum(row.event_type == "management.publish_initial_grouping" for row in after[2]) == 1
+
+
 def initial_grouping_inputs(service, owner, *, duplicate=False):
     import random
     from types import SimpleNamespace

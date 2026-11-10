@@ -16,6 +16,7 @@ from .management_contracts import (
     ExportRead,
     GuideDraft,
     Identifier,
+    InitialSourceGrouping,
     JobAccepted,
     ManagementError,
     ProjectCreate,
@@ -213,6 +214,23 @@ def management_router(
             actor, idempotency_key, "publish_class_catalog", project_id, payload
         )
         return invoke(lambda: service.publish_class_catalog(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/source-assignments/initial",
+        response_model=Resource,
+        operation_id="publishInitialSourceGrouping",
+    )
+    def publish_initial_grouping(
+        project_id: Identifier,
+        payload: InitialSourceGrouping,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_initial_grouping", project_id, payload
+        )
+        return invoke(lambda: service.publish_initial_grouping(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/source-pairs/resolve",

@@ -3,15 +3,13 @@
 The canonical mutation caller holds the project lock and owns the transaction.
 Existing assignment history and all borderline evidence refuse: no holdout can
 be laundered and no unreviewed similarity band is silently separated or merged.
-This internal adapter is not yet an HTTP operation or an admission grant.
+The opt-in facade supplies an explicit trusted reader; this is no admission grant.
 """
 
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from importlib.metadata import version as library_version
-from typing import Annotated
 
-from pydantic import Field
 from sqlalchemy import insert, select, update
 
 from labelloop_compiler.ingest import MAX_UPLOAD_BYTES, imaging_toolchain
@@ -26,7 +24,7 @@ from labelloop_core.grouping import (
 
 from .management_canonical import CanonicalManagementMutations
 from .management_compile_worker import CompilationObjects
-from .management_contracts import Digest, Identifier, ManagementError, Mutation, Resource, Revision
+from .management_contracts import InitialSourceGrouping, ManagementError, Resource
 from .management_grouping_evidence import collect_source_grouping_evidence
 from .management_ontology import validate_ontology
 from .management_ports import ManagementFailure
@@ -46,15 +44,6 @@ from .schema import (
 MAX_SOURCES = 256
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_RELATIONS = 65536
-
-
-class InitialSourceGrouping(Mutation):
-    ontology_id: Identifier
-    source_policy_sha256: Digest
-    # Zero pins the absence of a revision, not verified background.
-    annotation_revisions: Annotated[
-        dict[Identifier, Revision], Field(min_length=2, max_length=MAX_SOURCES)
-    ]
 
 
 def reject(code):

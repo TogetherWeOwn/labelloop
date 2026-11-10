@@ -1269,10 +1269,10 @@ completion precommit invisibility. ML artifacts remain explicitly synthetic.
 No schema/client, migration, grant, scheduler, default mount or real-admission
 change is made. Full mounted HTTP acceptance and specialist gates remain open.
 
-## Initial grouping publication (internal, not mounted)
+## Initial grouping publication (opt-in, not mounted by default)
 
 `CanonicalInitialGrouping` consumes the existing original-raster collector and
-canonical mutation authority in one project-locked transaction. The strict internal
+canonical mutation authority in one project-locked transaction. The strict typed
 request pins project revision, current ontology, receipt-verified source-policy
 intent digest and exact source/annotation membership. Source-row locks synchronize
 with review writers before annotation pins/counts are read. No request selects a
@@ -1299,16 +1299,32 @@ The adapter admits at most 256 sources, the collector's per-raster byte/pixel ca
 and 64 MiB aggregate returned bytes; the trusted object reader still returns one
 whole object before byte-size validation, not a hard streaming-memory bound.
 
-Nine covering pure cases pass locally, including actual normalized fixture rasters,
-transitive constraints, core stratification parity, deterministic ordering, exact/
-pHash preservation, malformed pins and borderline/independence refusal. Twenty-five
-new disposable Actions DB cases are commissioned, not passed: atomic publication,
+The internal adapter is verified at `fdfccda245d26d7977e18bdaebc97556a2ad5068`:
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42777542242)
+passed 776 management DB, 24 ledger, 21 CPU and 1,836 unit cases (877 skipped),
+including the 25 first-publication DB cases. These cover atomic publication,
 replay/races, ownership/context/principal refusals, four missing-grant rollbacks,
 source-lock synchronization, historical/foreign-edge/pixel/byte-budget refusals and
-stale approval restoration. The existing DB role already has the necessary grants;
-no production grant, schema, migration, dependency, generated contract, HTTP operation,
-default mount, admission or startup change is introduced. External consumption waits
-for verification and explicit trusted-reader composition.
+stale approval restoration. This is prior-head internal evidence, not verification
+of the following HTTP binding or full bootstrap/quality acceptance.
+
+The opt-in router now exposes `publishInitialSourceGrouping` with the same strict
+request in the generated schemas/client and existing admin/session/CSRF boundary.
+`CanonicalManagementOperations` requires an explicit optional `grouping_objects`
+reader; missing capability fails closed after actor/context validation, and malformed
+reader configuration fails at construction without I/O. The upload store never
+implicitly grants read access. The delegate uses the existing publisher unchanged;
+no request supplies an object key, threshold or split. Default mounting, admission,
+worker startup, production grants, tables, migrations and dependencies are unchanged.
+
+Four additional disposable Actions DB cases are commissioned, not yet passed:
+restricted shared-session attribution/role reload, anonymous and CSRF refusal,
+missing-reader refusal, exact replay and conflicting-body refusal, no-regroup/history
+protection, and assignment/audit grant-failure rollback with same-key recovery.
+Transport cases cover forbidden assignment claims and malformed pins; composition
+cases cover missing/malformed trusted readers, unchanged arguments and no I/O during
+construction. These assertions and the new generated-client request await exact-head
+Actions. Fixture ingest remains explicit setup, not HTTP real-asset admission.
 
 ## Acceptance evidence still required
 
