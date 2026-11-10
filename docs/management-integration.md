@@ -944,20 +944,36 @@ are not a pass claim until exact-head Actions completes.
 The Actions ML job additionally runs
 `workers/ml/tests/test_management_pipeline.py` at 320 and 640. It reuses the
 API's existing disposable restricted-role fixtures and the checked-in non-game
-interface domain. Project creation, original-byte normalized ingest, canonical
-freeze, shared queue producers and request-bound runners are real adapters.
+interface domain. The expanded cases mount `CanonicalManagementOperations` through
+`create_app` in a test-only HTTPS client with the existing restricted SQL-backed
+session store. Project creation, authoritative freeze-plan reads/freeze, compilation,
+training and development-evaluation commands now pass through that HTTP boundary.
+Real request-bound queue runners execute and publish each accepted durable job.
 Training uses `LocalUltralyticsBackend` on CPU with a seeded local architecture;
 export uses `export_and_compare` with nonempty native/ONNX predictions, and the
 standalone development job uses `predict_samples` plus source-frame evaluation.
 No weights or images are downloaded, paid provider invoked or domain engine edited.
 
-The fixture owner seeds only the known annotation/completeness and materialized
-split evidence, and creates temporary test grants. Review writes use the existing
+Original-byte normalized ingest deliberately remains independent fixture setup,
+using the canonical adapter directly: the HTTP admission operation stays unavailable.
+The fixture owner seeds the known annotation/completeness and materialized split
+evidence, and creates temporary test grants. Review writes use the existing
 append-only revision transaction. These coarse fixture labels are not independently
-adjudicated gold. The test does not prove the setup/grouping producers, HTTP
-sessions/CSRF end to end, production role provisioning or real asset-admission
-clearance. Request-time canonical and worker calls retain restricted roles and
-normal receipt, revision, retry, lineage and application-fence checks.
+adjudicated gold. The cases do not prove setup/grouping producers, production role
+provisioning, real asset-admission clearance or default app mounting. Request-time
+authentication, canonical and worker calls retain restricted roles and normal
+receipt, revision, retry, lineage and application-fence checks.
+
+The expanded cases check CSRF refusal and exact HTTP replay for every command,
+queued/completed job reads, server-configured profile reads, completion attribution
+to the persisted session principal, and post-completion replay without another
+application. After a persisted role change, the same session can read actual
+training/export/development details and completed resource/job indices as a reviewer,
+but cannot replay an admin mutation. Logout revokes subsequent reads. The retained
+pipeline artifact explicitly records this HTTP scope and the admission/grouping
+limitations. These changed cases are commissioned, **not verified until their
+exact-head Actions run passes**; prior direct-adapter evidence below does not prove
+the expanded HTTP path.
 
 Immutable server training profiles can now pin an optional `InferencePolicy`.
 Its shape must match the delivered recipe; omission preserves the previous

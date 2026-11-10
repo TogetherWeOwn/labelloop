@@ -1,8 +1,8 @@
-"""Disposable Actions DB -> durable queue -> actual CPU adapters, never qualification.
+"""Opt-in HTTP -> disposable Actions DB -> queue -> CPU, never qualification.
 
-Reuse the API's restricted-role fixtures, not another store or runner. Annotation
-and grouping evidence is explicitly seeded from licence-clean fixture metadata;
-this does not prove setup publication, real admission or a mounted HTTP pipeline.
+Reuse the API's restricted session/canonical/worker roles and actual adapters.
+Admission and annotation/grouping remain explicit licence-clean fixture setup;
+this does not prove setup publication, real admission or default app mounting.
 """
 
 import base64
@@ -10,19 +10,19 @@ import hashlib
 import json
 import os
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import insert, select, text
 
-from labelloop_api.management_contracts import AssetIngest, ProjectCreate, ReleaseFreeze
-from labelloop_api.management_evaluation import (
-    ApprovedDevelopmentProtocol,
-    CanonicalManagementEvaluation,
-)
-from labelloop_api.management_training import ApprovedTrainingProfile, CanonicalManagementTraining
+from labelloop_api.main import create_app
+from labelloop_api.management_contracts import AssetIngest, JobAccepted, ProjectCreate, Resource
+from labelloop_api.management_evaluation import ApprovedDevelopmentProtocol
+from labelloop_api.management_operations import CanonicalManagementOperations
+from labelloop_api.management_training import ApprovedTrainingProfile
 from labelloop_api.management_workers import (
     compilation_runner,
     local_evaluation_runner,
@@ -44,25 +44,64 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def seed_reviewed_fixture(service, owner):
+@pytest.fixture
+def management_http(database, restricted_auth_store, auth_account):
+    service, _, _ = database
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+
+    def configure(**settings):
+        nonlocal operations
+        # Trusted fixture-server configuration, never an HTTP/request-selected profile.
+        operations = replace(operations, **settings)
+
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.get("/projects").status_code == 401
+        login = client.post("/auth/login", json=auth_account[1], headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {"origin": origin, "x-csrf-token": login.json()["csrf_token"]}
+        yield client, headers, configure
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.get("/projects").status_code == 401
+
+
+def http_command(client, headers, path, body, key, status):
+    headers = {**headers, "Idempotency-Key": key}
+    denied = client.post(path, json=body, headers={"Idempotency-Key": key})
+    assert denied.status_code == 403 and denied.json() == {"detail": "csrf_denied"}
+    response = client.post(path, json=body, headers=headers)
+    assert response.status_code == status, response.text
+    replay = client.post(path, json=body, headers=headers)
+    assert replay.status_code == status and replay.json() == response.json()
+    assert response.headers["cache-control"] == "no-store"
+    return response.json()
+
+
+def seed_reviewed_fixture(service, owner, client, headers):
     from load_canonical import FixtureDomain
-    from test_management_canonical_db import Actor, create, freeze, ingest
+    from test_management_canonical_db import Actor, ingest
 
     fixture = FixtureDomain("cc0-interface")
     scope = "Coarse visible interface rectangles for fixture wiring only"
-    created = create(
-        service,
-        ProjectCreate(
-            project_key="cpu-fixture-" + uuid4().hex,
-            scope=scope,
-            domain="software-interface",
-            annotation_guide="Fixture-only visible extents; not independent gold",
-            source_permitted_use="Licence-clean checked-in fixture; see fixture manifest",
-            classes=[
-                {"stable_id": item.stable_id, "name": item.name, "definition": item.definition}
-                for item in fixture.release.ontology.classes
-            ],
-        ),
+    created = Resource.model_validate(
+        http_command(
+            client,
+            headers,
+            "/projects",
+            ProjectCreate(
+                project_key="cpu-fixture-" + uuid4().hex,
+                scope=scope,
+                domain="software-interface",
+                annotation_guide="Fixture-only visible extents; not independent gold",
+                source_permitted_use="Licence-clean checked-in fixture; see fixture manifest",
+                classes=[
+                    {"stable_id": item.stable_id, "name": item.name, "definition": item.definition}
+                    for item in fixture.release.ontology.classes
+                ],
+            ).model_dump(mode="json"),
+            "cpu-create",
+            201,
+        )
     )
     with owner.connect() as connection:
         ontology = connection.execute(
@@ -154,15 +193,21 @@ def seed_reviewed_fixture(service, owner):
                 objects=objects,
                 training_eligible=True,
             )
-    release = freeze(
-        service,
-        created.id,
-        ReleaseFreeze(
-            expected_revision=1 + len(revisions),
-            ontology_id=ontology.ontology_key,
-            assignment_version=assignment.assignment_version,
-            annotation_revisions=revisions,
-        ),
+    plan = client.get(f"/projects/{created.id}/freeze-plan")
+    assert plan.status_code == 200, plan.text
+    payload = plan.json()["payload"]
+    assert payload["annotation_revisions"] == revisions
+    assert payload["expected_revision"] == 1 + len(revisions)
+    assert payload["ontology_id"] == ontology.ontology_key
+    assert payload["assignment_version"] == assignment.assignment_version
+    release = Resource.model_validate(
+        http_command(
+            client, headers, f"/projects/{created.id}/dataset-releases", payload, "cpu-freeze", 201
+        )
+    )
+    detail = client.get(f"/dataset-releases/{release.id}")
+    assert detail.status_code == 200 and detail.json()["resource"] == release.model_dump(
+        mode="json"
     )
     return created, release, fixture, source_ids
 
@@ -189,16 +234,10 @@ def saved_job(owner, accepted):
 
 
 @pytest.mark.parametrize("side", [320, 640])
-def test_management_queue_runs_real_cpu_project_to_export(
-    database, compilation, compiler_worker, tmp_path, side
+def test_management_http_runs_real_cpu_project_to_export(
+    database, compilation, compiler_worker, management_http, auth_account, tmp_path, side
 ):
     import torch
-    from test_management_canonical_db import (
-        Actor,
-        compile_request,
-        evaluation_request,
-        training_request,
-    )
     from ultralytics import YOLO
     from ultralytics.utils import SETTINGS
 
@@ -214,9 +253,16 @@ def test_management_queue_runs_real_cpu_project_to_export(
                 f'model_release, model_evaluation TO "{role}"'
             )
         )
-    created, release, fixture, source_ids = seed_reviewed_fixture(service, owner)
+    client, headers, configure = management_http
+    identity, _ = auth_account
+    created, release, fixture, source_ids = seed_reviewed_fixture(service, owner, client, headers)
     recipe = f"full-letterbox-{side}-v1"
-    compiled = compile_request(compilation, release.id, recipe=recipe)
+    compile_path = f"/dataset-releases/{release.id}/variants"
+    compile_body = {"expected_revision": 1, "recipe_id": recipe}
+    compiled = JobAccepted.model_validate(
+        http_command(client, headers, compile_path, compile_body, "cpu-compile", 202)
+    )
+    assert client.get(f"/resources/job/{compiled.job_id}").json()["state"] == "queued"
     compiler = compilation_runner(
         compiler_worker.store, compiler_worker.objects, service.workspace_id, job_id=compiled.job_id
     )
@@ -244,8 +290,16 @@ def test_management_queue_runs_real_cpu_project_to_export(
         digest,
         inference_policy=InferencePolicy(side, conf=0.005, max_det=1000),
     )
-    training = CanonicalManagementTraining(service, compilation.enqueue, (profile,))
-    accepted = training_request(training, compiled.resource.id, profile=profile.id)
+    configure(profiles=(profile,))
+    profiles = client.get(f"/projects/{created.id}/training-profiles")
+    assert profiles.status_code == 200 and profiles.json()["profiles"] == [
+        profile.read().model_dump(mode="json")
+    ]
+    training_path = f"/variants/{compiled.resource.id}/training-runs"
+    training_body = {"expected_revision": 1, "training_profile_id": profile.id}
+    accepted = JobAccepted.model_validate(
+        http_command(client, headers, training_path, training_body, "cpu-training", 202)
+    )
     paths, exports = [], []
 
     def backend(**kwargs):
@@ -296,8 +350,16 @@ def test_management_queue_runs_real_cpu_project_to_export(
     protocol = ApprovedDevelopmentProtocol(
         UUID(created.id), "cpu-validation", 1, UUID(compiled.resource.id)
     )
-    evaluation = CanonicalManagementEvaluation(service, compilation.enqueue, (protocol,))
-    evaluated = evaluation_request(evaluation, model_id, release.id, protocol=protocol.id)
+    configure(protocols=(protocol,))
+    evaluation_path = f"/models/{model_id}/evaluations"
+    evaluation_body = {
+        "expected_revision": 1,
+        "dataset_release_id": release.id,
+        "protocol_id": protocol.id,
+    }
+    evaluated = JobAccepted.model_validate(
+        http_command(client, headers, evaluation_path, evaluation_body, "cpu-evaluation", 202)
+    )
     evaluator = local_evaluation_runner(
         compiler_worker.store,
         service.engine,
@@ -348,14 +410,71 @@ def test_management_queue_runs_real_cpu_project_to_export(
         ).all()
     completions = [row for row in events if row.actor_kind == "system"]
     assert {row.actor_id for row in completions} == {"cpu-compiler", "cpu-trainer", "cpu-evaluator"}
-    assert all(row.payload["requested_by"] == Actor().id for row in completions)
+    assert all(row.payload["requested_by"] == identity for row in completions)
     assert paths and all(not path.exists() for path in paths)
-    assert training_request(training, compiled.resource.id, profile=profile.id) == accepted
-    assert evaluation_request(evaluation, model_id, release.id, protocol=protocol.id) == evaluated
+    for path, body, key, result in (
+        (compile_path, compile_body, "cpu-compile", compiled),
+        (training_path, training_body, "cpu-training", accepted),
+        (evaluation_path, evaluation_body, "cpu-evaluation", evaluated),
+    ):
+        assert http_command(client, headers, path, body, key, 202) == result.model_dump(mode="json")
+        observed = client.get(f"/resources/job/{result.job_id}")
+        assert observed.status_code == 200 and observed.json()["state"] == "completed"
+        saved_job(owner, result)
+
+    # The same persisted role is reloaded on the next request; reads keep the same
+    # historical publication authority, but a reviewer cannot replay admin writes.
+    from labelloop_api.auth_schema import principal
+
+    with owner.begin() as connection:
+        connection.execute(
+            principal.update().where(principal.c.id == identity).values(role="reviewer")
+        )
+    training_detail = client.get(f"/training-runs/{accepted.resource.id}")
+    assert training_detail.status_code == 200, training_detail.text
+    assert training_detail.json()["training_profile_id"] == profile.id
+    assert training_detail.json()["resource"]["state"] == "completed"
+    assert training_detail.json()["variant_id"] == compiled.resource.id
+    exported = client.get(f"/models/{model_id}/export")
+    assert exported.status_code == 200, exported.text
+    assert exported.json()["weights_sha256"] == exports[0].weights_sha256
+    assert exported.json()["export_sha256"] == exports[0].export_sha256
+    evaluation_detail = client.get(f"/evaluations/{evaluated.resource.id}")
+    assert evaluation_detail.status_code == 200, evaluation_detail.text
+    detail = evaluation_detail.json()
+    assert detail["report"] == report and detail["qualification"] == "unqualified"
+    assert detail["qualification_id"] is None and detail["incumbent_id"] is None
+    assert detail["opened_final_test_count"] == 0
+    for kind, identifiers in (
+        ("variant", {compiled.resource.id}),
+        ("training-run", {accepted.resource.id}),
+        ("model", {model_id}),
+        ("evaluation", {evaluated.resource.id}),
+        ("job", {compiled.job_id, accepted.job_id, evaluated.job_id}),
+    ):
+        page = client.get(f"/projects/{created.id}/resources", params={"kind": kind})
+        assert page.status_code == 200, page.text
+        assert {item["id"] for item in page.json()["items"]} == identifiers
+        assert page.headers["cache-control"] == "no-store"
+    forbidden = client.post(
+        training_path, json=training_body, headers={**headers, "Idempotency-Key": "cpu-training"}
+    )
+    assert forbidden.status_code == 403 and forbidden.json() == {"detail": "permission_denied"}
     (tmp_path / "management-pipeline.json").write_text(
         json.dumps(
             {
-                "scope": "disposable-db-real-cpu-not-qualification-or-http-admission",
+                "scope": "opt-in-http-disposable-db-real-cpu-not-real-admission-or-qualification",
+                "http": {
+                    "identity": "restricted-shared-session",
+                    "commands": ["create", "freeze", "compile", "train", "evaluate"],
+                    "csrf_refusals": True,
+                    "completed_replays": True,
+                    "reviewer_reads": True,
+                    "reviewer_mutation_refusal": True,
+                    "admission": "independent-canonical-fixture-setup-only",
+                    "grouping_and_annotation": "seeded-fixture-not-producer-acceptance",
+                    "default_mount": False,
+                },
                 "recipe": recipe,
                 "project_id": created.id,
                 "dataset_release_id": release.id,
