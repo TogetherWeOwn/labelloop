@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from minio import Minio
 from recovery_fixture import seed
 
+from labelloop_api import schema as db
 from labelloop_api.backup_manifest import SCHEMA_REVISION, audit_seal, digest, encode
 from labelloop_api.backup_store import (
     COLUMNS,
@@ -24,7 +25,13 @@ from labelloop_api.backup_store import (
     restored_reader,
     validate_snapshot,
 )
-from labelloop_api.model_store import change_registry, json_record, load_registry, stored_report
+from labelloop_api.model_store import (
+    change_registry,
+    json_record,
+    load_registry,
+    record_digest,
+    stored_report,
+)
 from labelloop_api.recovery_release import load_canonical_release
 from labelloop_compiler.compiler import compile_dataset
 from labelloop_core.domain import Recipe
@@ -156,6 +163,58 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
                 # A fully deleted promotion history must not validate even when
                 # the head revision is resealed to zero with pointers intact.
                 cases.append(reseal(snapshot, empty_events))
+
+                def tamper_last_champion(document):
+                    table = document["tables"]["promotion_event"]
+                    table["rows"][-1]["record"]["after"]["champion"]["weights_sha256"] = "f" * 64
+                    table["sha256"] = digest(encode(table["rows"]))
+                    document["audit"]["promotion_event"] = audit_seal(table["rows"]).model_dump()
+
+                # A tampered champion payload in the final audit state must not
+                # validate even when its seal is recomputed.
+                cases.append(reseal(snapshot, tamper_last_champion))
+
+                def backdate_first_event(document):
+                    table = document["tables"]["promotion_event"]
+                    first = table["rows"][0]
+                    first["record"]["before"]["revision"] = 4
+                    first["record"]["before"]["champion"] = first["record"]["after"]["champion"]
+                    table["sha256"] = digest(encode(table["rows"]))
+                    document["audit"]["promotion_event"] = audit_seal(table["rows"]).model_dump()
+
+                # The audit origin is part of the contract: a first event claiming
+                # a revision-4 predecessor must not validate even when resealed.
+                cases.append(reseal(snapshot, backdate_first_event))
+
+                def drop_initial_evaluation(document):
+                    evaluations = document["tables"]["evaluation_run"]
+                    dropped = {
+                        row["id"]
+                        for row in evaluations["rows"]
+                        if row["run_key"] in {"eval-320", "eval-640"}
+                    }
+                    evaluations["rows"] = [
+                        row for row in evaluations["rows"] if row["id"] not in dropped
+                    ]
+                    evaluations["sha256"] = digest(encode(evaluations["rows"]))
+                    links = document["tables"]["model_evaluation"]
+                    links["rows"] = [
+                        row for row in links["rows"] if row["evaluation_id"] not in dropped
+                    ]
+                    links["sha256"] = digest(encode(links["rows"]))
+
+                # Removing an initial evaluation and its links leaves no dangling
+                # SQL foreign key, but the embedded lineage must still fail.
+                cases.append(reseal(snapshot, drop_initial_evaluation))
+
+                def tamper_recipe_policy(document):
+                    table = document["tables"]["preprocessing_recipe"]
+                    table["rows"][0]["policy"]["interpolation"] = "tampered"
+                    table["sha256"] = digest(encode(table["rows"]))
+
+                # A restored policy that disagrees with its variant manifest must
+                # not validate even when only the recipe table is resealed.
+                cases.append(reseal(snapshot, tamper_recipe_policy))
                 for case in cases:
                     with pytest.raises(ValueError):
                         restore_fixture(
@@ -172,14 +231,42 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
             with target.begin() as connection:
                 release = load_canonical_release(connection, fixture.release.release_id)
                 assert release.assignment == fixture.release.assignment
+                # Regeneration inputs come from the restored database, never from
+                # seed output: source results are only an oracle for comparison.
+                restored = {
+                    row["recipe_key"]: row
+                    for row in connection.execute(
+                        sa.select(
+                            db.preprocessing_recipe.c.recipe_key,
+                            db.preprocessing_recipe.c.policy,
+                            db.preprocessing_recipe.c.immutable,
+                            db.yolo_dataset_variant.c.class_map,
+                            db.yolo_dataset_variant.c.file_manifest,
+                        ).join(
+                            db.yolo_dataset_variant,
+                            db.yolo_dataset_variant.c.recipe_id == db.preprocessing_recipe.c.id,
+                        )
+                    )
+                    .mappings()
+                    .all()
+                }
+                assert set(restored) == set(manifests)
                 for recipe, manifest in manifests.items():
+                    policy = restored[recipe]["policy"]
+                    recipe_input = Recipe(
+                        **(policy | {"padding_color": tuple(policy["padding_color"])})
+                    )
+                    assert restored[recipe]["immutable"]
+                    assert restored[recipe]["file_manifest"]["recipe"] == policy
+                    assert (
+                        restored[recipe]["file_manifest"]["class_map"]
+                        == restored[recipe]["class_map"]
+                    )
+                    assert restored[recipe]["file_manifest"] == manifest
                     regenerated = tmp_path / "after" / recipe
-                    policy = manifest["recipe"] | {
-                        "padding_color": tuple(manifest["recipe"]["padding_color"])
-                    }
                     compile_dataset(
                         release,
-                        Recipe(**policy),
+                        recipe_input,
                         regenerated,
                         restored_reader(connection, restored_objects),
                     )
@@ -187,10 +274,21 @@ def test_isolated_restore_regenerates_variants_lineage_and_recipe_rollback(tmp_p
                     recovered = load_registry(connection, release.project_id, recipe)
                     assert recovered == original_heads[recipe]
                     assert recovered.champion and recovered.rollback
+                    assert record_digest(policy) == recovered.champion.preprocessing_sha256
                     report = stored_report(
                         connection, recovered.champion, recovered.champion.evaluation_run_ids[0]
                     )
                     assert report.weights_sha256 == recovered.champion.weights_sha256
+                    # A wrong size must not reproduce the stored variant.
+                    swapped = replace(
+                        recipe_input,
+                        output_size=640 if recipe_input.output_size == 320 else 320,
+                    )
+                    wrong = tmp_path / "wrong" / recipe
+                    compile_dataset(
+                        release, swapped, wrong, restored_reader(connection, restored_objects)
+                    )
+                    assert hashes(wrong) != hashes(tmp_path / "before" / recipe)
                 recipe = "full-letterbox-320-v1"
                 changed = change_registry(
                     connection,

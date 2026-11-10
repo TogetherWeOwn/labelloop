@@ -24,6 +24,9 @@ from labelloop_api.backup_store import (
     bounded_read,
     capture_objects,
     check_chains,
+    check_evaluation_lineage,
+    check_promotion_transition,
+    check_recipe_lineage,
     fresh_fixture_bucket,
     registry_continuity,
     restore_fixture,
@@ -196,3 +199,250 @@ def test_fixture_bucket_refuses_remote_or_mismatched_client_before_creation():
             with fresh_fixture_bucket(client, endpoint=endpoint):
                 pytest.fail("unreachable")
     client.make_bucket.assert_not_called()
+
+
+def _model_record(**overrides):
+    return {
+        "release_id": "model",
+        "project_id": "p",
+        "recipe_id": "r",
+        "weights_sha256": "a" * 64,
+        "preprocessing_sha256": "1" * 64,
+        "class_map_sha256": "2" * 64,
+        "class_ids": ["a"],
+        "policy": {"interpolation": "linear"},
+        "ultralytics_version": "8.4.204",
+        "torch_version": "2.0",
+        "export_sha256": "3" * 64,
+        "export_format": "onnx",
+        "static_input_signature": [1, 3, 320, 320],
+        "evaluation_run_ids": ["eval-1"],
+        "tiling_mode": "off",
+        **overrides,
+    }
+
+
+def _registry_state(revision, champion=None, rollback=None):
+    return {
+        "project_id": "p",
+        "recipe_id": "r",
+        "revision": revision,
+        "champion": champion,
+        "rollback": rollback,
+    }
+
+
+def test_first_promotion_must_start_from_the_empty_registry_state():
+    row = {
+        "project_id": "p",
+        "recipe_id": "r",
+        "revision": 1,
+        "action": "promote",
+        "record": {
+            "before": _registry_state(4, champion=_model_record()),
+            "after": _registry_state(1, champion=_model_record()),
+        },
+    }
+    with pytest.raises(ValueError, match="empty revision-zero"):
+        check_promotion_transition(row, first=True)
+
+
+def test_promotion_must_advance_to_a_distinct_champion():
+    model = _model_record()
+    row = {
+        "project_id": "p",
+        "recipe_id": "r",
+        "revision": 2,
+        "action": "promote",
+        "record": {
+            "before": _registry_state(1, champion=model),
+            "after": _registry_state(2, champion=model, rollback=model),
+        },
+    }
+    with pytest.raises(ValueError, match="distinct champion"):
+        check_promotion_transition(row, first=False)
+
+
+def test_valid_promotion_and_rollback_transitions_pass():
+    first = _model_record(release_id="first")
+    second = _model_record(release_id="second")
+    check_promotion_transition(
+        {
+            "project_id": "p",
+            "recipe_id": "r",
+            "revision": 1,
+            "action": "promote",
+            "record": {
+                "before": _registry_state(0),
+                "after": _registry_state(1, champion=first),
+            },
+        },
+        first=True,
+    )
+    check_promotion_transition(
+        {
+            "project_id": "p",
+            "recipe_id": "r",
+            "revision": 2,
+            "action": "promote",
+            "record": {
+                "before": _registry_state(1, champion=first),
+                "after": _registry_state(2, champion=second, rollback=first),
+            },
+        },
+        first=False,
+    )
+    check_promotion_transition(
+        {
+            "project_id": "p",
+            "recipe_id": "r",
+            "revision": 3,
+            "action": "rollback",
+            "record": {
+                "before": _registry_state(2, champion=second, rollback=first),
+                "after": _registry_state(3, champion=first, rollback=second),
+            },
+        },
+        first=False,
+    )
+
+
+def test_registry_payload_must_restate_the_restored_model_record():
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["evaluation_run"].rows = [
+        {
+            "id": "e1",
+            "run_key": "eval-1",
+            "training_run_id": "t",
+            "variant_id": "v",
+            "record": {
+                "run_id": "eval-1",
+                "weights_sha256": "a" * 64,
+                "policy": {"interpolation": "linear"},
+            },
+        }
+    ]
+    model_row = {
+        "id": "m",
+        "release_key": "model",
+        "training_run_id": "t",
+        "project_id": "p",
+        "recipe_id": "r",
+        "record": _model_record(),
+    }
+    tables["model_release"].rows = [model_row]
+    tables["model_evaluation"].rows = [{"model_id": "m", "evaluation_id": "e1"}]
+    tables["promotion_event"].rows = [
+        {
+            "project_id": "p",
+            "recipe_id": "r",
+            "revision": 1,
+            "action": "promote",
+            "record": {
+                "before": _registry_state(0),
+                "after": _registry_state(1, champion=_model_record(weights_sha256="f" * 64)),
+            },
+        }
+    ]
+    with pytest.raises(ValueError, match="registry payload"):
+        check_evaluation_lineage(tables)
+
+
+def test_unresolved_embedded_evaluation_lineage_fails_before_target_access():
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["training_run"].rows = [
+        {
+            "id": "t",
+            "run_key": "train-1",
+            "variant_id": "v",
+            "record": {
+                "request": {"run_id": "train-1"},
+                "checkpoints": [{"sha256": "a" * 64, "evaluation_run_id": "missing"}],
+                "selected": {"evaluation_run_id": "missing"},
+            },
+        }
+    ]
+    with pytest.raises(ValueError, match="unresolved checkpoint evaluation"):
+        check_evaluation_lineage(tables)
+
+
+def test_model_evaluation_must_resolve():
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["model_release"].rows = [
+        {
+            "id": "m",
+            "release_key": "model",
+            "training_run_id": "t",
+            "project_id": "p",
+            "recipe_id": "r",
+            "record": _model_record(evaluation_run_ids=["missing"]),
+        }
+    ]
+    with pytest.raises(ValueError, match="unresolved model evaluation"):
+        check_evaluation_lineage(tables)
+
+
+def test_variant_recipe_policy_mismatch_fails_validation():
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    policy = {"interpolation": "linear", "padding_color": [0, 0, 0]}
+    tables["preprocessing_recipe"].rows = [{"id": "recipe", "recipe_key": "k", "policy": policy}]
+    tables["yolo_dataset_variant"].rows = [
+        {
+            "id": "v",
+            "recipe_id": "recipe",
+            "class_map": {"a": 0},
+            "file_manifest": {
+                "recipe": policy | {"interpolation": "tampered"},
+                "class_map": {"a": 0},
+            },
+        }
+    ]
+    with pytest.raises(ValueError, match="recipe"):
+        check_recipe_lineage(tables)
+
+
+def test_restored_recipe_chain_rejects_tampered_preprocessing_identity():
+    policy = {"interpolation": "linear", "padding_color": [0, 0, 0]}
+    file_manifest = {
+        "recipe": policy,
+        "class_map": {"a": 0},
+        "file_hashes": {"class-map.json": "c" * 64},
+    }
+    manifest_digest = digest((json.dumps(file_manifest, sort_keys=True, indent=2) + "\n").encode())
+    snapshot = empty_snapshot()
+    tables = parse_manifest(snapshot.manifest, expected_sha256=snapshot.sha256).tables
+    tables["preprocessing_recipe"].rows = [{"id": "recipe", "recipe_key": "k", "policy": policy}]
+    tables["yolo_dataset_variant"].rows = [
+        {"id": "v", "recipe_id": "recipe", "class_map": {"a": 0}, "file_manifest": file_manifest}
+    ]
+    tables["training_run"].rows = [
+        {
+            "id": "t",
+            "run_key": "train-1",
+            "variant_id": "v",
+            "record": {
+                "request": {
+                    "dataset_manifest_sha256": manifest_digest,
+                    "class_map_sha256": "c" * 64,
+                }
+            },
+        }
+    ]
+    tables["model_release"].rows = [
+        {
+            "id": "m",
+            "release_key": "model",
+            "training_run_id": "t",
+            "project_id": "p",
+            "recipe_id": "recipe",
+            "record": _model_record(preprocessing_sha256="0" * 64, class_map_sha256="c" * 64),
+        }
+    ]
+    with pytest.raises(ValueError, match="preprocessing identity"):
+        check_recipe_lineage(tables)
+    tables["model_release"].rows[0]["record"]["preprocessing_sha256"] = digest(encode(policy))
+    check_recipe_lineage(tables)

@@ -1,6 +1,7 @@
 """M1/M2 fixture snapshot ports and fail-closed isolated restore. No live restore CLI."""
 
 import datetime
+import json
 import re
 import uuid
 from collections.abc import Callable, Iterator
@@ -232,6 +233,268 @@ def registry_continuity(previous: dict, current: dict) -> bool:
     return previous == current
 
 
+_REGISTRY_KEYS = ("project_id", "recipe_id", "revision", "champion", "rollback")
+_MODEL_RELEASE_KEYS = (
+    "release_id",
+    "project_id",
+    "recipe_id",
+    "weights_sha256",
+    "preprocessing_sha256",
+    "class_map_sha256",
+    "class_ids",
+    "policy",
+    "ultralytics_version",
+    "torch_version",
+    "export_sha256",
+    "export_format",
+    "static_input_signature",
+    "evaluation_run_ids",
+    "tiling_mode",
+)
+
+
+def _nested(mapping: dict, key: str) -> dict:
+    value = mapping.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"incomplete {key} record in restored inventory")
+    return value
+
+
+def check_promotion_transition(row: dict, *, first: bool) -> None:
+    """One promotion event must advance its own before/after state by exactly one revision.
+
+    The first event of a scope must record the empty revision-zero state; every event
+    must name its scope and advance champion/rollback by its own action.
+    """
+    revision = row.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("invalid revision in promotion audit")
+    record = _nested(row, "record")
+    states = []
+    for side in ("before", "after"):
+        state = record.get(side)
+        if not isinstance(state, dict) or set(state) != set(_REGISTRY_KEYS):
+            raise ValueError("incomplete registry state in promotion audit")
+        if type(state["revision"]) is not int or (state["project_id"], state["recipe_id"]) != (
+            row["project_id"],
+            row["recipe_id"],
+        ):
+            raise ValueError("promotion audit scope or revision mismatch")
+        states.append(state)
+    before, after = states
+    if first and (
+        before["revision"] != 0 or before["champion"] is not None or before["rollback"] is not None
+    ):
+        raise ValueError("registry audit does not start from the empty revision-zero state")
+    if before["revision"] != revision - 1 or after["revision"] != revision:
+        raise ValueError("promotion audit revision transition mismatch")
+    action = row.get("action")
+    if action == "promote":
+        if after["champion"] is None:
+            raise ValueError("promotion must advance a champion")
+        champion = after["champion"]
+        if not isinstance(champion, dict) or "release_id" not in champion:
+            raise ValueError("incomplete champion payload in promotion audit")
+        if before["champion"] is not None and champion.get("release_id") == (
+            before["champion"].get("release_id") if isinstance(before["champion"], dict) else None
+        ):
+            raise ValueError("promotion must advance to a distinct champion")
+        if after["rollback"] != before["champion"]:
+            raise ValueError("promotion rollback transition mismatch")
+    elif action == "rollback":
+        if before["rollback"] is None:
+            raise ValueError("rollback requires a known-good rollback release")
+        if after["champion"] != before["rollback"] or after["rollback"] != before["champion"]:
+            raise ValueError("rollback transition mismatch")
+    else:
+        raise ValueError("unknown registry action in promotion audit")
+
+
+def check_model_contract(payload: dict, row: dict) -> None:
+    """The audited payload must restate the restored model row, modulo evaluation growth."""
+    record = _nested(row, "record")
+    if set(record) != set(_MODEL_RELEASE_KEYS) or set(payload) != set(_MODEL_RELEASE_KEYS):
+        raise ValueError("registry payload disagrees with the model release contract")
+    for key in _MODEL_RELEASE_KEYS:
+        if key == "evaluation_run_ids":
+            ids = payload[key]
+            if (
+                not isinstance(record[key], list)
+                or not isinstance(ids, list)
+                or len(set(record[key])) != len(record[key])
+                or len(set(ids)) != len(ids)
+                or not set(record[key]).issubset(set(ids))
+            ):
+                raise ValueError("registry payload evaluation evidence disagrees")
+        elif payload[key] != record[key]:
+            raise ValueError("registry payload disagrees with restored model release record")
+
+
+def check_evaluation_lineage(tables: dict[str, TableInventory]) -> None:
+    """Every JSON-embedded evaluation reference must resolve to restored evidence.
+
+    SQL foreign keys cannot see these references, so a deleted evaluation row and its
+    links would otherwise restore silently and fail only at first report access.
+    """
+    evaluations = {row["run_key"]: row for row in tables["evaluation_run"].rows}
+    evals_by_id = {row["id"]: row for row in tables["evaluation_run"].rows}
+    models_by_key = {row["release_key"]: row for row in tables["model_release"].rows}
+    models_by_id = {row["id"]: row for row in tables["model_release"].rows}
+
+    for run in tables["training_run"].rows:
+        record = _nested(run, "record")
+        request = _nested(record, "request")
+        checkpoints = record.get("checkpoints")
+        if (
+            request.get("run_id") != run["run_key"]
+            or not isinstance(checkpoints, list)
+            or not checkpoints
+        ):
+            raise ValueError("training lineage identity mismatch")
+        seen = []
+        for checkpoint in checkpoints:
+            if not isinstance(checkpoint, dict):
+                raise ValueError("incomplete checkpoint record in training lineage")
+            evaluation = evaluations.get(checkpoint.get("evaluation_run_id"))
+            if evaluation is None:
+                raise ValueError("unresolved checkpoint evaluation lineage")
+            if (
+                evaluation["training_run_id"] != run["id"]
+                or evaluation["variant_id"] != run["variant_id"]
+            ):
+                raise ValueError("evaluation training lineage mismatch")
+            evidence = _nested(evaluation, "record")
+            if evidence.get("weights_sha256") != checkpoint.get("sha256"):
+                raise ValueError("checkpoint evaluation artifact mismatch")
+            seen.append(checkpoint.get("evaluation_run_id"))
+        selected = _nested(record, "selected")
+        if selected.get("evaluation_run_id") not in seen:
+            raise ValueError("selected checkpoint disagrees with checkpoint evidence")
+
+    for evaluation in tables["evaluation_run"].rows:
+        if _nested(evaluation, "record").get("run_id") != evaluation["run_key"]:
+            raise ValueError("evaluation lineage identity mismatch")
+
+    for model in tables["model_release"].rows:
+        record = _nested(model, "record")
+        if record.get("release_id") != model["release_key"]:
+            raise ValueError("model release identity mismatch")
+        ids = record.get("evaluation_run_ids")
+        if not isinstance(ids, list) or not ids:
+            raise ValueError("model release needs evaluation evidence")
+        for run_id in ids:
+            evaluation = evaluations.get(run_id) if isinstance(run_id, str) else None
+            if evaluation is None:
+                raise ValueError("unresolved model evaluation lineage")
+            if evaluation["training_run_id"] != model["training_run_id"]:
+                raise ValueError("model evaluation training lineage mismatch")
+            evidence = _nested(evaluation, "record")
+            if evidence.get("weights_sha256") != record.get("weights_sha256") or evidence.get(
+                "policy"
+            ) != record.get("policy"):
+                raise ValueError("model evaluation artifact mismatch")
+
+    linked: dict[str, set[str]] = {}
+    for link in tables["model_evaluation"].rows:
+        model = models_by_id.get(link["model_id"])
+        evaluation = evals_by_id.get(link["evaluation_id"])
+        if model is None or evaluation is None:
+            raise ValueError("unresolved model evaluation link")
+        if evaluation["training_run_id"] != model["training_run_id"]:
+            raise ValueError("model evaluation link training lineage mismatch")
+        if _nested(evaluation, "record").get("weights_sha256") != _nested(model, "record").get(
+            "weights_sha256"
+        ):
+            raise ValueError("model evaluation link artifact mismatch")
+        linked.setdefault(link["model_id"], set()).add(evaluation["run_key"])
+    for model in tables["model_release"].rows:
+        if not set(_nested(model, "record")["evaluation_run_ids"]).issubset(
+            linked.get(model["id"], set())
+        ):
+            raise ValueError("model evaluation links do not cover initial evidence")
+
+    for row in tables["promotion_event"].rows:
+        record = _nested(row, "record")
+        for field in ("evaluation_key", "incumbent_evaluation_key"):
+            key = record.get(field)
+            if key is not None and key not in evaluations:
+                raise ValueError("unresolved promotion evaluation lineage")
+        for side in ("before", "after"):
+            state = record.get(side)
+            if not isinstance(state, dict) or set(state) != set(_REGISTRY_KEYS):
+                raise ValueError("incomplete registry payload state in promotion audit")
+            for field in ("champion", "rollback"):
+                payload = state[field]
+                if payload is None:
+                    continue
+                if not isinstance(payload, dict):
+                    raise ValueError("incomplete registry payload in promotion audit")
+                model = models_by_key.get(payload.get("release_id"))
+                if model is None:
+                    raise ValueError("registry payload references a missing model release")
+                check_model_contract(payload, model)
+                for run_id in payload["evaluation_run_ids"]:
+                    if not isinstance(run_id, str):
+                        raise ValueError("unresolved registry evaluation lineage")
+                    evaluation = evaluations.get(run_id)
+                    if evaluation is None:
+                        raise ValueError("unresolved registry evaluation lineage")
+                    if evaluation["training_run_id"] != model["training_run_id"]:
+                        raise ValueError("registry evaluation training lineage mismatch")
+
+
+def check_recipe_lineage(tables: dict[str, TableInventory]) -> None:
+    """Recipe policy, variant manifest, training and model digests must agree.
+
+    Uses the same canonicalizations as model_store so a restored policy that disagrees
+    with its variant manifest or model identity is rejected before target access.
+    """
+    recipes = {row["id"]: row for row in tables["preprocessing_recipe"].rows}
+    variants = {row["id"]: row for row in tables["yolo_dataset_variant"].rows}
+    for variant in tables["yolo_dataset_variant"].rows:
+        recipe = recipes.get(variant["recipe_id"])
+        if recipe is None:
+            raise ValueError("variant references a missing recipe")
+        file_manifest = _nested(variant, "file_manifest")
+        if encode(file_manifest.get("recipe")) != encode(recipe["policy"]):
+            raise ValueError("variant recipe disagrees with restored recipe policy")
+        if encode(file_manifest.get("class_map")) != encode(variant["class_map"]):
+            raise ValueError("variant class mapping disagrees with its manifest")
+
+    trainings = {row["id"]: row for row in tables["training_run"].rows}
+    for run in tables["training_run"].rows:
+        variant = variants.get(run["variant_id"])
+        if variant is None:
+            raise ValueError("training references a missing variant")
+        request = _nested(_nested(run, "record"), "request")
+        file_manifest = _nested(variant, "file_manifest")
+        manifest_bytes = (json.dumps(file_manifest, sort_keys=True, indent=2) + "\n").encode()
+        if digest(manifest_bytes) != request.get("dataset_manifest_sha256"):
+            raise ValueError("training manifest digest disagrees with restored variant")
+        hashes = file_manifest.get("file_hashes")
+        if not isinstance(hashes, dict) or hashes.get("class-map.json") != request.get(
+            "class_map_sha256"
+        ):
+            raise ValueError("training class map digest disagrees with restored variant")
+
+    for model in tables["model_release"].rows:
+        recipe = recipes.get(model["recipe_id"])
+        run = trainings.get(model["training_run_id"])
+        variant = variants.get(run["variant_id"]) if run is not None else None
+        if recipe is None or run is None or variant is None:
+            raise ValueError("model references missing recipe or training lineage")
+        if variant["recipe_id"] != model["recipe_id"]:
+            raise ValueError("model recipe disagrees with its training variant")
+        record = _nested(model, "record")
+        if digest(encode(recipe["policy"])) != record.get("preprocessing_sha256"):
+            raise ValueError("model preprocessing identity disagrees with restored recipe policy")
+        hashes = _nested(variant, "file_manifest").get("file_hashes")
+        if not isinstance(hashes, dict) or hashes.get("class-map.json") != record.get(
+            "class_map_sha256"
+        ):
+            raise ValueError("model class map digest disagrees with restored variant")
+
+
 def check_chains(tables: dict[str, TableInventory]) -> None:
     # Every review is replayable while its expected revision is current; guards stay enabled.
     for _ in annotation_replay(tables):
@@ -252,6 +515,7 @@ def check_chains(tables: dict[str, TableInventory]) -> None:
         chain = events.setdefault(key, [])
         if row["revision"] != len(chain) + 1:
             raise ValueError("incomplete registry audit chain")
+        check_promotion_transition(row, first=not chain)
         if chain and not registry_continuity(chain[-1]["record"]["after"], row["record"]["before"]):
             raise ValueError("broken registry before/after audit chain")
         chain.append(row)
@@ -274,6 +538,8 @@ def check_chains(tables: dict[str, TableInventory]) -> None:
                     model and state[payload]["release_id"] != model["release_key"]
                 ):
                     raise ValueError("registry rollback payload mismatch")
+    check_evaluation_lineage(tables)
+    check_recipe_lineage(tables)
 
 
 def capture_fixture(connection: sa.Connection, store: ReadObjects) -> Snapshot:
