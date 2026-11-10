@@ -1140,6 +1140,43 @@ suite or claimed pass. The prior frozen-planning head `9af1a0a` passed
 not verify the new excluded-source extension. Editable crop/ROI planning, full
 setup/runtime/registry composition, final mounting and native reviews remain open.
 
+## Source-pair decision transactions (partial, opt-in)
+
+The facade now exposes `resolveSourcePair` through the same shared principal and
+canonical mutation authority. The current pending pair must have two owned,
+distinct endpoints and finite supported metric evidence. Its existing metric,
+value and algorithm are recorded alongside the human decision/reason. Client
+fields cannot replace endpoints, select splits or assert metric provenance.
+`related` adds a conservative canonical similarity edge; `unrelated` resolves the
+suggestion without deleting any automatic edge. The pair state, relation, project
+approval/qualification invalidation and attributed retry receipt commit together.
+
+Related decisions check all existing endpoint assignment versions. Both endpoints
+must already share a group, split and policy in every version, or neither may have
+assignment history. Otherwise the operation fails closed pending real regrouping/
+quarantine support, including when only an older version conflicts. Historical
+assignments, sources, annotations and releases are never rewritten. The helper
+reuses the canonical tables and group-closure contract, not a new grouping engine.
+No migration, production grant, dependency, default mount or asset admission is
+introduced. The disposable role adds only `UPDATE (review_state)` for this path.
+
+Twenty-seven new disposable Actions DB cases commission both metrics/decisions,
+receipt/retry/revision races, unchanged compatible history and automatic edges,
+five unsafe historical configurations, invalid persisted metrics, principal/
+workspace/endpoint/context refusals, four missing-grant rollbacks, stale approval
+restoration refusal and restricted shared-session/CSRF/replay/logout composition.
+The shared transport mutation matrix, strict-input and generated-client request
+cases also cover this operation. These cases are commissioned, not yet passed.
+Actual source-pair discovery, assignment publication, quarantine, full project/
+reference publication and final mounting remain incomplete.
+
+The prior exact `4969317` head passed
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42765426791):
+718 management DB, 24 ledger, 21 CPU, 58 queue and 1,796 unit cases (819 skipped),
+plus CodeQL/gitleaks. This verifies the excluded-source preview extension, not
+these pair changes or complete bootstrap. Previously inspected coarse CPU cohorts
+have zero recall; execution/equivalence is not quality or independent gold.
+
 ## Published export identity (partial, unmounted)
 
 `CanonicalManagementReads.read_export` resolves an owned persisted candidate in a

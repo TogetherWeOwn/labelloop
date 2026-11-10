@@ -131,6 +131,12 @@ class SourcePolicyDraft(Mutation):
         return self
 
 
+class SourcePairResolve(Mutation):
+    pair_id: Identifier
+    decision: Literal["related", "unrelated"]
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
 class SetupStepApprove(Mutation):
     # Classes require a published catalog; none of these steps qualify a pilot.
     step: Literal["scope", "guide", "classes", "sources"]

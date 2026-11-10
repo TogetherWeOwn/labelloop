@@ -32,6 +32,7 @@ from .management_contracts import (
     ResourcePage,
     ScopeDraft,
     SetupStepApprove,
+    SourcePairResolve,
     SourcePolicyDraft,
     TrainingStart,
     VariantCompile,
@@ -212,6 +213,23 @@ def management_router(
             actor, idempotency_key, "publish_class_catalog", project_id, payload
         )
         return invoke(lambda: service.publish_class_catalog(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/source-pairs/resolve",
+        response_model=Resource,
+        operation_id="resolveSourcePair",
+    )
+    def resolve_source_pair(
+        project_id: Identifier,
+        payload: SourcePairResolve,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "resolve_source_pair", project_id, payload
+        )
+        return invoke(lambda: service.resolve_source_pair(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/setup/sources",

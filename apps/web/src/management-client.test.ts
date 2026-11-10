@@ -194,6 +194,24 @@ describe('generated management client', () => {
     });
   });
 
+  it('resolves a server pair ID without supplying endpoints or split claims', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 3, pair_id: 'pair-a', decision: 'related' as const,
+      reason: 'Reviewed source relationship',
+    };
+    await client.resolveSourcePair({ project_id: 'p', 'idempotency-key': 'pair-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/source-pairs/resolve', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'pair-1',
+      },
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error', body: JSON.stringify(body),
+    });
+  });
+
   it('saves source policy intent without file, grouping or split authority', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

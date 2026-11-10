@@ -31,9 +31,11 @@ from .management_contracts import (
     Resource,
     ScopeDraft,
     SetupStepApprove,
+    SourcePairResolve,
     SourcePolicyDraft,
 )
 from .management_ontology import canonical_classes, validate_ontology
+from .management_pair_resolution import resolve_pair
 from .management_ports import ManagementFailure, ManagementPrincipal, MutationContext
 from .management_references import accept_reference as approve_reference
 from .management_references import enroll_reference as create_reference
@@ -520,6 +522,35 @@ class CanonicalManagementMutations:
                         "publish",
                     ],
                 },
+            )
+            return result
+
+    def resolve_source_pair(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePairResolve
+    ) -> Resource:
+        self.authorize(actor, context, "resolve_source_pair", context.target_id, payload)
+        with self.engine.begin() as connection:
+            self.begin_mutation(connection, context)
+            owned = self.lock_project(connection, context.target_id)
+            if replay := self.replay(connection, context):
+                return replay
+            self.check_project_revision(connection, owned.id, payload.expected_revision)
+            evidence = resolve_pair(connection, owned, payload)
+            policy = dict(owned.access_policy)
+            policy.pop("auto_accept_qualification", None)
+            policy["management_setup_approvals"] = {}
+            connection.execute(
+                update(project).where(project.c.id == owned.id).values(access_policy=policy)
+            )
+            result = Resource(
+                id=str(owned.id),
+                project_id=str(owned.id),
+                kind="project",
+                revision=payload.expected_revision + 1,
+                state="draft",
+            )
+            self.record(
+                connection, context, str(owned.id), payload.expected_revision, result, evidence
             )
             return result
 

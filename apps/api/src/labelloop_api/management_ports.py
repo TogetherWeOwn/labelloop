@@ -36,6 +36,7 @@ from .management_contracts import (
     ResourcePage,
     ScopeDraft,
     SetupStepApprove,
+    SourcePairResolve,
     SourcePolicyDraft,
     TrainingStart,
     VariantCompile,
@@ -115,6 +116,10 @@ class ManagementOperations(Protocol):
 
     def save_source_policy_draft(
         self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePolicyDraft
+    ) -> Resource: ...
+
+    def resolve_source_pair(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePairResolve
     ) -> Resource: ...
 
     def approve_setup_step(

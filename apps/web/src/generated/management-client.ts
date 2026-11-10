@@ -56,6 +56,7 @@ export type ScopeDraft = { "domain": string; "expected_revision": number; "inten
 export type SetupStepApprove = { "draft_sha256": string; "expected_revision": number; "reason": string; "step": "scope" | "guide" | "classes" | "sources" };
 export type SourceGroupsRead = { "assignment_version": string | null; "groups": number | null; "images": number; "metadata_keys": Array<string> | null; "pending_pairs": Array<SourcePairRead>; "split_counts": Record<string, number> | null };
 export type SourcePairRead = { "id": string; "left_asset_id": string; "right_asset_id": string };
+export type SourcePairResolve = { "decision": "related" | "unrelated"; "expected_revision": number; "pair_id": string; "reason": string };
 export type SourcePolicyDraft = { "collection_notes": string; "expected_revision": number; "metadata_keys": Array<"session" | "sequence" | "subject"> };
 export type SourcePolicyRead = { "collection_notes": string; "metadata_keys": Array<"session" | "sequence" | "subject"> };
 export type TrainingDetail = { "checkpoints": Array<Checkpoint>; "dataset_release_id": string; "epoch": number; "epochs": number; "images": number; "initialization_sha256": string; "mismatches": Array<ArgumentMismatchRead>; "reason": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "requested_arguments": Record<string, unknown>; "resolved_arguments": Record<string, unknown> | null; "resource": Resource; "retention": RetentionRead | null; "training_profile_id": string; "training_profile_revision": number; "updated_at": string; "variant_id": string };
@@ -233,6 +234,11 @@ export class ManagementClient {
 
   saveSourcePolicyDraft(input: { "project_id": string; "idempotency-key": string; body: SourcePolicyDraft }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/setup/sources`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  resolveSourcePair(input: { "project_id": string; "idempotency-key": string; body: SourcePairResolve }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/source-pairs/resolve`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 

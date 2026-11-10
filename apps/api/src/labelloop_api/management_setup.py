@@ -16,6 +16,7 @@ INVALIDATING_OPERATIONS = (
     "save_class_catalog_draft",
     "publish_class_catalog",
     "save_source_policy_draft",
+    "resolve_source_pair",
     "enroll_reference",
     "accept_reference",
     "revalidate_reference",

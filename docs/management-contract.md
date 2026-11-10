@@ -431,6 +431,32 @@ acceptance. Observed source/group/split fields remain separate from draft intent
 Effective grouping and project publication remain producer prerequisites. The
 new source-policy cases require exact-head Actions evidence; source is not a pass.
 
+## Source-pair decisions (partial, opt-in)
+
+`resolveSourcePair`, `POST /projects/{project_id}/source-pairs/resolve`, accepts an
+expected **project** revision, a server-returned pending `pair_id`, `decision`
+(`related` or `unrelated`), a bounded reason and an idempotency key. Project details
+already expose pending pair IDs. Endpoints, metric, observed value and algorithm
+come exclusively from the owned canonical pair row, never from client claims.
+The shared human-admin/session/CSRF boundary, project/retry locks and atomic
+attributed receipt apply. Exact retry returns the original project resource.
+
+`related` records the existing metric's conservative relation and resolves the
+suggestion in the same transaction. If either endpoint already has assignment
+history, **every** version must include both endpoints in the same group and split
+under one policy. Partial, different-group/split or inconsistent historical
+assignments refuse with `missing_evidence`; they need the still-unimplemented
+regrouping/quarantine producer. A compatible current version cannot override an
+incompatible old version. `unrelated` dismisses only this suggestion: it never
+removes an automatic relation or separates a conservative/transitive group.
+
+Either decision clears setup approvals and automatic-acceptance qualification;
+restoring old approval policy cannot revive its receipt. No source/annotation,
+assignment, frozen release, worker, default mount or admission gate changes.
+This is persisted human relationship evidence, not source-image/metric validation,
+materialized grouping, split assignment, project publication or qualification.
+The new DB and transport cases require exact-head Actions verification.
+
 ## Remaining commands and accountable producer boundaries
 
 The following are acceptance gaps, **not implemented routes or enablement flags**.
@@ -443,7 +469,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 |---|---|
 | Remaining `save_setup`, `add_class` | Management facade: proposed reference enrollment and typed setup draft saves above are implemented separately, not generic capture payloads or approval; source admission/grouping binding and effective ontology publication/migration remain missing |
 | `accept_class`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; `accept_reference` has the separate unmounted typed operation above |
-| `resolve_pair` | Management facade persists the decision using delivered canonical grouping contracts; no new grouping engine; revisioned split changes/quarantine must respect the existing grouping policy |
+| Remaining `resolve_pair` regrouping | The typed decision above persists compatible pair evidence only; management still owns assignment publication and revisioned split changes/quarantine using the delivered grouping policy |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |
 | `new_recipe_version` | Management facade's canonical recipe/version adapter; immutable released recipes and delivered compiler transform rules, not browser geometry |
 | `cancel_local_run` | Management facade requests cancellation through the shared fenced queue producer; the worker owns lease/fence and terminal state, no browser process kill |

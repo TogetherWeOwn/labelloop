@@ -32,6 +32,7 @@ from labelloop_api.management_contracts import (
     ReleaseFreeze,
     ScopeDraft,
     SetupStepApprove,
+    SourcePairResolve,
     SourcePolicyDraft,
 )
 from labelloop_api.management_ports import ManagementFailure, MutationContext
@@ -90,6 +91,7 @@ def database(tmp_path):
         )
         connection.execute(text(f'GRANT UPDATE (source_uri) ON source_asset TO "{role}"'))
         connection.execute(text(f'GRANT UPDATE (approved) ON reference_example TO "{role}"'))
+        connection.execute(text(f'GRANT UPDATE (review_state) ON borderline_review TO "{role}"'))
     runtime = create_engine(
         os.environ["DATABASE_URL"],
         connect_args={
@@ -8547,6 +8549,390 @@ def test_withdrawn_reference_reads_are_select_only_and_do_not_enable_freeze(data
     assert reads.read_project(Reader(), created.id).references[0].approval == "withdrawn"
     assert reads.read_freeze_plan(Reader(), created.id).payload is None
     assert counts(owner, created.id) == before
+
+
+def pending_pair(service, owner, metric="phash", value="10"):
+    created = create(service)
+    ingest(service, created.id)
+    image = io.BytesIO()
+    Image.new("RGB", (24, 12), "red").save(image, format="PNG")
+    ingest(
+        service,
+        created.id,
+        image_payload(2).model_copy(
+            update={
+                "original_base64": image.getvalue(),
+                "source_group": "capture-b",
+            }
+        ),
+        key="second-image",
+    )
+    with owner.begin() as connection:
+        assets = (
+            connection.execute(
+                select(source_asset.c.id)
+                .where(source_asset.c.project_id == created.id)
+                .order_by(source_asset.c.id)
+            )
+            .scalars()
+            .all()
+        )
+        pair_id = connection.execute(
+            insert(borderline_review)
+            .values(
+                left_asset_id=assets[0],
+                right_asset_id=assets[1],
+                metric=metric,
+                value=value,
+                algorithm_version="fixture-similarity-v1",
+            )
+            .returning(borderline_review.c.id)
+        ).scalar_one()
+    return (
+        created,
+        assets,
+        SourcePairResolve(
+            expected_revision=3,
+            pair_id=str(pair_id),
+            decision="related",
+            reason="Reviewed source relationship",
+        ),
+    )
+
+
+def resolve_pair(service, project_id, payload, actor=None, key="pair-decision"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "resolve_source_pair", project_id, payload)
+    return service.resolve_source_pair(actor, context, payload)
+
+
+def pair_snapshot(owner, project_id, pair_id):
+    with owner.connect() as connection:
+        pair = connection.execute(
+            select(borderline_review).where(borderline_review.c.id == pair_id)
+        ).one()
+        relations = connection.execute(
+            select(similarity_relation)
+            .where(similarity_relation.c.left_asset_id == pair.left_asset_id)
+            .order_by(similarity_relation.c.id)
+        ).all()
+        policy = connection.execute(
+            select(project.c.access_policy).where(project.c.id == project_id)
+        ).scalar_one()
+        assignments = connection.execute(
+            select(source_split_assignment)
+            .where(
+                source_split_assignment.c.asset_id.in_([pair.left_asset_id, pair.right_asset_id])
+            )
+            .order_by(source_split_assignment.c.id)
+        ).all()
+    return pair, relations, policy, assignments, counts(owner, project_id)
+
+
+def pair_assignments(owner, assets, *, version="fixture-pairs-v1", change=None):
+    with owner.begin() as connection:
+        for index, asset_id in enumerate(assets):
+            if change == "partial" and index:
+                continue
+            connection.execute(
+                insert(source_split_assignment).values(
+                    asset_id=asset_id,
+                    assignment_version=version,
+                    group_id="other" if change == "group" and index else "shared",
+                    split="test" if change == "split" and index else "train",
+                    seed=2 if change == "policy" and index else 1,
+                    algorithm="fixture-grouping-v1",
+                    thresholds={},
+                    reason="Fixture evidence",
+                    locked=True,
+                )
+            )
+
+
+@pytest.mark.parametrize("metric,value", [("phash", "10"), ("embedding_cosine", "0.92")])
+@pytest.mark.parametrize("decision", ["related", "unrelated"])
+def test_pair_resolution_is_attributed_replayable_and_does_not_assign_splits(
+    database, metric, value, decision
+):
+    service, owner, _ = database
+    created, assets, payload = pending_pair(service, owner, metric, value)
+    payload = payload.model_copy(update={"decision": decision})
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert len(reads.read_project(Reader(), created.id).sources.pending_pairs) == 1
+    saved = resolve_pair(service, created.id, payload)
+    assert saved.revision == 4 and saved.state == "draft"
+    assert resolve_pair(service, created.id, payload) == saved
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        resolve_pair(service, created.id, payload.model_copy(update={"reason": "Changed"}))
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        resolve_pair(service, created.id, payload, key="stale")
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        resolve_pair(
+            service,
+            created.id,
+            payload.model_copy(update={"expected_revision": 4}),
+            key="already-decided",
+        )
+    state = pair_snapshot(owner, created.id, payload.pair_id)
+    assert state[0].review_state == decision and len(state[1]) == (decision == "related")
+    assert state[3] == [] and state[4] == (2, 2, 4)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.sources.pending_pairs == [] and detail.sources.assignment_version is None
+    assert detail.published_release_id is None
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.resolve_source_pair",
+            )
+        ).one()
+    assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+    assert receipt.payload["evidence"]["decision"] == decision
+    assert receipt.payload["evidence"]["algorithm_version"] == "fixture-similarity-v1"
+    assert {receipt.payload["evidence"][key] for key in ("left_asset_id", "right_asset_id")} == {
+        str(asset_id) for asset_id in assets
+    }
+
+
+def test_related_pair_preserves_compatible_locked_history_and_unrelated_preserves_edges(database):
+    service, owner, _ = database
+    created, assets, payload = pending_pair(service, owner)
+    pair_assignments(owner, assets)
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    resolve_pair(service, created.id, payload)
+    assert pair_snapshot(owner, created.id, payload.pair_id)[3] == before[3]
+    with owner.begin() as connection:
+        other = connection.execute(
+            insert(borderline_review)
+            .values(
+                left_asset_id=assets[0],
+                right_asset_id=assets[1],
+                metric="embedding_cosine",
+                value="0.92",
+                algorithm_version="fixture-similarity-v1",
+            )
+            .returning(borderline_review.c.id)
+        ).scalar_one()
+    resolve_pair(
+        service,
+        created.id,
+        payload.model_copy(
+            update={
+                "expected_revision": 4,
+                "pair_id": str(other),
+                "decision": "unrelated",
+            }
+        ),
+        key="second-pair",
+    )
+    after = pair_snapshot(owner, created.id, payload.pair_id)
+    assert len(after[1]) == 1 and after[3] == before[3]
+
+
+@pytest.mark.parametrize("change", ["group", "split", "partial", "policy", "obsolete"])
+def test_related_pair_refuses_regrouping_or_quarantine_without_changing_history(database, change):
+    service, owner, _ = database
+    created, assets, payload = pending_pair(service, owner)
+    pair_assignments(owner, assets, change="group" if change == "obsolete" else change)
+    if change == "obsolete":
+        pair_assignments(owner, assets, version="fixture-pairs-v2")
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        resolve_pair(service, created.id, payload)
+    assert pair_snapshot(owner, created.id, payload.pair_id) == before
+
+
+@pytest.mark.parametrize(
+    "metric,value",
+    [
+        ("unknown", "10"),
+        ("phash", "65"),
+        ("phash", "1.5"),
+        ("embedding_cosine", "nan"),
+        ("phash", "invalid"),
+    ],
+)
+def test_pair_resolution_refuses_invalid_persisted_metric_evidence(database, metric, value):
+    service, owner, _ = database
+    created, _, payload = pending_pair(service, owner, metric, value)
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        resolve_pair(service, created.id, payload)
+    assert pair_snapshot(owner, created.id, payload.pair_id) == before
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_pair_resolution_serializes_retries_and_competing_decisions(database, same_key):
+    service, owner, _ = database
+    created, _, payload = pending_pair(service, owner)
+    barrier = Barrier(2, timeout=10)
+
+    def submit(key):
+        barrier.wait()
+        try:
+            return resolve_pair(
+                service, created.id, payload, key="same" if same_key else key
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, ("left", "right")))
+    assert outcomes.count(4) == (2 if same_key else 1)
+    assert outcomes.count("revision_conflict") == (0 if same_key else 1)
+    assert len(pair_snapshot(owner, created.id, payload.pair_id)[1]) == 1
+    assert counts(owner, created.id) == (2, 2, 4)
+
+
+@pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
+def test_pair_resolution_refuses_nonadmin_principals(database, actor):
+    service, owner, _ = database
+    created, _, payload = pending_pair(service, owner)
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        resolve_pair(service, created.id, payload, actor=actor)
+    assert pair_snapshot(owner, created.id, payload.pair_id) == before
+
+
+@pytest.mark.parametrize("grant", ["pair", "relation", "policy", "audit"])
+def test_pair_resolution_missing_grant_rolls_back_all_state_and_retry_succeeds(database, grant):
+    service, owner, role = database
+    created, _, payload = pending_pair(service, owner)
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    privilege = {
+        "pair": "UPDATE (review_state) ON borderline_review",
+        "relation": "INSERT ON similarity_relation",
+        "policy": "UPDATE (access_policy) ON project",
+        "audit": "INSERT ON canonical_event",
+    }[grant]
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} FROM "{role}"'))
+    with pytest.raises(DBAPIError):
+        resolve_pair(service, created.id, payload)
+    assert pair_snapshot(owner, created.id, payload.pair_id) == before
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT {privilege} TO "{role}"'))
+    assert resolve_pair(service, created.id, payload).revision == 4
+
+
+def test_pair_resolution_checks_workspace_endpoint_ownership_and_context_before_replay(database):
+    service, owner, _ = database
+    created, assets, payload = pending_pair(service, owner)
+    foreign = create(service, key="foreign-project")
+    with pytest.raises(ManagementFailure, match="not_found"):
+        resolve_pair(service, foreign.id, payload.model_copy(update={"expected_revision": 1}))
+    with pytest.raises(ManagementFailure, match="not_found"):
+        resolve_pair(replace(service, workspace_id=uuid4()), created.id, payload)
+    foreign_asset = ingest(service, foreign.id, key="foreign-image")
+    with owner.begin() as connection:
+        foreign_id = connection.execute(
+            select(source_asset.c.id).where(source_asset.c.asset_key == foreign_asset.id)
+        ).scalar_one()
+        connection.execute(
+            borderline_review.update()
+            .where(borderline_review.c.id == payload.pair_id)
+            .values(right_asset_id=foreign_id)
+        )
+    with pytest.raises(ManagementFailure, match="not_found"):
+        resolve_pair(service, created.id, payload)
+    with owner.begin() as connection:
+        connection.execute(
+            borderline_review.update()
+            .where(borderline_review.c.id == payload.pair_id)
+            .values(right_asset_id=assets[1])
+        )
+    resolve_pair(service, created.id, payload)
+    context = MutationContext.bind(
+        Actor(), "pair-decision", "resolve_source_pair", created.id, payload
+    )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        service.resolve_source_pair(Actor(), replace(context, actor_id="forged"), payload)
+    with pytest.raises(ManagementFailure, match="not_found"):
+        resolve_pair(replace(service, workspace_id=uuid4()), created.id, payload)
+
+
+def test_pair_resolution_invalidates_approval_receipts_and_automatic_acceptance(database):
+    service, owner, _ = database
+    created, _, payload = pending_pair(service, owner)
+    save_scope(service, created.id, scope_payload(3))
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    digest = reads.read_project(Reader(), created.id).setup_draft_sha256["scope"]
+    approve_step(
+        service,
+        created.id,
+        SetupStepApprove(
+            expected_revision=4,
+            step="scope",
+            draft_sha256=digest,
+            reason="Reviewed intent",
+        ),
+    )
+    before = pair_snapshot(owner, created.id, payload.pair_id)
+    assert reads.read_project(Reader(), created.id).approved_steps == ["scope"]
+    with owner.begin() as connection:
+        connection.execute(
+            project.update()
+            .where(project.c.id == created.id)
+            .values(access_policy={**before[2], "auto_accept_qualification": {"qualified": True}})
+        )
+    resolve_pair(service, created.id, payload.model_copy(update={"expected_revision": 5}))
+    after = pair_snapshot(owner, created.id, payload.pair_id)
+    assert after[2]["management_setup_approvals"] == {}
+    assert "auto_accept_qualification" not in after[2]
+    with owner.begin() as connection:
+        connection.execute(
+            project.update().where(project.c.id == created.id).values(access_policy=before[2])
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read_project(Reader(), created.id)
+
+
+def test_pair_resolution_uses_shared_restricted_sessions_csrf_and_real_canonical_receipt(
+    database, restricted_auth_store, auth_account
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, payload = pending_pair(service, owner)
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        path = f"/projects/{created.id}/source-pairs/resolve"
+        body = payload.model_dump(mode="json")
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        before = pair_snapshot(owner, created.id, payload.pair_id)
+        assert (
+            client.post(path, json=body, headers={"Idempotency-Key": "http-pair"}).status_code
+            == 403
+        )
+        assert pair_snapshot(owner, created.id, payload.pair_id) == before
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-pair",
+        }
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["revision"] == 4
+        assert client.post(path, json=body, headers=headers).json() == response.json()
+        assert client.get(f"/projects/{created.id}").json()["sources"]["pending_pairs"] == []
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.resolve_source_pair",
+            )
+        ).one()
+    assert receipt.actor_id == identity and receipt.actor_kind == "human"
 
 
 def source_policy_payload(revision=1):

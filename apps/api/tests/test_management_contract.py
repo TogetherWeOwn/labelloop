@@ -94,7 +94,14 @@ REFERENCE_REVALIDATE = {
     "expected_revision": 5,
     "previous_approval_revision": 4,
 }
+PAIR_RESOLVE = {
+    "expected_revision": 3,
+    "pair_id": "pair-a",
+    "decision": "related",
+    "reason": "Reviewed source relationship",
+}
 MUTATIONS = [
+    ("/projects/p/source-pairs/resolve", "resolve_source_pair", PAIR_RESOLVE, 200),
     ("/projects/p/references/revalidate", "revalidate_reference", REFERENCE_REVALIDATE, 200),
     ("/projects/p/setup/classes/publish", "publish_class_catalog", CATALOG_PUBLISH, 200),
     ("/projects/p/references/withdraw", "withdraw_reference", REFERENCE_WITHDRAW, 200),
@@ -205,6 +212,31 @@ MUTATIONS = [
         200,
     ),
 ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("pair_id", ""),
+        ("decision", "merge_and_reassign"),
+        ("reason", ""),
+        ("reason", "x" * 4097),
+        ("expected_revision", True),
+        ("left_asset_id", "forged"),
+        ("split", "train"),
+        ("actor_id", "forged"),
+        ("algorithm_version", "forged"),
+    ],
+)
+def test_pair_resolution_refuses_endpoint_split_and_privileged_claims(field, value):
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/source-pairs/resolve",
+        json={**PAIR_RESOLVE, field: value},
+        headers={"Idempotency-Key": "pair-decision"},
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
 
 
 @pytest.mark.parametrize(
@@ -832,8 +864,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 29
-    assert sum(len(methods) for methods in spec["paths"].values()) == 30
+    assert len(spec["paths"]) == 30
+    assert sum(len(methods) for methods in spec["paths"].values()) == 31
+    assert (
+        spec["paths"]["/projects/{project_id}/source-pairs/resolve"]["post"]["operationId"]
+        == "resolveSourcePair"
+    )
+    assert "export type SourcePairResolve =" in client
     assert (
         spec["paths"]["/projects/{project_id}/references/lifecycle"]["get"]["operationId"]
         == "readReferenceLifecycle"
