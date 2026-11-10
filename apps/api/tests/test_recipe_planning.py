@@ -208,6 +208,30 @@ def test_freeze_refuses_recipe_key_mismatch_and_crop_collisions():
         freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
 
 
+def test_frozen_policy_is_pure_recipe_without_crop():
+    # The compiler manifest recipe comes from a core Recipe (no crop), and
+    # save_training requires manifest["recipe"] == stored policy. Storing a
+    # crop in the policy would reject every cropped variant at training time.
+    plan = with_crop(_freeze_plan(), Crop(0, 0, 320, 320))
+    connection = _freeze_connection(plan)
+    freeze_recipe_plan(connection, plan, recipe_key=RECIPE.recipe_id)
+    inserts = [
+        call.args[0]
+        for call in connection.execute.call_args_list
+        if "INSERT INTO preprocessing_recipe" in str(call.args[0])
+    ]
+    assert len(inserts) == 1
+    stored = inserts[0].compile().params["policy"]
+    assert stored == json.loads(json.dumps(asdict(RECIPE)))
+    assert "crop" not in stored
+    # A cropped plan stays fresh against that pure stored policy.
+    require_fresh(
+        plan,
+        recipe_policy=stored,
+        **_fresh(ontology_hash=plan.ontology_hash),
+    )
+
+
 def test_json_loaded_policy_matches_tuple_recipe():
     # DB JSON policies hold lists; asdict holds tuples — no false staleness.
     policy = json.loads(json.dumps(asdict(RECIPE)))

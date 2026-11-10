@@ -305,12 +305,18 @@ def freeze_recipe_plan(
                 annotation_revision=pins["annotation_revision"],
                 recipe_policy=expected_recipe_policy,
             )
-            # The crop rides inside the stored policy JSON so a published
-            # ROI never collapses into an identical row with another ROI:
-            # the record keeps the exact rectangle (digest covers it too).
+            # The stored policy is the pure core Recipe JSON: the compiler
+            # builds its manifest recipe from a Recipe (which has no crop
+            # field), and save_training requires manifest["recipe"] ==
+            # stored policy, so embedding the crop here would reject every
+            # cropped variant at training time. The crop is a per-asset
+            # plan pin bound by plan_digest and applied at compile time via
+            # compile_dataset(crop_policy=...); preprocessing_recipe has no
+            # per-asset crop column (missing canonical field for the
+            # integrator). A second ROI over the same recipe_key fails
+            # loud above as already-published rather than writing an
+            # identical row, so the crop is never silently lost.
             policy = json.loads(json.dumps(asdict(plan.recipe)))
-            if plan.crop is not None:
-                policy["crop"] = json.loads(json.dumps(asdict(plan.crop)))
             connection.execute(
                 insert(preprocessing_recipe).values(
                     recipe_key=recipe_key,
