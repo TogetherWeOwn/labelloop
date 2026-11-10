@@ -38,8 +38,13 @@ ID lookup with independently measured image content; the reader compares every s
 label multiset and measured bytes before associating that ID. A trusted pinned decoder measures
 raster dimensions. Signed URLs remain ephemeral and decoder/provider exception text is suppressed.
 Reader limits are defence in depth, not streaming guarantees: the foundation download binding
-must bound bytes before buffering. The concrete `SavedExportSource` binding to the foundation
-and exact-head fixture qualification are still required; this implementation does not certify them.
+must bound bytes before buffering. The concrete binding is `FoundationSavedExportSource` in
+`sync_transport.py`: `READ_DATASET` binds the exact owner/slug record first, `READ_EXPORT`
+requests `GET export?v=N`, storage GETs download the NDJSON and image bytes, and `LIST_IMAGES`
+(`search` + `includeImageUrls`) plus `READ_IMAGE` provide the unambiguous current ID lookup
+with independently measured content. `test_sync_transport.py` qualifies the full chain
+(dispatch → processing finished → saved export → reconcile → freeze) over scripted
+foundation ports with synthetic fixtures only.
 
 List summaries are insufficient. Reconciliation checks class order at dataset and image level,
 unique IDs/names, exact membership, splits, label multisets/classes, truncation and geometry.
@@ -110,12 +115,17 @@ translate foundation outcomes without automatic mutation retries. Signed URLs an
 are never persistent identities or included in the frozen mapping. Provider exception text
 is not copied into durable records.
 
-**Integration still required before merge:** wire this port and `LabelTransport` to the
-Platform foundation's `PlatformPort`, `PlatformRequest`, `Operation`, `Outcome`, `StoragePort`
-and storage target validation; run exact-head fixture integration through those adapters.
-The independent implementation and fixture tests do not wait on that producer. The worker
-must supply the real durable journal and coordinator ports; these modules do not create a
-second queue, scheduler, lock service or canonical store.
+The concrete binding is `sync_transport.py`: `FoundationReleaseTransport` maps
+`SyncCommand` to foundation `PlatformRequest`s (`CREATE_DATASET`/`SIGNED_UPLOAD`/`INGEST`)
+and the ephemeral create-only storage PUT, binding the archive SHA-256 before dispatch and
+discarding the signed target on success, rejection or 412;
+`FoundationLabelTransport` implements `LabelTransport` via `READ_IMAGE`/`REPLACE_LABELS`
+with the complete `labels` set only; `find_dataset_evidence` performs the exact
+owner/slug recovery lookup (absence is never proof a create failed). Foundation outcomes
+map without mutation retries: `REJECTED`/`MALFORMED` are failed, throttling, availability,
+transport and paid-paused outcomes are uncertain. The worker must still supply the real
+durable journal and coordinator ports; these modules do not create a second queue,
+scheduler, lock service or canonical store.
 
 ## Complete correction replacement and external edits
 
