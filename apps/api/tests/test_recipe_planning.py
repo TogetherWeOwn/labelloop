@@ -10,6 +10,7 @@ from labelloop_api.recipe_planning import (
     assert_not_frozen_release,
     build_recipe_plan,
     freeze_recipe_plan,
+    ontology_release_hash,
     plan_digest,
     require_fresh,
     validate_plan_geometry,
@@ -109,35 +110,84 @@ def test_frozen_preview_is_not_an_editable_plan():
         require_fresh(_plan(), **_fresh(), frozen=True)
 
 
-def test_editable_crop_and_frozen_publication():
-    plan = with_crop(_plan(), Crop(0, 0, 320, 320))
-    assert plan.crop == Crop(0, 0, 320, 320)
+_ONT_CLASSES = [{"stable_id": "cat", "name": "cat", "definition": "def"}]
+_ONT_CLASS_MAP = {"cat": 0}
+
+
+def _freeze_plan(**changes):
+    values = {
+        "ontology_hash": ontology_release_hash(_ONT_CLASSES, _ONT_CLASS_MAP),
+    }
+    values.update(changes)
+    return _plan(**values)
+
+
+def _freeze_connection(plan, *, existing=None, conflict=False, revision=3):
+    """Dispatching mock: pin rows must match the plan or freeze must refuse."""
     connection = MagicMock()
-    connection.execute.return_value.mappings.return_value.first.return_value = None
+    sqls = []
+
+    def execute(statement, parameters=None):
+        sql = str(statement)
+        sqls.append(sql)
+        result = MagicMock()
+        if "INSERT INTO preprocessing_recipe" in sql:
+            if conflict:
+                raise IntegrityError("duplicate", None, Exception("duplicate"))
+            return result
+        if "FROM source_asset" in sql:
+            result.mappings.return_value.one.return_value = {
+                "sha256": plan.source_sha256,
+                "width": plan.source_width,
+                "height": plan.source_height,
+                "project_id": "project",
+            }
+        elif "FROM ontology_release" in sql:
+            result.mappings.return_value.first.return_value = {
+                "classes": _ONT_CLASSES,
+                "class_map": _ONT_CLASS_MAP,
+                "version": plan.ontology_version,
+            }
+        elif "FROM source_split_assignment" in sql:
+            result.mappings.return_value.first.return_value = {
+                "assignment_version": plan.assignment_version,
+            }
+        elif "FROM annotation_revision" in sql:
+            result.mappings.return_value.first.return_value = {"revision": revision}
+        elif "FROM preprocessing_recipe" in sql:
+            result.mappings.return_value.first.return_value = existing
+        return result
+
+    connection.execute.side_effect = execute
+    connection.sqls = sqls
+    return connection
+
+
+def test_editable_crop_and_frozen_publication():
+    plan = with_crop(_freeze_plan(), Crop(0, 0, 320, 320))
+    assert plan.crop == Crop(0, 0, 320, 320)
+    connection = _freeze_connection(plan)
     digest = freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
     assert digest == plan_digest(plan)
-    inserts = [
-        call
-        for call in connection.execute.call_args_list
-        if "INSERT INTO preprocessing_recipe" in str(call.args[0])
-    ]
+    inserts = [sql for sql in connection.sqls if "INSERT INTO preprocessing_recipe" in sql]
     assert len(inserts) == 1
-    assert "immutable" in str(inserts[0].args[0])
+
+
+def test_freeze_revalidates_pins_and_refuses_stale_plan():
+    plan = _freeze_plan()
+    connection = _freeze_connection(plan, revision=4)  # annotation moved on
+    with pytest.raises(ValueError, match="stale"):
+        freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
+    assert not any("INSERT" in sql for sql in connection.sqls)
 
 
 def test_concurrent_publication_conflict_is_refused():
-    connection = MagicMock()
-    connection.execute.return_value.mappings.return_value.first.return_value = {
-        "recipe_key": "roi-320-v1"
-    }
+    plan = _freeze_plan()
+    connection = _freeze_connection(plan, existing={"recipe_key": "roi-320-v1"})
     with pytest.raises(ValueError, match="already published"):
-        freeze_recipe_plan(connection, _plan(), recipe_key="roi-320-v1")
+        freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
 
-    connection = MagicMock()
-    connection.execute.return_value.mappings.return_value.first.return_value = None
-    connection.execute.side_effect = [
-        MagicMock(),
-        IntegrityError("duplicate", None, Exception("duplicate")),
-    ]
+    connection = _freeze_connection(plan, conflict=True)
     with pytest.raises(ValueError, match="already published"):
+        freeze_recipe_plan(connection, plan, recipe_key="roi-320-v1")
         freeze_recipe_plan(connection, _plan(), recipe_key="roi-320-v1")

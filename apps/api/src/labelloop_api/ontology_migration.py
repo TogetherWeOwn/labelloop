@@ -12,17 +12,15 @@ SQLAlchemy Connection into every DB helper.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import asdict, dataclass
 from typing import Literal
 
 from sqlalchemy import Connection, insert, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoResultFound
 
 from labelloop_core.domain import ClassDefinition, OntologyRelease
 
-from .schema import annotation_revision, ontology_release
+from .schema import annotation_revision, ontology_release, source_asset
 
 MigrationKind = Literal["retain", "rename", "add", "remove", "merge", "split"]
 _KINDS = frozenset({"retain", "rename", "add", "remove", "merge", "split"})
@@ -50,15 +48,6 @@ class MigrationReviewItem:
     object_id: str
     class_id: str
     reason: str
-
-
-def _ontology_hash(classes: list[dict], class_map: dict[str, int]) -> str:
-    encoded = json.dumps(
-        {"class_map": class_map, "classes": classes},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def validate_catalog_migration(
@@ -184,7 +173,14 @@ def load_ontology(
     )
     if version is not None:
         statement = statement.where(ontology_release.c.version == version)
-    row = connection.execute(statement.order_by(ontology_release.c.version.desc())).mappings().one()
+    try:
+        row = (
+            connection.execute(statement.order_by(ontology_release.c.version.desc()))
+            .mappings()
+            .one()
+        )
+    except NoResultFound as error:
+        raise ValueError(f"ontology version not found for project {project_id!r}") from error
     classes = tuple(ClassDefinition(**item) for item in row["classes"])
     return OntologyRelease(
         ontology_id=str(row["id"]),
@@ -204,16 +200,19 @@ def latest_annotation_objects(connection: Connection, *, project_id: str) -> lis
                 annotation_revision.c.revision,
                 annotation_revision.c.objects,
             )
-            .where(annotation_revision.c.asset_id.is_not(None))
+            .join(source_asset, annotation_revision.c.asset_id == source_asset.c.id)
+            .where(source_asset.c.project_id == project_id)
             .order_by(annotation_revision.c.revision.desc())
         )
         .mappings()
         .all()
     )
-    seen: set[tuple[object, int]] = set()
+    # Rows arrive newest-first per asset; the first row seen for an asset is
+    # its latest revision, so only that revision's objects are review input.
+    seen: set[object] = set()
     records: list[dict] = []
     for row in rows:
-        key = (row["asset_id"], row["revision"])
+        key = row["asset_id"]
         if key in seen:
             continue
         seen.add(key)

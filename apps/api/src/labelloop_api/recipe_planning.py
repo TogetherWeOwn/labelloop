@@ -14,7 +14,7 @@ import json
 from dataclasses import asdict, dataclass
 
 from sqlalchemy import Connection, insert, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoResultFound
 
 from labelloop_core.domain import Recipe
 from labelloop_core.geometry import Crop, full_frame_transform
@@ -80,6 +80,8 @@ def plan_digest(plan: RecipePlan) -> str:
 
 
 def validate_plan_geometry(plan: RecipePlan) -> None:
+    if not isinstance(plan.recipe, Recipe):
+        raise ValueError("recipe plan requires a core Recipe")
     if plan.crop is not None:
         for value in (plan.crop.x, plan.crop.y, plan.crop.width, plan.crop.height):
             if not float(value).is_integer():
@@ -96,8 +98,6 @@ def validate_plan_geometry(plan: RecipePlan) -> None:
         crop=plan.crop,
         allow_upscale=plan.recipe.allow_upscale,
     )
-    if not isinstance(plan.recipe, Recipe):
-        raise ValueError("recipe plan requires a core Recipe")
 
 
 def build_recipe_plan(
@@ -188,18 +188,21 @@ def load_current_pins(connection: Connection, *, asset_id: str) -> dict:
     """Current DB pins for staleness checks; caller owns transaction."""
     from .schema import ontology_release
 
-    asset = (
-        connection.execute(
-            select(
-                source_asset.c.sha256,
-                source_asset.c.width,
-                source_asset.c.height,
-                source_asset.c.project_id,
-            ).where(source_asset.c.id == asset_id)
+    try:
+        asset = (
+            connection.execute(
+                select(
+                    source_asset.c.sha256,
+                    source_asset.c.width,
+                    source_asset.c.height,
+                    source_asset.c.project_id,
+                ).where(source_asset.c.id == asset_id)
+            )
+            .mappings()
+            .one()
         )
-        .mappings()
-        .one()
-    )
+    except NoResultFound as error:
+        raise ValueError(f"source asset not found for plan asset {asset_id!r}") from error
     ontology = (
         connection.execute(
             select(
@@ -255,8 +258,11 @@ def freeze_recipe_plan(
 ) -> str:
     """Revalidate pins and publish the immutable recipe row atomically.
 
-    A stale pin or an already-published recipe_key rolls the savepoint
-    back; frozen history (canonical_dataset_release) is never rewritten.
+    Plan pins are checked against the live database state
+    (``load_current_pins`` + ``require_fresh``) inside the savepoint, so a
+    stale source/ontology/assignment/revision pin or an already-published
+    recipe_key rolls the savepoint back; frozen history
+    (canonical_dataset_release) is never rewritten.
     """
     validate_plan_geometry(plan)
     if plan.frozen:
@@ -274,6 +280,15 @@ def freeze_recipe_plan(
             )
             if existing is not None:
                 raise ValueError("recipe already published")
+            pins = load_current_pins(connection, asset_id=plan.asset_id)
+            require_fresh(
+                plan,
+                source_sha256=pins["source_sha256"],
+                ontology_hash=pins["ontology_hash"],
+                assignment_version=pins["assignment_version"],
+                annotation_revision=pins["annotation_revision"],
+                recipe_policy=expected_recipe_policy,
+            )
             connection.execute(
                 insert(preprocessing_recipe).values(
                     recipe_key=recipe_key,

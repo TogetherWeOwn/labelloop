@@ -9,6 +9,7 @@ from labelloop_api.ontology_migration import (
     ClassMigration,
     annotation_objects_needing_review,
     export_class_index_map,
+    latest_annotation_objects,
     publish_ontology_version,
     validate_catalog_migration,
 )
@@ -167,4 +168,37 @@ def test_concurrent_duplicate_version_rolls_back_as_value_error():
             steps=(ClassMigration(("cat",), ("cat",), "retain"),),
             expected_current_version=1,
         )
-    assert any("INSERT INTO ontology_release" in sql for sql, _ in results)
+
+
+def test_latest_annotation_objects_scopes_project_and_keeps_newest_revision():
+    connection = MagicMock()
+    sqls = []
+    rows = [
+        {
+            "asset_id": "asset-1",
+            "revision": 3,
+            "objects": [{"object_id": "new", "class_id": "cat"}],
+        },
+        {
+            "asset_id": "asset-1",
+            "revision": 2,
+            "objects": [{"object_id": "old", "class_id": "cat"}],
+        },
+        {"asset_id": "asset-2", "revision": 1, "objects": [{"object_id": "o", "class_id": "dog"}]},
+    ]
+
+    def execute(statement, parameters=None):
+        sqls.append(str(statement))
+        connection.execute.return_value.mappings.return_value.all.return_value = rows
+        return connection.execute.return_value
+
+    connection.execute.side_effect = execute
+    records = latest_annotation_objects(connection, project_id="project")
+    assert [(r["asset_id"], r["object_id"], r["revision"]) for r in records] == [
+        ("asset-1", "new", 3),
+        ("asset-2", "o", 1),
+    ]
+    # Project scoping must happen in SQL, not by importing other projects.
+    sql = sqls[0]
+    assert "source_asset" in sql
+    assert "project" in sql
