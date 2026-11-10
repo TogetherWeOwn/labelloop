@@ -83,10 +83,14 @@ retains those checks.
 
 1. Starts two random `recovery_<uuid>` PostgreSQL databases and fresh
    `recovery-<uuid>` buckets on the job's fixed loopback fixture services. Migrates
-   each DB through Alembic without dropping/replacing any existing schema.
+   each DB through Alembic to the snapshot's pinned `0002_local_models` revision
+   (never the moving `head`, whose later tables this inventory deliberately does
+   not register), without dropping/replacing any existing schema.
 2. Seeds every registered table with the CC0 interface fixture, canonical evidence,
    two annotation revisions with interleaved review events, synthetic model/evaluation
    lineage, appended evaluation evidence and two successive promotions per recipe.
+   Promotions carry fixture-only synthetic qualification evidence (copied development
+   metrics plus invented audits), never a production quality claim.
 3. Captures one fixture snapshot; removes the source bucket before restoring.
 4. Rejects missing/corrupt objects, wrong manifest roots, stale schema versions and
    truncated registry audit chains, before writing accepted restore state.

@@ -1,19 +1,23 @@
 """Licence-clean synthetic lineage over the delivered fixture; no training qualification claim."""
 
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import sqlalchemy as sa
 
+from labelloop_api import model_schema
 from labelloop_api import schema as db
 from labelloop_api.backup_manifest import digest, object_key
 from labelloop_api.model_store import (
     change_registry,
     json_record,
+    load_release,
     record_digest,
     save_evaluation,
     save_model,
     save_training,
+    stored_report,
 )
 from labelloop_compiler.compiler import compile_dataset
 from labelloop_core.evaluation import (
@@ -29,6 +33,7 @@ from labelloop_core.training import Checkpoint, InferencePolicy, TrainingRequest
 
 
 def seed(connection, store, fixture, output: Path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "fixtures"))
     release = replace(
         fixture.release,
         samples=tuple(
@@ -114,7 +119,7 @@ def seed(connection, store, fixture, output: Path):
             seed=release.assignment.seed,
             algorithm=release.assignment.algorithm,
             thresholds={},
-            reason=release.assignment.reasons[asset.asset_id],
+            reason=release.assignment.reasons[sample.group_id],
             locked=True,
         )
     first = next(iter(asset_ids.values()))
@@ -281,17 +286,73 @@ def seed(connection, store, fixture, output: Path):
             save_model(
                 connection, training_run_key=request.run_id, release=item, export_evidence=evidence
             )
-        for revision, key in enumerate((model.release_id, model.release_id + "-next")):
+
+        def promote(
+            key: str,
+            *,
+            expected_revision: int,
+            incumbent_key: str | None,
+            evaluation_key: str,
+            recipe_key: str,
+        ) -> None:
+            """Fixture-only synthetic qualification; never a production quality claim.
+
+            Mirrors workers/ml/tests/registry_smoke.py: the development report is
+            copied into a synthetic locked-final-test record and qualified through
+            the fixture builder, exercising the trusted-evidence port explicitly.
+            """
+            from qualification_fixture import qualification_context, synthetic_final
+
+            def final_for(model_key: str, evaluation_key: str):
+                model_id = connection.execute(
+                    sa.select(model_schema.model_release.c.id).where(
+                        model_schema.model_release.c.release_key == model_key
+                    )
+                ).scalar_one()
+                candidate = load_release(connection, model_id)
+                source = stored_report(connection, candidate, evaluation_key)
+                final = synthetic_final(
+                    source,
+                    run_id=evaluation_key + "-synthetic-final-" + model_key,
+                    dataset_id=source.dataset_release_id,
+                )
+                if final.run_id not in candidate.evaluation_run_ids:
+                    variant = connection.execute(
+                        sa.select(model_schema.evaluation_run.c.variant_id).where(
+                            model_schema.evaluation_run.c.run_key == evaluation_key
+                        )
+                    ).scalar_one()
+                    save_evaluation(
+                        connection, model_key=model_key, variant_id=variant, report=final
+                    )
+                return load_release(connection, model_id), final
+
+            candidate, final = final_for(key, evaluation_key)
+            incumbent_evaluation_key = None
+            if incumbent_key:
+                _, incumbent_final = final_for(incumbent_key, evaluation_key)
+                incumbent_evaluation_key = incumbent_final.run_id
+            gate = PromotionPolicy(1, 0.0)  # Fixture wiring only, never a production target.
             change_registry(
                 connection,
                 project_key=release.project_id,
-                recipe_key=recipe,
+                recipe_key=recipe_key,
                 actor_id="fixture-admin",
-                expected_revision=revision,
+                expected_revision=expected_revision,
                 candidate_key=key,
+                evaluation_key=final.run_id,
+                incumbent_evaluation_key=incumbent_evaluation_key,
+                policy=gate,
+                qualification=qualification_context(candidate, final, gate),
+            )
+
+        for revision, key in enumerate((model.release_id, model.release_id + "-next")):
+            promote(
+                key,
+                expected_revision=revision,
+                incumbent_key=model.release_id if revision else None,
                 evaluation_key=report.run_id,
-                incumbent_evaluation_key=report.run_id if revision else None,
-                policy=PromotionPolicy(1, 0.0),
+                recipe_key=recipe,
             )
             if revision == 0:
                 save_evaluation(

@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from minio import Minio
 from recovery_fixture import seed
 
-from labelloop_api.backup_manifest import audit_seal, digest, encode
+from labelloop_api.backup_manifest import SCHEMA_REVISION, audit_seal, digest, encode
 from labelloop_api.backup_store import (
     COLUMNS,
     capture_fixture,
@@ -49,7 +49,16 @@ def new_database():
         with admin.connect() as connection:
             connection.execute(sa.text(f'CREATE DATABASE "{name}"'))
         subprocess.run(
-            [sys.executable, "-m", "alembic", "-c", "apps/api/alembic.ini", "upgrade", "head"],
+            # The snapshot pins one schema revision; later tables register separately.
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                "apps/api/alembic.ini",
+                "upgrade",
+                SCHEMA_REVISION,
+            ],
             cwd=ROOT,
             env=os.environ | {"DATABASE_URL": engine.url.render_as_string(hide_password=False)},
             check=True,
