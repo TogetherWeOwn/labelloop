@@ -12397,7 +12397,15 @@ def test_freeze_plan_is_select_only_and_supplies_a_real_freeze_payload(database)
         assert plan.exclusions == []
         assert plan.checks[0].passed is True
         assert "Not model qualification" in plan.checks[0].reason
-        assert set(plan.model_dump()) == {"project_id", "payload", "checks", "exclusions"}
+        assert set(plan.model_dump()) == {
+            "project_id",
+            "configuration",
+            "payload",
+            "checks",
+            "exclusions",
+        }
+        assert plan.configuration is None
+        assert plan.model_dump(mode="json")["configuration"] is None
     assert counts(owner, created.id) == before
     assert release_count(owner, created.id) == 0
     # Restore only the fixture's known grants, then consume the actual plan.
