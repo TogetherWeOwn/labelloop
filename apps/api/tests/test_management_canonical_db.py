@@ -256,6 +256,250 @@ def test_registered_evaluation_executes_or_resumes_and_links_once(
     assert all(not path.exists() for path in paths)
 
 
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+@pytest.mark.parametrize(
+    "state", ["queued", "running", "retry", "failed", "cancelled", "completed"]
+)
+def test_owned_job_observations_follow_native_queue_without_publishing_resources(
+    database, compilation, compiler_worker, recipe, state
+):
+    from labelloop_api.management_workers import compilation_runner
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    if state == "completed":
+        assert compilation_runner(
+            compiler_worker.store,
+            compiler_worker.objects,
+            service.workspace_id,
+            job_id=accepted.job_id,
+        ).run_once("job-reader-compiler")
+    elif state == "cancelled":
+        with owner.connect() as connection:
+            key = connection.execute(
+                select(project.c.project_key).where(project.c.id == UUID(created.id))
+            ).scalar_one()
+        assert compiler_worker.store.cancel(key, accepted.job_id)
+    elif state != "queued":
+        for attempt in range(3 if state == "failed" else 1):
+            if attempt:
+                with owner.begin() as connection:
+                    connection.execute(
+                        text(
+                            "UPDATE worker_job SET available_at=clock_timestamp() WHERE job_id=:id"
+                        ),
+                        {"id": accepted.job_id},
+                    )
+            lease = compiler_worker.store.claim(
+                "compile_variant", "job-reader", job_id=accepted.job_id
+            )
+            assert lease is not None
+            if state != "running":
+                compiler_worker.store.fail(lease)
+    expected = "queued" if state == "retry" else state
+    before = counts(owner, created.id), publication_state(owner, accepted)
+    page = reads.list_resources(Reader(), created.id, "job", None, 1)
+    assert page.next_cursor is None and len(page.items) == 1
+    observed = reads.read(Reader(), "job", accepted.job_id)
+    assert page.items == [observed]
+    assert observed.model_dump() == {
+        "id": accepted.job_id,
+        "project_id": created.id,
+        "kind": "job",
+        "revision": 1,
+        "state": expected,
+    }
+    assert observed == reads.read(Actor(), "job", accepted.job_id)
+    if state != "completed":
+        assert reads.list_resources(Reader(), created.id, "variant", None, 100).items == []
+    assert (counts(owner, created.id), publication_state(owner, accepted)) == before
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"kind": "service"}, {"kind": "model"}, {"granted": False}, {"id": ""}]
+)
+def test_job_reads_deny_untrusted_principals_before_lookup(database, overrides):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read(Reader(**overrides), "job", "unknown")
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.list_resources(Reader(**overrides), "unknown", "job", None, 1)
+
+
+@pytest.mark.parametrize("limit", [1, 2, 100])
+def test_job_pages_are_select_only_scoped_and_use_stable_intent_cursors(
+    database, compilation, compiler_worker, limit
+):
+    from labelloop_api.management_reads import page_position
+
+    service, owner, role = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    jobs = [
+        compile_request(compilation, release.id, recipe=recipe, key=f"job-page-{index}").job_id
+        for index, recipe in enumerate(["full-letterbox-320-v1", "full-letterbox-640-v1"])
+    ]
+    other = create(service, key="other-job-project")
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={
+            "options": f"-c role={role} -c default_transaction_read_only=on",
+        },
+    )
+    try:
+        reads = CanonicalManagementReads(readonly, service.workspace_id)
+        page = reads.list_resources(Reader(), created.id, "job", None, limit)
+        found = list(page.items)
+        if limit == 1:
+            cursor = page.next_cursor
+            assert cursor is not None
+            with pytest.raises(ManagementFailure, match="invalid_request"):
+                reads.list_resources(Reader(), other.id, "job", cursor, limit)
+            with pytest.raises(ManagementFailure, match="invalid_request"):
+                reads.list_resources(Reader(), created.id, "asset", cursor, limit)
+            page = reads.list_resources(Reader(), created.id, "job", cursor, limit)
+            found.extend(page.items)
+        assert page.next_cursor is None and sorted(item.id for item in found) == sorted(jobs)
+        assert reads.list_resources(Reader(), other.id, "job", None, limit).items == []
+        scope, _ = page_position(service.workspace_id, other.id, "job", None, limit)
+        assert (
+            reads.list_resources(Reader(), other.id, "job", scope + "." + "0" * 32, limit).items
+            == []
+        )
+        for identifier in [*jobs, "unknown"]:
+            with pytest.raises(ManagementFailure, match="not_found"):
+                replace(reads, workspace_id=uuid4()).read(Reader(), "job", identifier)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read(Reader(), "job", "unknown")
+    finally:
+        readonly.dispose()
+
+
+@pytest.mark.parametrize(
+    "change", ["actor", "inputs", "identity", "target", "kind", "state", "application"]
+)
+def test_job_reads_refuse_inconsistent_persisted_authority(
+    database, compilation, compiler_worker, change
+):
+    import copy
+
+    from sqlalchemy import update
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    with owner.begin() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.event_type == "management.compile_variant",
+                canonical_event.c.payload["evidence"]["job_id"].as_string() == accepted.job_id,
+            )
+        ).one()
+        changed = copy.deepcopy(receipt.payload)
+        values = {}
+        if change == "actor":
+            values["actor_kind"] = "model"
+        elif change == "inputs":
+            changed["evidence"]["inputs"]["requested_by"] = "another-actor"
+        elif change == "identity":
+            changed["result"]["id"] = str(uuid4())
+        elif change == "target":
+            values["aggregate_id"] = str(uuid4())
+        elif change == "kind":
+            changed["result"]["kind"] = "model"
+        elif change == "state":
+            changed["result"]["state"] = "completed"
+        else:
+            connection.execute(
+                text("UPDATE worker_job SET status='succeeded' WHERE job_id=:id"),
+                {"id": accepted.job_id},
+            )
+        connection.execute(
+            update(canonical_event)
+            .where(canonical_event.c.id == receipt.id)
+            .values(payload=changed, **values)
+        )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read(Reader(), "job", accepted.job_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.list_resources(Reader(), created.id, "job", None, 100)
+
+
+def test_job_reads_require_unique_matching_intent_and_current_application(
+    database, compilation, compiler_worker
+):
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with owner.begin() as connection:
+        receipt = (
+            connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.event_type == "management.compile_variant",
+                    canonical_event.c.payload["evidence"]["job_id"].as_string() == accepted.job_id,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        connection.execute(
+            insert(canonical_event).values(
+                **{key: value for key, value in receipt.items() if key not in {"id", "created_at"}}
+            )
+        )
+    for operation in [
+        lambda: reads.read(Reader(), "job", accepted.job_id),
+        lambda: reads.list_resources(Reader(), created.id, "job", None, 100),
+    ]:
+        with pytest.raises(ManagementFailure, match="missing_evidence"):
+            operation()
+
+
+def test_job_indices_include_training_and_evaluation_but_not_unowned_queue_rows(
+    database, compilation, compiler_worker
+):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    service, owner, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = reads.list_resources(Reader(), accepted.resource.project_id, "job", None, 100)
+    assert len(before.items) == 3
+    assert sorted(item.state for item in before.items) == ["completed", "completed", "running"]
+    assert reads.read(Reader(), "job", accepted.job_id).state == "running"
+    decoy = compiler_worker.store.enqueue(lease.project_key, "unowned-job", "compile_variant", {})
+    assert reads.list_resources(Reader(), accepted.resource.project_id, "job", None, 100) == before
+    with pytest.raises(ManagementFailure, match="not_found"):
+        reads.read(Reader(), "job", decoy)
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        assert reads.read(Reader(), "job", accepted.job_id).state == "running"
+
+    compiler_worker.store.complete(lease, ("evaluation",), sink)
+    assert reads.read(Reader(), "job", accepted.job_id).state == "completed"
+    with owner.begin() as connection:
+        connection.execute(
+            text("UPDATE worker_job SET generation=generation+1 WHERE job_id=:id"),
+            {"id": accepted.job_id},
+        )
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read(Reader(), "job", accepted.job_id)
+
+
 @pytest.fixture
 def published_indices(database, compilation, compiler_worker):
     publisher, accepted, lease, record = prepared_evaluation_publication(

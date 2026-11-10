@@ -94,6 +94,10 @@ class CanonicalManagementReads:
         from .management_resource_reads import PUBLISHED_KINDS, published_rows
 
         owned = self.project_rows()
+        if kind == "job":
+            from .management_job_reads import job_rows
+
+            return job_rows(owned, self.workspace_id)
         if kind in PUBLISHED_KINDS:
             return published_rows(owned, kind, self.workspace_id)
         if kind == "project":
@@ -410,6 +414,13 @@ class CanonicalManagementReads:
     def resource(self, connection, kind: ResourceKind, row) -> Resource:
         from .management_resource_reads import PUBLISHED_KINDS, published_resource
 
+        if kind == "job":
+            from .management_job_reads import job_resource
+
+            try:
+                return job_resource(connection, row, self.workspace_id)
+            except (KeyError, TypeError, ValueError):
+                refuse("missing_evidence")
         if kind in PUBLISHED_KINDS:
             return published_resource(connection, kind, row, self.workspace_id)
         return Resource(

@@ -1096,6 +1096,40 @@ ML artifacts in these DB cases remain synthetic. Exact-head Actions verification
 is pending; no schema/client, migration, runtime grant, default mount or real
 asset-admission change is made.
 
+## Owned intent/job observations (partial, unmounted)
+
+The existing `job` resource kind now has a bounded read/list projection for
+canonical compile, local-training and standalone development-evaluation intents.
+Ownership comes from the canonical project/workspace plus one attributed human
+intent; an arbitrary queue row is not a discoverable management job. The receipt's
+accepted resource, requester, target and exact immutable inputs must match the
+native queue identity. Duplicate or inconsistent receipt evidence fails closed.
+No raw input, error text, worker identity, storage key, provider field or log is
+returned: the existing `Resource` contains job ID, project, kind, revision and state.
+
+`queued`, `running`, `failed` and `cancelled` are native queue observations;
+`succeeded` maps to `completed` only with a matching current application generation.
+A retry returns to `queued`. An expired running lease is still observed as native
+`running` until the queue claims or exhausts it; reads do not heartbeat, reclaim,
+cancel or otherwise mutate jobs. `revision: 1` is the immutable accepted-intent
+revision, **not** a lifecycle CAS token. Queue completion is not an artifact-detail,
+current-byte, qualification, promotion or deployment grant. Those surfaces keep
+their existing independent publication validators.
+
+Stable canonical-intent UUID cursors retain workspace/project/kind scope and the
+1–100 page limit. Queue selection and receipt/application checks share one
+SELECT-only repeatable snapshot. The separate completed-publication indices are
+unchanged, so a pending job never fabricates a variant, training record or report.
+
+Twenty-eight disposable Actions DB cases are commissioned, not yet verified:
+both sizes across queued/running/retry/exhausted/cancelled/completed states;
+SELECT-only keyset traversal and cursor/ownership isolation; principal refusal;
+seven inconsistent-authority controls, duplicate receipts, current application
+generation, training/evaluation job visibility, unowned queue omission and
+completion precommit invisibility. ML artifacts remain explicitly synthetic.
+No schema/client, migration, grant, scheduler, default mount or real-admission
+change is made. Full mounted HTTP acceptance and specialist gates remain open.
+
 ## Acceptance evidence still required
 
 | Check | Contract preparation | Final integration evidence required |
