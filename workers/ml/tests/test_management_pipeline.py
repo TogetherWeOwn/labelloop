@@ -491,11 +491,16 @@ def seed_reviewed_fixture(service, owner, client, headers):
 
 
 def publish_cpu_grouping(service, owner, client, headers, project_id, revisions, identity):
-    from test_management_canonical_db import initial_grouping_snapshot
+    from test_management_canonical_db import discovered_pairs, initial_grouping_snapshot
 
     before = initial_grouping_snapshot(owner, project_id)
     assert before[:2] == ([], [])
-    assert not any(row.event_type == "management.publish_initial_grouping" for row in before[2])
+    assert discovered_pairs(owner, project_id) == []
+    assert not any(
+        row.event_type
+        in {"management.discover_initial_source_pairs", "management.publish_initial_grouping"}
+        for row in before[2]
+    )
     detail = project_detail(client, project_id)
     body = {
         "expected_revision": detail["resource"]["revision"],
@@ -503,7 +508,29 @@ def publish_cpu_grouping(service, owner, client, headers, project_id, revisions,
         "source_policy_sha256": detail["setup_draft_sha256"]["sources"],
         "annotation_revisions": revisions,
     }
+    discovery_path = f"/projects/{project_id}/source-pairs/discover"
+    discovered = http_command(client, headers, discovery_path, body, "cpu-discovery", 200)
+    after_discovery = initial_grouping_snapshot(owner, project_id)
+    assert after_discovery[:2] == ([], [])
+    assert discovered_pairs(owner, project_id) == []
+    (discovery_receipt,) = [
+        row
+        for row in after_discovery[2]
+        if row.event_type == "management.discover_initial_source_pairs"
+    ]
+    assert discovery_receipt.actor_id == identity and discovery_receipt.actor_kind == "human"
+    assert discovery_receipt.payload["aggregate_revision"] == discovered["revision"]
+    discovery_evidence = discovery_receipt.payload["evidence"]
+    assert discovery_evidence["pending_pairs"] == []
+    assert discovery_evidence["annotation_revisions"] == revisions
+    detail = project_detail(client, project_id)
+    assert detail["resource"]["revision"] == discovered["revision"] == body["expected_revision"] + 1
+    assert detail["sources"]["pending_pairs"] == []
+    assert detail["sources"]["assignment_version"] is None
     path = f"/projects/{project_id}/source-assignments/initial"
+    http_command(client, headers, path, body, "cpu-stale-after-discovery", 409)
+    assert initial_grouping_snapshot(owner, project_id) == after_discovery
+    body = {**body, "expected_revision": discovered["revision"]}
     grouped = http_command(client, headers, path, body, "cpu-grouping", 200)
     assignments, relations, receipts, _ = initial_grouping_snapshot(owner, project_id)
     assert len(assignments) == len(revisions) and all(row.locked for row in assignments)
@@ -515,6 +542,19 @@ def publish_cpu_grouping(service, owner, client, headers, project_id, revisions,
     ]
     assert receipt.actor_id == identity and receipt.actor_kind == "human"
     evidence = receipt.payload["evidence"]
+    for key in (
+        "ontology_id",
+        "source_policy_sha256",
+        "annotation_revisions",
+        "sources",
+        "source_groups",
+        "persisted_relations",
+        "constraint_adapter",
+        "toolchain",
+        "phash_algorithm",
+        "observed_metadata_keys",
+    ):
+        assert evidence[key] == discovery_evidence[key]
     assert evidence["annotation_revisions"] == revisions
     assert evidence["source_policy_sha256"] == body["source_policy_sha256"]
     assert {row["asset_id"] for row in evidence["sources"]} == set(revisions)
@@ -543,7 +583,19 @@ def publish_cpu_grouping(service, owner, client, headers, project_id, revisions,
     assert refused.status_code == 422 and refused.json() == {"detail": "missing_evidence"}
     assert initial_grouping_snapshot(owner, project_id)[:2] == (assignments, relations)
     assert project_detail(client, project_id)["resource"]["revision"] == grouped["revision"]
-    return evidence, by_asset
+    return (
+        evidence,
+        by_asset,
+        {
+            "result": discovered,
+            "receipt_id": str(discovery_receipt.id),
+            "pending_pairs": discovery_evidence["pending_pairs"],
+            "thresholds": discovery_evidence["thresholds"],
+            "evidence_matches_publication": True,
+            "stale_publication_refused": True,
+            "no_assignment_or_relation_writes": True,
+        },
+    )
 
 
 def publish_cpu_configuration(client, headers, project_id, fixture, source_ids, groups, configure):
@@ -731,7 +783,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     client, headers, configure = management_http
     identity, _ = auth_account
     created, fixture, source_ids, revisions = seed_reviewed_fixture(service, owner, client, headers)
-    grouping_evidence, groups = publish_cpu_grouping(
+    grouping_evidence, groups, discovery = publish_cpu_grouping(
         service, owner, client, headers, created.id, revisions, identity
     )
     recipe = f"full-letterbox-{side}-v1"
@@ -1019,6 +1071,7 @@ def test_management_http_runs_real_cpu_project_to_export(
                         "create",
                         "setup-drafts",
                         "class-publication",
+                        "initial-source-pair-discovery",
                         "initial-source-grouping",
                         "references",
                         "anchor-pack",
@@ -1048,6 +1101,7 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "unbound_activation_refused": True,
                 },
                 "grouping": {
+                    "discovery": discovery,
                     "assignment_version": grouping_evidence["assignment_version"],
                     "source_policy_sha256": grouping_evidence["source_policy_sha256"],
                     "phash_algorithm": grouping_evidence["phash_algorithm"],

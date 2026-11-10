@@ -78,7 +78,7 @@ real admission, actual HTTP-to-CPU training/evaluation completion, full project
 publication, registry composition or model quality. Unit delegation/configuration
 cases prove wiring only; exact-head Actions must verify all new cases.
 
-### Initial source-pair discovery (internal preparation)
+### Initial source-pair discovery (opt-in, not mounted by default)
 
 `CanonicalInitialGrouping.discover` persists code-computed borderline suggestions
 in the existing pair-review table and an attributed canonical receipt. Discovery
@@ -92,9 +92,12 @@ competing requests use the existing project revision and idempotency fences.
 Pair inserts, setup-approval/automatic-acceptance invalidation and the receipt
 commit or roll back together. Receipt-history invalidation includes discovery.
 
-This is an internal producer, not a new HTTP command or a complete grouping
-lifecycle. Existing reads and `resolveSourcePair` can observe and decide its
-pending suggestions. First assignment publication consumes resolved suggestions
+The opt-in `discoverInitialSourcePairs` HTTP command reuses this producer through
+an explicit trusted grouping reader and the shared human-admin/session/CSRF boundary.
+Its strict source-pin request accepts no scores, endpoints, thresholds, decisions or
+splits. Missing reader configuration refuses. Existing reads and `resolveSourcePair`
+can observe and decide its pending suggestions; this is not a complete grouping
+lifecycle. First assignment publication consumes resolved suggestions
 only with one attributed discovery, one complete human decision receipt per pair,
 exact request fingerprints/results/revisions, current source/annotation/policy and
 toolchain pins, and the identical freshly computed review band. Related decisions
@@ -105,7 +108,8 @@ receipts. Pending, foreign, legacy unreceipted, duplicate, corrupt or stale evid
 refuses; any assignment/reference history still refuses before object I/O. No
 historical holdout is regrouped, no quarantine restriction is relaxed, and real
 admission/default mounting remain disabled. No new table, migration, dependency,
-grant or scheduler is introduced. Typed discovery binding remains incomplete.
+grant or scheduler is introduced. Management/application OpenAPI and the generated
+client publish the typed discovery operation.
 
 Five covering unit tests exercise core review-band boundaries, pending-only
 inserts, unchanged observations, preparation refusal and receipt invalidation.
@@ -246,30 +250,38 @@ complete bootstrap, quality, retrieval, operational role provisioning/dispatch,
 registry composition or default app mounting. Default management and real admission
 remain disabled under the retained Security gate.
 
-### Initial grouping-to-CPU acceptance expansion
+### Initial discovery/grouping-to-CPU acceptance expansion
 
-The same two CPU cases now commission the existing `publishInitialSourceGrouping`
-HTTP operation against actual normalized original rasters, before references and
-configuration publication. No split assignment, similarity relation or grouping
-receipt is seeded. The test requires an empty grouping history before submission,
-then one session-attributed receipt, all 16 locked assignments, 15 independent
-groups, train/validation membership and unchanged assignment/relation rows on retry
-or refused freeze. CSRF and idempotent replay use the same HTTP helper as the other
-commands. Grouping alone still cannot freeze an unpublished setup.
+The same two CPU cases commission `discoverInitialSourcePairs` before the existing
+`publishInitialSourceGrouping` HTTP operation against actual normalized original
+rasters, before references and configuration publication. No split assignment,
+similarity relation, pair row or discovery/grouping receipt is seeded. The fixture
+has no borderline pairs under the unchanged core thresholds: discovery must leave
+assignment/relation/pair tables empty, append exactly one session-attributed receipt,
+and expose an empty pending-pair read with no assignment version. CSRF and exact
+replay use the same HTTP helper as the other commands. A publication with the
+pre-discovery revision must refuse without writes; a fresh revision then publishes
+all 16 locked assignments, 15 independent groups and train/validation membership.
+Grouping alone still cannot freeze an unpublished setup.
 
-Reference enrollment selects training sources from the actual persisted assignment,
-not the fixture's previous split oracle. Freeze/manifest assignment versions,
-every compiled source's group/split and validation report membership/support must
-match those persisted assignments. The pipeline artifact retains the grouping
+Publication must recompute the same canonical source observations, metadata,
+annotation/policy/ontology pins and toolchain as discovery. Reference enrollment
+selects training sources from actual persisted assignments, not the fixture's
+previous split oracle. Freeze/manifest assignment versions, every compiled source's
+group/split and validation report membership/support must match those assignments.
+The pipeline artifact retains the discovery result/receipt ID, empty review band,
+thresholds, revision refusal and no-assignment-write observations, plus the grouping
 version, source-policy pin, toolchain and actual membership. No extra CPU cohort,
-new endpoint or production behavior is introduced. This expanded grouping path
-**awaits exact-head Actions**, not a claimed grouping-to-CPU pass.
+new endpoint or production behavior is introduced. This discovery-to-CPU expansion
+**awaits exact-head Actions**, not a claimed pass.
 
 Admission and annotations remain explicit canonical fixture preparation, not HTTP
-producer acceptance or independent gold. This is first grouping only, not pair
-discovery, regrouping/quarantine, full bootstrap or quality qualification.
-Operational roles/dispatch, registry composition, default mounting and the existing
-real-admission Security gate are unchanged.
+producer acceptance or independent gold. This no-borderline fixture does not prove
+measured borderline quality or human pair decisions followed by CPU execution;
+separate database decision cases use explicitly synthetic band observations after
+canonical byte validation. Regrouping/quarantine, full bootstrap and quality
+qualification remain unproved. Operational roles/dispatch, registry composition,
+default mounting and the existing real-admission Security gate are unchanged.
 
 ### Explicit internal local configuration publication
 
