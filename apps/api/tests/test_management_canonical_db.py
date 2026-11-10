@@ -13526,11 +13526,113 @@ def test_initial_pair_discovery_is_attributed_pending_and_uses_existing_decision
     )
     assert discovered_pairs(owner, created.id)[0].review_state == decision
     assert initial_grouping_snapshot(owner, created.id)[0] == []
-    # Decision consumption/regrouping is not smuggled into first publication.
+    publish_payload = payload.model_copy(update={"expected_revision": resolved.revision})
+    published = publish_grouping(adapter, created.id, publish_payload)
+    assignments, relations, events, _ = initial_grouping_snapshot(owner, created.id)
+    assert len(assignments) == 4 and all(row.locked for row in assignments)
+    assert len({row.group_id for row in assignments}) == 3
+    assert {row.split for row in assignments} == {"train", "val"}
+    assert len(relations) == (1 if decision == "related" else 0)
+    publication = next(
+        row for row in events if row.event_type == "management.publish_initial_grouping"
+    )
+    consumed = publication.payload["evidence"]["reviewed_pairs"]
+    assert len(consumed) == 1 and consumed[0]["decision"] == decision
+    assert consumed[0]["receipt_revision"] == resolved.revision
+    assert consumed[0]["pair_id"] == str(pairs[0].id)
+    assert published.revision == resolved.revision + 1
+    assert publish_grouping(adapter, created.id, publish_payload) == published
+    assert initial_grouping_snapshot(owner, created.id) == (assignments, relations, events, _)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "pending",
+        "discovery_actor",
+        "decision_actor",
+        "workspace",
+        "fingerprint",
+        "decision_body",
+        "discovery_sources",
+        "toolchain",
+        "pair_value",
+        "missing_edge",
+    ],
+)
+def test_initial_grouping_refuses_unverified_or_stale_pair_decisions(database, monkeypatch, change):
+    import json
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    synthetic_borderline_collector(monkeypatch, payload)
+    saved = discover_pairs(adapter, created.id, payload)
+    pair = discovered_pairs(owner, created.id)[0]
+    revision = saved.revision
+    if change != "pending":
+        resolved = resolve_pair(
+            service,
+            created.id,
+            SourcePairResolve(
+                expected_revision=revision,
+                pair_id=str(pair.id),
+                decision="related",
+                reason="Explicit human source-pair inspection",
+            ),
+        )
+        revision = resolved.revision
+        with owner.begin() as connection:
+            if change == "pair_value":
+                connection.execute(
+                    borderline_review.update()
+                    .where(borderline_review.c.id == pair.id)
+                    .values(value="10")
+                )
+            elif change == "missing_edge":
+                connection.execute(
+                    similarity_relation.delete().where(
+                        similarity_relation.c.left_asset_id == pair.left_asset_id
+                    )
+                )
+            else:
+                discovery = change in {"discovery_actor", "discovery_sources", "toolchain"}
+                event = connection.execute(
+                    select(canonical_event).where(
+                        canonical_event.c.aggregate_id == created.id,
+                        canonical_event.c.event_type
+                        == (
+                            "management.discover_initial_source_pairs"
+                            if discovery
+                            else "management.resolve_source_pair"
+                        ),
+                    )
+                ).one()
+                body = json.loads(json.dumps(event.payload))
+                values = {"payload": body}
+                if change.endswith("actor"):
+                    values["actor_kind"] = "model"
+                elif change == "workspace":
+                    body["workspace_id"] = str(uuid4())
+                elif change == "fingerprint":
+                    body["fingerprint"] = "f" * 64
+                elif change == "decision_body":
+                    body["evidence"]["decision"] = "unrelated"
+                elif change == "discovery_sources":
+                    body["evidence"]["sources"] = []
+                else:
+                    body["evidence"]["toolchain"] = {}
+                connection.execute(
+                    canonical_event.update()
+                    .where(canonical_event.c.id == event.id)
+                    .values(**values)
+                )
+    before = initial_grouping_snapshot(owner, created.id)
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         publish_grouping(
-            adapter, created.id, payload.model_copy(update={"expected_revision": resolved.revision})
+            adapter, created.id, payload.model_copy(update={"expected_revision": revision})
         )
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert initial_grouping_snapshot(owner, created.id)[0] == []
 
 
 def test_empty_initial_pair_discovery_does_not_assign_or_block_first_grouping(database):

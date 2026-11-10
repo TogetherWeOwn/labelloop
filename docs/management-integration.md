@@ -94,12 +94,18 @@ commit or roll back together. Receipt-history invalidation includes discovery.
 
 This is an internal producer, not a new HTTP command or a complete grouping
 lifecycle. Existing reads and `resolveSourcePair` can observe and decide its
-pending suggestions, but first assignment publication still refuses all persisted
-pair history, even resolved suggestions. Receipt-bound decision consumption and
-its current-evidence checks must be implemented before exposing a complete
-review-to-first-grouping workflow. No historical holdout is regrouped, no
-quarantine restriction is relaxed, and real admission/default mounting remain
-disabled. No new table, migration, dependency, grant or scheduler is introduced.
+pending suggestions. First assignment publication consumes resolved suggestions
+only with one attributed discovery, one complete human decision receipt per pair,
+exact request fingerprints/results/revisions, current source/annotation/policy and
+toolchain pins, and the identical freshly computed review band. Related decisions
+must retain their exact persisted conservative edge. Unrelated decisions dismiss
+only that suggestion; automatic, declared and transitive relations still constrain
+the groups. The publication receipt and assignment identity bind the consumed
+receipts. Pending, foreign, legacy unreceipted, duplicate, corrupt or stale evidence
+refuses; any assignment/reference history still refuses before object I/O. No
+historical holdout is regrouped, no quarantine restriction is relaxed, and real
+admission/default mounting remain disabled. No new table, migration, dependency,
+grant or scheduler is introduced. Typed discovery binding remains incomplete.
 
 Five covering unit tests exercise core review-band boundaries, pending-only
 inserts, unchanged observations, preparation refusal and receipt invalidation.
@@ -108,8 +114,13 @@ decisions, empty discovery followed by first grouping, privilege rollback/recove
 races, nonadmin and current-pin refusals, assignment-history protection and
 workspace/context isolation. Their deterministic review-band observations are
 explicitly synthetic pHashes after real canonical byte validation, not a claim
-that the fixture images naturally have that distance. These new database cases
-await exact-head Actions; local unit output is not database evidence.
+that the fixture images naturally have that distance. Nine additional covering unit
+cases exercise decision consumption and conservative-edge preservation. Both
+existing decision database cases now continue through first publication and replay;
+ten additional PostgreSQL cases check pending, mutated pair, absent related edge,
+actor/workspace/fingerprint/body and source/toolchain evidence refusal with unchanged
+state. New and expanded database cases await exact-head Actions; local unit output
+is not database evidence.
 
 ### Deployment-owned runtime composition (source preparation)
 

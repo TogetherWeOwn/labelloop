@@ -1,8 +1,8 @@
 """Bounded first assignment publication, not regrouping or project publication.
 
 The canonical mutation caller holds the project lock and owns the transaction.
-Existing assignment history and all borderline evidence refuse: no holdout can
-be laundered and no unreviewed similarity band is silently separated or merged.
+Existing assignment history and unverified borderline evidence refuse: no holdout
+can be laundered and no unreviewed similarity band is silently separated or merged.
 The opt-in facade supplies an explicit trusted reader; this is no admission grant.
 """
 
@@ -64,7 +64,7 @@ def declared_metadata(evidence, allowed_keys):
     return values
 
 
-def constrained_evidence(evidence, declarations, edges):
+def constrained_evidence(evidence, declarations, edges, *, reviewed=()):
     """Feed conservative components back to core's unchanged split allocator.
 
     Core owns visual relations and split stratification. A synthetic internal
@@ -72,7 +72,7 @@ def constrained_evidence(evidence, declarations, edges):
     declarations/persisted edges; it is never stored as observed source metadata.
     """
     groups, relations, reviews = group_sources(evidence, GroupingThresholds())
-    if reviews:
+    if reviews != list(reviewed):
         reject("missing_evidence")
     if set(declarations) != set(groups) or any(not value for value in declarations.values()):
         reject("missing_evidence")
@@ -102,7 +102,9 @@ def constrained_evidence(evidence, declarations, edges):
     return [replace(row, metadata={"session": root(row.asset_id)}) for row in evidence], relations
 
 
-def prepare_initial_grouping(connection, project_row, workspace_id, store, payload):
+def prepare_initial_grouping(
+    connection, project_row, workspace_id, store, payload, *, allow_resolved_pairs=False
+):
     # Import at the composition edge; this loader shares the canonical error helper.
     from .management_project_reads import source_policy_draft
 
@@ -136,15 +138,18 @@ def prepare_initial_grouping(connection, project_row, workspace_id, store, paylo
     if set(payload.annotation_revisions) != set(by_key):
         reject("revision_conflict")
     ids = [row.id for row in assets]
-    # Check before object I/O. No first-publication shortcut through prior history,
-    # even unlocked history, references or already-resolved borderline evidence.
+    # No first-publication shortcut through any assignment/reference history.
+    # Publication separately verifies resolved pairs against current discovery.
     for table, predicate in (
         (source_split_assignment, source_split_assignment.c.asset_id.in_(ids)),
         (reference_example, reference_example.c.asset_id.in_(ids)),
         (
             borderline_review,
-            borderline_review.c.left_asset_id.in_(ids)
-            | borderline_review.c.right_asset_id.in_(ids),
+            (
+                borderline_review.c.left_asset_id.in_(ids)
+                | borderline_review.c.right_asset_id.in_(ids)
+            )
+            & (borderline_review.c.review_state == "pending" if allow_resolved_pairs else True),
         ),
     ):
         if connection.execute(select(table.c.id).where(predicate).limit(1)).first() is not None:
@@ -298,11 +303,40 @@ def discover_initial_pairs(connection, project_row, workspace_id, store, payload
 
 
 def publish_initial_grouping(connection, project_row, workspace_id, store, payload):
+    from .management_pair_consumption import consume_initial_pair_decisions
+
     assets, evidence, declarations, edges, pins = prepare_initial_grouping(
-        connection, project_row, workspace_id, store, payload
+        connection, project_row, workspace_id, store, payload, allow_resolved_pairs=True
     )
+    ids = [row.id for row in assets]
+    pairs = connection.execute(
+        select(borderline_review)
+        .where(
+            borderline_review.c.left_asset_id.in_(ids) | borderline_review.c.right_asset_id.in_(ids)
+        )
+        .order_by(borderline_review.c.id)
+        .limit(MAX_RELATIONS + 1)
+    ).all()
+    receipts = connection.execute(
+        select(canonical_event)
+        .where(
+            canonical_event.c.aggregate_id == str(project_row.id),
+            canonical_event.c.event_type.in_(
+                ["management.discover_initial_source_pairs", "management.resolve_source_pair"]
+            ),
+        )
+        .limit(MAX_RELATIONS + 2)
+    ).all()
+    if len(pairs) > MAX_RELATIONS or len(receipts) > MAX_RELATIONS + 1:
+        reject("management_unavailable")
+    _, _, reviews = group_sources(evidence, GroupingThresholds())
+    consumed = consume_initial_pair_decisions(
+        project_row.id, workspace_id, assets, pins, pairs, receipts, reviews
+    )
+    if consumed:
+        pins = {**pins, "reviewed_pairs": consumed}
     by_key = {row.asset_key: row for row in assets}
-    constrained, relations = constrained_evidence(evidence, declarations, edges)
+    constrained, relations = constrained_evidence(evidence, declarations, edges, reviewed=reviews)
     try:
         assignment = assign_splits(constrained)
     except ValueError:
