@@ -17,6 +17,7 @@ INVALIDATING_OPERATIONS = (
     "publish_class_catalog",
     "save_source_policy_draft",
     "resolve_source_pair",
+    "discover_initial_source_pairs",
     "publish_initial_grouping",
     "enroll_reference",
     "accept_reference",

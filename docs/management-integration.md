@@ -78,6 +78,39 @@ real admission, actual HTTP-to-CPU training/evaluation completion, full project
 publication, registry composition or model quality. Unit delegation/configuration
 cases prove wiring only; exact-head Actions must verify all new cases.
 
+### Initial source-pair discovery (internal preparation)
+
+`CanonicalInitialGrouping.discover` persists code-computed borderline suggestions
+in the existing pair-review table and an attributed canonical receipt. Discovery
+and first assignment publication share one bounded preparation path: current
+ontology/source-policy/annotation pins, project/source locks, canonical image
+hash/decode checks, declared metadata and historical-assignment/reference/pair
+refusals. The unchanged core grouping function computes scores and thresholds;
+no caller chooses a score, threshold, split or human decision. Discovery assigns
+no groups and writes no automatic relations. Exact retries replay the receipt;
+competing requests use the existing project revision and idempotency fences.
+Pair inserts, setup-approval/automatic-acceptance invalidation and the receipt
+commit or roll back together. Receipt-history invalidation includes discovery.
+
+This is an internal producer, not a new HTTP command or a complete grouping
+lifecycle. Existing reads and `resolveSourcePair` can observe and decide its
+pending suggestions, but first assignment publication still refuses all persisted
+pair history, even resolved suggestions. Receipt-bound decision consumption and
+its current-evidence checks must be implemented before exposing a complete
+review-to-first-grouping workflow. No historical holdout is regrouped, no
+quarantine restriction is relaxed, and real admission/default mounting remain
+disabled. No new table, migration, dependency, grant or scheduler is introduced.
+
+Five covering unit tests exercise core review-band boundaries, pending-only
+inserts, unchanged observations, preparation refusal and receipt invalidation.
+Eighteen disposable PostgreSQL cases cover attribution/replay, both existing human
+decisions, empty discovery followed by first grouping, privilege rollback/recovery,
+races, nonadmin and current-pin refusals, assignment-history protection and
+workspace/context isolation. Their deterministic review-band observations are
+explicitly synthetic pHashes after real canonical byte validation, not a claim
+that the fixture images naturally have that distance. These new database cases
+await exact-head Actions; local unit output is not database evidence.
+
 ### Deployment-owned runtime composition (source preparation)
 
 `management_runtime.api_operations`, `compiler_dispatch` and `local_ml_dispatch`

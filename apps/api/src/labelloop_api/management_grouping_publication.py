@@ -102,7 +102,7 @@ def constrained_evidence(evidence, declarations, edges):
     return [replace(row, metadata={"session": root(row.asset_id)}) for row in evidence], relations
 
 
-def publish_initial_grouping(connection, project_row, workspace_id, store, payload):
+def prepare_initial_grouping(connection, project_row, workspace_id, store, payload):
     # Import at the composition edge; this loader shares the canonical error helper.
     from .management_project_reads import source_policy_draft
 
@@ -247,11 +247,6 @@ def publish_initial_grouping(connection, project_row, workspace_id, store, paylo
             )
         except ValueError:
             reject("missing_evidence")
-    constrained, relations = constrained_evidence(evidence, declarations, edges)
-    try:
-        assignment = assign_splits(constrained)
-    except ValueError:
-        reject("missing_evidence")
     pins = {
         "ontology_id": ontology.ontology_key,
         "source_policy_sha256": payload.source_policy_sha256,
@@ -275,6 +270,43 @@ def publish_initial_grouping(connection, project_row, workspace_id, store, paylo
         "phash_algorithm": "phash-dct64-v1",
         "observed_metadata_keys": sorted({key for values in metadata.values() for key in values}),
     }
+    return assets, evidence, declarations, edges, pins
+
+
+def discover_initial_pairs(connection, project_row, workspace_id, store, payload):
+    assets, evidence, _, _, pins = prepare_initial_grouping(
+        connection, project_row, workspace_id, store, payload
+    )
+    _, _, reviews = group_sources(evidence, GroupingThresholds())
+    by_key = {row.asset_key: row for row in assets}
+    discovered = []
+    for review in reviews:
+        identifier = connection.execute(
+            insert(borderline_review)
+            .values(
+                left_asset_id=by_key[review.left_asset_id].id,
+                right_asset_id=by_key[review.right_asset_id].id,
+                metric=review.metric,
+                value=str(review.value),
+                review_state="pending",
+                algorithm_version=ALGORITHM,
+            )
+            .returning(borderline_review.c.id)
+        ).scalar_one()
+        discovered.append({"id": str(identifier), **asdict(review)})
+    return {**pins, "thresholds": asdict(GroupingThresholds()), "pending_pairs": discovered}
+
+
+def publish_initial_grouping(connection, project_row, workspace_id, store, payload):
+    assets, evidence, declarations, edges, pins = prepare_initial_grouping(
+        connection, project_row, workspace_id, store, payload
+    )
+    by_key = {row.asset_key: row for row in assets}
+    constrained, relations = constrained_evidence(evidence, declarations, edges)
+    try:
+        assignment = assign_splits(constrained)
+    except ValueError:
+        reject("missing_evidence")
     version = "initial-" + draft_sha256({**pins, "policy": assignment.assignment_version})
     thresholds = {**asdict(GroupingThresholds()), "validation_fraction": 0.25}
     for relation in relations:
@@ -318,17 +350,25 @@ class CanonicalInitialGrouping:
     objects: CompilationObjects
 
     def publish(self, actor, context, payload: InitialSourceGrouping) -> Resource:
+        return self._mutate(
+            actor, context, payload, "publish_initial_grouping", publish_initial_grouping
+        )
+
+    def discover(self, actor, context, payload: InitialSourceGrouping) -> Resource:
+        return self._mutate(
+            actor, context, payload, "discover_initial_source_pairs", discover_initial_pairs
+        )
+
+    def _mutate(self, actor, context, payload, operation, action) -> Resource:
         canonical = self.canonical
-        canonical.authorize(actor, context, "publish_initial_grouping", context.target_id, payload)
+        canonical.authorize(actor, context, operation, context.target_id, payload)
         with canonical.engine.begin() as connection:
             canonical.begin_mutation(connection, context)
             owned = canonical.lock_project(connection, context.target_id)
             if replay := canonical.replay(connection, context):
                 return replay
             canonical.check_project_revision(connection, owned.id, payload.expected_revision)
-            evidence = publish_initial_grouping(
-                connection, owned, canonical.workspace_id, self.objects, payload
-            )
+            evidence = action(connection, owned, canonical.workspace_id, self.objects, payload)
             policy = dict(owned.access_policy)
             policy["management_setup_approvals"] = {}
             policy.pop("auto_accept_qualification", None)

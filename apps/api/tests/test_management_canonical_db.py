@@ -13441,6 +13441,250 @@ def test_initial_grouping_http_grant_failure_is_atomic_and_recoverable(
         assert sum(row.event_type == "management.publish_initial_grouping" for row in after[2]) == 1
 
 
+def discover_pairs(adapter, project_id, payload, actor=None, key="discover-pairs"):
+    actor = actor or Actor()
+    context = MutationContext.bind(actor, key, "discover_initial_source_pairs", project_id, payload)
+    return adapter.discover(actor, context, payload)
+
+
+def discovered_pairs(owner, project_id):
+    with owner.connect() as connection:
+        owned = select(source_asset.c.id).where(source_asset.c.project_id == project_id)
+        return connection.execute(
+            select(borderline_review)
+            .where(
+                borderline_review.c.left_asset_id.in_(owned)
+                | borderline_review.c.right_asset_id.in_(owned)
+            )
+            .order_by(borderline_review.c.id)
+        ).all()
+
+
+def synthetic_borderline_collector(monkeypatch, payload):
+    from labelloop_api import management_grouping_publication as module
+
+    # Real canonical bytes still pass hash/decode/dimension validation. Only the
+    # pHash observations are synthetic to deterministically exercise this band.
+    original = module.collect_source_grouping_evidence
+    hashes = dict(
+        zip(
+            payload.annotation_revisions,
+            [0, 511, int("a" * 16, 16), int("5" * 16, 16)],
+            strict=True,
+        )
+    )
+
+    def collect(asset, data, **kwargs):
+        return replace(original(asset, data, **kwargs), phash=hashes[asset.asset_id])
+
+    monkeypatch.setattr(module, "collect_source_grouping_evidence", collect)
+
+
+@pytest.mark.parametrize("decision", ["related", "unrelated"])
+def test_initial_pair_discovery_is_attributed_pending_and_uses_existing_decision_port(
+    database, monkeypatch, decision
+):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    synthetic_borderline_collector(monkeypatch, payload)
+    saved = discover_pairs(adapter, created.id, payload)
+    assignments, relations, events, policy = initial_grouping_snapshot(owner, created.id)
+    pairs = discovered_pairs(owner, created.id)
+    assert len(pairs) == 1 and pairs[0].review_state == "pending"
+    assert pairs[0].metric == "phash" and pairs[0].value == "9"
+    assert assignments == [] and relations == []
+    assert policy["management_setup_approvals"] == {}
+    receipt = next(
+        row for row in events if row.event_type == "management.discover_initial_source_pairs"
+    )
+    assert receipt.actor_kind == "human" and receipt.actor_id == Actor().id
+    assert receipt.payload["aggregate_revision"] == saved.revision == payload.expected_revision + 1
+    evidence = receipt.payload["evidence"]
+    assert evidence["source_policy_sha256"] == payload.source_policy_sha256
+    assert evidence["annotation_revisions"] == payload.annotation_revisions
+    assert evidence["pending_pairs"][0]["id"] == str(pairs[0].id)
+    assert len(evidence["sources"]) == 4 and evidence["toolchain"]
+    assert discover_pairs(adapter, created.id, payload) == saved
+    assert discovered_pairs(owner, created.id) == pairs
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        discover_pairs(
+            adapter,
+            created.id,
+            payload.model_copy(update={"expected_revision": saved.revision}),
+            key="do-not-duplicate",
+        )
+    assert discovered_pairs(owner, created.id) == pairs
+    resolved = resolve_pair(
+        service,
+        created.id,
+        SourcePairResolve(
+            expected_revision=saved.revision,
+            pair_id=str(pairs[0].id),
+            decision=decision,
+            reason="Explicit review of discovered source relationship",
+        ),
+    )
+    assert discovered_pairs(owner, created.id)[0].review_state == decision
+    assert initial_grouping_snapshot(owner, created.id)[0] == []
+    # Decision consumption/regrouping is not smuggled into first publication.
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_grouping(
+            adapter, created.id, payload.model_copy(update={"expected_revision": resolved.revision})
+        )
+
+
+def test_empty_initial_pair_discovery_does_not_assign_or_block_first_grouping(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    saved = discover_pairs(adapter, created.id, payload)
+    assert discovered_pairs(owner, created.id) == []
+    assert initial_grouping_snapshot(owner, created.id)[:2] == ([], [])
+    published = publish_grouping(
+        adapter, created.id, payload.model_copy(update={"expected_revision": saved.revision})
+    )
+    assert published.revision == saved.revision + 1
+    assert len(initial_grouping_snapshot(owner, created.id)[0]) == 4
+
+
+@pytest.mark.parametrize("grant", ["borderline_review", "canonical_event", "project"])
+def test_initial_pair_discovery_missing_grant_rolls_back_and_recovers(database, monkeypatch, grant):
+    service, owner, role = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    synthetic_borderline_collector(monkeypatch, payload)
+    before = initial_grouping_snapshot(owner, created.id)
+    privilege = "UPDATE (access_policy)" if grant == "project" else "INSERT"
+    with owner.begin() as connection:
+        connection.execute(text(f'REVOKE {privilege} ON {grant} FROM "{role}"'))
+    try:
+        with pytest.raises(DBAPIError):
+            discover_pairs(adapter, created.id, payload)
+        assert initial_grouping_snapshot(owner, created.id) == before
+        assert discovered_pairs(owner, created.id) == []
+    finally:
+        with owner.begin() as connection:
+            connection.execute(text(f'GRANT {privilege} ON {grant} TO "{role}"'))
+    assert discover_pairs(adapter, created.id, payload).revision == payload.expected_revision + 1
+    assert len(discovered_pairs(owner, created.id)) == 1
+
+
+@pytest.mark.parametrize("same_key", [True, False])
+def test_initial_pair_discovery_serializes_retry_and_competing_requests(
+    database, monkeypatch, same_key
+):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    synthetic_borderline_collector(monkeypatch, payload)
+    barrier = Barrier(2)
+
+    def submit(index):
+        barrier.wait()
+        try:
+            return discover_pairs(
+                adapter, created.id, payload, key="same" if same_key else f"discover-{index}"
+            ).revision
+        except ManagementFailure as error:
+            return error.error.detail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, range(2)))
+    expected = payload.expected_revision + 1
+    assert (
+        outcomes == [expected, expected]
+        if same_key
+        else sorted(outcomes, key=str) == sorted([expected, "revision_conflict"], key=str)
+    )
+    assert len(discovered_pairs(owner, created.id)) == 1
+    assert initial_grouping_snapshot(owner, created.id)[:2] == ([], [])
+
+
+@pytest.mark.parametrize("actor", [Reader(), Actor(kind="model"), Actor(role="worker-ml")])
+def test_initial_pair_discovery_refuses_nonadmin_without_object_access(database, actor):
+    from types import SimpleNamespace
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    before = initial_grouping_snapshot(owner, created.id)
+
+    def unexpected(key):
+        raise AssertionError("authorization must precede object I/O")
+
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        discover_pairs(
+            replace(adapter, objects=SimpleNamespace(read=unexpected)),
+            created.id,
+            payload,
+            actor=actor,
+        )
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert discovered_pairs(owner, created.id) == []
+
+
+@pytest.mark.parametrize("change", ["revision", "ontology", "policy", "annotation", "membership"])
+def test_initial_pair_discovery_reuses_current_pin_preflight(database, change):
+    from types import SimpleNamespace
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    changes = {
+        "revision": {"expected_revision": 0},
+        "ontology": {"ontology_id": "absent"},
+        "policy": {"source_policy_sha256": "f" * 64},
+        "annotation": {"annotation_revisions": dict.fromkeys(payload.annotation_revisions, 0)},
+        "membership": {"annotation_revisions": {"foreign": 1}},
+    }[change]
+    before = initial_grouping_snapshot(owner, created.id)
+
+    def unexpected(key):
+        raise AssertionError("pin refusal must precede object I/O")
+
+    with pytest.raises(ManagementFailure, match="revision_conflict"):
+        discover_pairs(
+            replace(adapter, objects=SimpleNamespace(read=unexpected)),
+            created.id,
+            payload.model_copy(update=changes),
+        )
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert discovered_pairs(owner, created.id) == []
+
+
+def test_initial_pair_discovery_cannot_touch_assignment_history(database):
+    from types import SimpleNamespace
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    published = publish_grouping(adapter, created.id, payload)
+    before = initial_grouping_snapshot(owner, created.id)
+
+    def unexpected(key):
+        raise AssertionError("history refusal must precede object I/O")
+
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        discover_pairs(
+            replace(adapter, objects=SimpleNamespace(read=unexpected)),
+            created.id,
+            payload.model_copy(update={"expected_revision": published.revision}),
+        )
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert discovered_pairs(owner, created.id) == []
+
+
+def test_initial_pair_discovery_verifies_workspace_and_operation_before_replay(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    saved = discover_pairs(adapter, created.id, payload)
+    before = initial_grouping_snapshot(owner, created.id)
+    foreign = replace(adapter, canonical=replace(service, workspace_id=uuid4()))
+    with pytest.raises(ManagementFailure, match="not_found"):
+        discover_pairs(foreign, created.id, payload)
+    wrong = MutationContext.bind(
+        Actor(), "discover-pairs", "publish_initial_grouping", created.id, payload
+    )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        adapter.discover(Actor(), wrong, payload)
+    assert discover_pairs(adapter, created.id, payload) == saved
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
 def initial_grouping_inputs(service, owner, *, duplicate=False, metadata=None):
     import random
     from types import SimpleNamespace
