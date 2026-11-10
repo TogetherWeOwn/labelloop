@@ -1153,10 +1153,14 @@ def test_postgres_two_publications_one_transaction_second_is_current() -> None:
             )
             # Both publications share now(); the second must still be
             # current (publication sequence, not timestamp/lexical order).
+            # The seed is bound into the version identity, so the proposal
+            # must replay the second publication's seed to prove the
+            # published version is the current one.
             proposal = propose_regroup(
                 connection,
                 project_id=fixture.project_id,
                 observations=observations(),
+                seed=20261108,
                 pins=LifecyclePins(expected_assignment_version=second.assignment_version),
             )
             assert proposal.new_assignment_version == second.assignment_version
