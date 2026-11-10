@@ -30,7 +30,14 @@ def test_ci_results_requires_every_job() -> None:
         ({"python": True, "web": False, "docs": False}, {"web-build"}),
         (
             {"python": False, "web": True, "docs": False},
-            {"types", "unit", "import-contract", "ml-smoke", "recovery-drill"},
+            {
+                "types",
+                "unit",
+                "import-contract",
+                "ml-smoke",
+                "queue-postgres",
+                "recovery-drill",
+            },
         ),
         (
             {"python": False, "web": False, "docs": True},
@@ -39,6 +46,7 @@ def test_ci_results_requires_every_job() -> None:
                 "unit",
                 "import-contract",
                 "ml-smoke",
+                "queue-postgres",
                 "recovery-drill",
                 "web-build",
                 "dev-stack",

@@ -13,6 +13,24 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_ml_runtime_uses_paired_cpu_dependency_pins() -> None:
+    import onnx
+    import onnxruntime
+    import torch
+    import torchvision
+    import ultralytics
+
+    suffix = "+cpu" if sys.platform == "linux" else ""
+    assert str(torch.__version__) == f"2.13.0{suffix}"
+    assert torchvision.__version__ == f"0.28.0{suffix}"
+    assert onnx.__version__ == "1.22.0"
+    assert onnxruntime.__version__ == "1.24.4"
+    assert ultralytics.__version__ == "8.4.204"
+    if sys.platform == "linux":
+        assert torch.version.cuda is None
+        assert torch.version.hip is None
+
+
 @pytest.mark.parametrize("column,delta", [(0, 0.02), (4, 0.001), (5, 1)])
 def test_export_comparison_rejects_geometry_score_and_class_drift(
     column: int, delta: float

@@ -14,9 +14,17 @@ REQUIRED = {
     "web-build",
     "dev-stack",
     "ml-smoke",
+    "queue-postgres",
     "recovery-drill",
 }
-PYTHON_JOBS = {"types", "unit", "import-contract", "ml-smoke", "recovery-drill"}
+PYTHON_JOBS = {
+    "types",
+    "unit",
+    "import-contract",
+    "ml-smoke",
+    "queue-postgres",
+    "recovery-drill",
+}
 AREA_JOBS = PYTHON_JOBS | {"web-build"}
 
 
