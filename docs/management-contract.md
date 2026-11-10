@@ -82,8 +82,18 @@ asset admission. Object keys resolve from owned canonical rows, never requests.
 The adapter atomically commits locked assignments, conservative relation closure,
 setup/automatic-acceptance invalidation and the attributed receipt. Any prior
 assignment/reference/borderline evidence refuses; there is no regrouping or holdout
-quarantine bypass. Metadata values, embedding evidence and pair-discovery publication
-remain separate missing producers. Default application mounting remains disabled.
+quarantine bypass. The existing ingest command accepts optional `source_metadata`:
+only `session`, `sequence` and `subject`, with bounded nonempty identifier values.
+These are attributed declarations, not inferred identities or assignment authority.
+The first-grouping adapter reads them from the owned ingest receipt and requires
+every supplied key to be declared by the current source-policy draft before object
+I/O. It never drops an unselected relationship silently. Core grouping applies
+these values transitively alongside declared groups and persisted relations;
+observed values and keys are pinned in the assignment receipt. Older ingests without
+metadata retain empty observations and their original retry fingerprints. Changing
+metadata under an existing retry key conflicts. No metadata-edit, regrouping or
+holdout-repair shortcut is added. Embedding evidence and pair-discovery publication
+remain missing. Default application mounting and real asset admission stay disabled.
 
 Future real adapters must select only approved scalar training argument keys,
 never raw logs/provider dictionaries containing paths, tokens or signed URLs.

@@ -168,6 +168,24 @@
             "title": "Source Group",
             "type": "string"
           },
+          "source_metadata": {
+            "additionalProperties": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "maxProperties": 3,
+            "propertyNames": {
+              "enum": [
+                "session",
+                "sequence",
+                "subject"
+              ]
+            },
+            "title": "Source Metadata",
+            "type": "object"
+          },
           "source_uri": {
             "default": "",
             "maxLength": 2048,

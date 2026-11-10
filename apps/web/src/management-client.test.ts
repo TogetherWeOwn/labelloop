@@ -62,6 +62,31 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('transports source declarations without assigning identity or splits', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 1,
+      original_base64: 'Zml4dHVyZQ==',
+      source_group: 'capture',
+      source_metadata: { session: 'session-1', sequence: 'sequence-2', subject: 'subject-3' },
+    };
+    await client.ingestAsset({ project_id: 'p', 'idempotency-key': 'source-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/assets', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'source-1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('sends authoritative freeze membership with CSRF and idempotency headers', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

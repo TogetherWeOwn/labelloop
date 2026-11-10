@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from importlib.metadata import version as library_version
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import insert, select, update
 
 from labelloop_compiler.ingest import MAX_UPLOAD_BYTES, imaging_toolchain
@@ -24,7 +25,7 @@ from labelloop_core.grouping import (
 
 from .management_canonical import CanonicalManagementMutations
 from .management_compile_worker import CompilationObjects
-from .management_contracts import InitialSourceGrouping, ManagementError, Resource
+from .management_contracts import InitialSourceGrouping, ManagementError, Resource, SourceMetadata
 from .management_grouping_evidence import collect_source_grouping_evidence
 from .management_ontology import validate_ontology
 from .management_ports import ManagementFailure
@@ -48,6 +49,19 @@ MAX_RELATIONS = 65536
 
 def reject(code):
     raise ManagementFailure(ManagementError(detail=code))
+
+
+def declared_metadata(evidence, allowed_keys):
+    # Absence is the historical pre-metadata receipt, not a fabricated observation.
+    try:
+        values = TypeAdapter(SourceMetadata).validate_python(
+            evidence.get("source_metadata", {}), strict=True
+        )
+    except ValidationError:
+        reject("missing_evidence")
+    if not values.keys() <= set(allowed_keys):
+        reject("missing_evidence")
+    return values
 
 
 def constrained_evidence(evidence, declarations, edges):
@@ -146,12 +160,14 @@ def publish_initial_grouping(connection, project_row, workspace_id, store, paylo
         .limit(MAX_SOURCES + 1)
     ).all()
     declarations = {}
+    metadata = {}
     for receipt in receipts:
         key = receipt.payload["result"]["id"]
         declared = receipt.payload["evidence"]["source_group"]
         if key not in by_key or key in declarations or type(declared) is not str or not declared:
             reject("missing_evidence")
         declarations[key] = declared
+        metadata[key] = declared_metadata(receipt.payload["evidence"], draft.metadata_keys)
     if set(declarations) != set(by_key):
         reject("missing_evidence")
     current = {
@@ -225,7 +241,7 @@ def publish_initial_grouping(connection, project_row, workspace_id, store, paylo
                         exif_orientation=asset.exif_orientation,
                     ),
                     data,
-                    metadata={},
+                    metadata=metadata[asset.asset_key],
                     class_counts=counts[asset.asset_key],
                 )
             )
@@ -257,7 +273,7 @@ def publish_initial_grouping(connection, project_row, workspace_id, store, paylo
         "constraint_adapter": "initial-canonical-closure-v1",
         "toolchain": {**imaging_toolchain(), "numpy": library_version("numpy")},
         "phash_algorithm": "phash-dct64-v1",
-        "observed_metadata_keys": [],
+        "observed_metadata_keys": sorted({key for values in metadata.values() for key in values}),
     }
     version = "initial-" + draft_sha256({**pins, "policy": assignment.assignment_version})
     thresholds = {**asdict(GroupingThresholds()), "validation_fraction": 0.25}

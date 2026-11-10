@@ -9,6 +9,9 @@ from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, field_validator,
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")]
 Revision = Annotated[int, Field(ge=0)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+SourceMetadata = Annotated[
+    dict[Literal["session", "sequence", "subject"], Identifier], Field(max_length=3)
+]
 RecipeId = Literal["full-letterbox-320-v1", "full-letterbox-640-v1"]
 ResourceKind = Literal[
     "project", "asset", "dataset-release", "variant", "training-run", "model", "evaluation", "job"
@@ -198,6 +201,7 @@ class AssetIngest(Mutation):
     ]
     source_uri: Annotated[str, Field(max_length=2048)] = ""
     source_group: Identifier
+    source_metadata: SourceMetadata = Field(default_factory=dict)
 
     @field_validator("original_base64", mode="before")
     @classmethod

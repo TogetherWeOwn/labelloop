@@ -896,6 +896,7 @@ class CanonicalManagementMutations:
                 result,
                 {
                     "source_group": payload.source_group,
+                    "source_metadata": payload.source_metadata,
                     "source_sha256": asset.sha256,
                     "imaging_toolchain": imaging_toolchain(),
                 },

@@ -3,7 +3,7 @@
 
 export type AffineTransform = { "algorithm": string; "allow_upscale"?: boolean; "bottom": number; "crop": Crop; "forward": Matrix3; "inverse": Matrix3; "left": number; "output_size": number; "resized_height": number; "resized_width": number; "right": number; "scale_x": number; "scale_y": number; "source_height": number; "source_width": number; "top": number };
 export type ArgumentMismatchRead = { "key": string; "requested": string | number | boolean | null; "resolved": string | number | boolean | null };
-export type AssetIngest = { "expected_revision": number; "original_base64": string; "source_group": string; "source_uri"?: string };
+export type AssetIngest = { "expected_revision": number; "original_base64": string; "source_group": string; "source_metadata"?: Record<string, string>; "source_uri"?: string };
 export type Box = { "x_max": number; "x_min": number; "y_max": number; "y_min": number };
 export type CheckRead = { "code": string; "passed": boolean | null; "reason": string };
 export type Checkpoint = { "epoch": number; "evaluation_run_id": string; "role"?: "development" | "calibration" | "locked_final_test"; "sha256": string; "validation_map": number };

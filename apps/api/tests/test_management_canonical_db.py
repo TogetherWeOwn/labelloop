@@ -10908,7 +10908,7 @@ def test_initial_grouping_http_grant_failure_is_atomic_and_recoverable(
         assert sum(row.event_type == "management.publish_initial_grouping" for row in after[2]) == 1
 
 
-def initial_grouping_inputs(service, owner, *, duplicate=False):
+def initial_grouping_inputs(service, owner, *, duplicate=False, metadata=None):
     import random
     from types import SimpleNamespace
 
@@ -10932,6 +10932,7 @@ def initial_grouping_inputs(service, owner, *, duplicate=False):
                 expected_revision=index + 1,
                 original_base64=base64.b64encode(output.getvalue()).decode(),
                 source_group="shared" if index < 2 else f"capture-{index}",
+                source_metadata=(metadata or {}).get(index, {}),
             ),
             key=f"initial-source-{index}",
         )
@@ -10977,6 +10978,100 @@ def initial_grouping_snapshot(owner, project_id):
             select(project.c.access_policy).where(project.c.id == project_id)
         ).scalar_one()
         return assignments, relations, receipts, policy
+
+
+@pytest.mark.parametrize("metadata_key", ["session", "sequence", "subject"])
+def test_initial_grouping_uses_attributed_ingest_metadata_as_transitive_constraints(
+    database, metadata_key
+):
+    service, owner, _ = database
+    values = {1: {metadata_key: "bridge"}, 2: {metadata_key: "bridge"}}
+    created, payload, adapter = initial_grouping_inputs(service, owner, metadata=values)
+    saved = publish_grouping(adapter, created.id, payload)
+    assignments, relations, events, _ = initial_grouping_snapshot(owner, created.id)
+    with owner.connect() as connection:
+        assets = {
+            row.asset_key: row.id
+            for row in connection.execute(
+                select(source_asset).where(source_asset.c.project_id == created.id)
+            )
+        }
+    keys = list(payload.annotation_revisions)
+    by_id = {row.asset_id: row for row in assignments}
+    assert len({by_id[assets[key]].group_id for key in keys[:3]}) == 1
+    assert by_id[assets[keys[0]]].group_id != by_id[assets[keys[3]]].group_id
+    matching = [row for row in relations if row.reason == "metadata"]
+    assert len(matching) == 1 and matching[0].evidence == metadata_key
+    receipt = next(row for row in events if row.event_type == "management.publish_initial_grouping")
+    evidence = receipt.payload["evidence"]
+    assert evidence["observed_metadata_keys"] == [metadata_key]
+    observed = {row["asset_id"]: row["metadata"] for row in evidence["sources"]}
+    assert observed == {key: values.get(index, {}) for index, key in enumerate(keys)}
+    for ingest_receipt in events:
+        if ingest_receipt.event_type == "management.ingest_asset":
+            key = ingest_receipt.payload["result"]["id"]
+            assert ingest_receipt.payload["evidence"]["source_metadata"] == observed[key]
+            assert ingest_receipt.actor_kind == "human" and ingest_receipt.actor_id == Actor().id
+    assert publish_grouping(adapter, created.id, payload) == saved
+    assert initial_grouping_snapshot(owner, created.id)[0] == assignments
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    assert reads.read_project(Reader(), created.id).published_release_id is None
+
+
+def test_initial_grouping_refuses_metadata_outside_current_policy_before_object_io(database):
+    from types import SimpleNamespace
+
+    from labelloop_api.management_setup import draft_sha256
+
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(
+        service, owner, metadata={1: {"subject": "bridge"}, 2: {"subject": "bridge"}}
+    )
+    policy = source_policy_payload(payload.expected_revision).model_copy(
+        update={"metadata_keys": ["session"]}
+    )
+    saved = save_sources(service, created.id, policy, key="restrict-metadata-policy")
+    payload = payload.model_copy(
+        update={
+            "expected_revision": saved.revision,
+            "source_policy_sha256": draft_sha256(policy.model_dump(exclude={"expected_revision"})),
+        }
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+
+    def unexpected(key):
+        raise AssertionError("metadata policy refusal must precede object I/O")
+
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        publish_grouping(
+            replace(adapter, objects=SimpleNamespace(read=unexpected)), created.id, payload
+        )
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+
+def test_ingest_metadata_retry_conflicts_preserve_original_declaration(database):
+    service, owner, _ = database
+    created = create(service)
+    payload = image_payload().model_copy(update={"source_metadata": {"session": "original"}})
+    first = ingest(service, created.id, payload, key="metadata-ingest")
+    before = counts(owner, created.id)
+    assert ingest(service, created.id, payload, key="metadata-ingest") == first
+    with pytest.raises(ManagementFailure, match="idempotency_conflict"):
+        ingest(
+            service,
+            created.id,
+            payload.model_copy(update={"source_metadata": {"session": "changed"}}),
+            key="metadata-ingest",
+        )
+    assert counts(owner, created.id) == before
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.ingest_asset",
+            )
+        ).one()
+    assert receipt.payload["evidence"]["source_metadata"] == {"session": "original"}
 
 
 def test_initial_grouping_publishes_locked_constraints_atomically_and_replays(database):
@@ -11064,7 +11159,12 @@ def test_initial_grouping_pins_refuse_before_object_access(database, change):
 )
 def test_initial_grouping_missing_grant_rolls_back_and_retries(database, grant):
     service, owner, role = database
-    created, payload, adapter = initial_grouping_inputs(service, owner, duplicate=True)
+    created, payload, adapter = initial_grouping_inputs(
+        service,
+        owner,
+        duplicate=True,
+        metadata={1: {"session": "bridge"}, 2: {"session": "bridge"}},
+    )
     before = initial_grouping_snapshot(owner, created.id)
     privilege = "UPDATE (access_policy)" if grant == "project" else "INSERT"
     with owner.begin() as connection:

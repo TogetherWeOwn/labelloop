@@ -81,7 +81,11 @@ class MutationContext:
         cls, actor: ManagementPrincipal, key: str, operation: str, target: str, payload: Contract
     ) -> "MutationContext":
         # Include the authenticated actor and route target, not just the body.
-        parts = [actor.id, operation, target, payload.model_dump(mode="json")]
+        body = payload.model_dump(mode="json")
+        # Preserve pre-metadata ingest retry fingerprints when no declaration is supplied.
+        if isinstance(payload, AssetIngest) and not payload.source_metadata:
+            body.pop("source_metadata")
+        parts = [actor.id, operation, target, body]
         fingerprint = hashlib.sha256(
             json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
