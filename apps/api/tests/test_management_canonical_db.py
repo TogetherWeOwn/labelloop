@@ -7497,10 +7497,33 @@ def test_approved_setup_summary_disappears_after_a_byte_identical_draft_save(dat
     assert reads.read_freeze_plan(Reader(), created.id).payload is None
 
 
-@pytest.mark.parametrize("change", ["receipt", "source", "assignment"])
-def test_approved_setup_summary_never_masks_corrupt_or_stale_evidence(database, change):
+def test_approved_setup_summary_survives_refused_immutable_source_rewrite(database):
     service, owner, _ = database
     created, _, source, _ = approved_setup_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.setup_summary_sha256 is not None
+    before = initial_grouping_snapshot(owner, created.id)
+    with pytest.raises(DBAPIError, match="source assets and ontology releases are immutable"):
+        with owner.begin() as connection:
+            connection.execute(
+                source_asset.update().where(source_asset.c.id == source.id).values(sha256="f" * 64)
+            )
+    with owner.connect() as connection:
+        assert (
+            connection.execute(
+                select(source_asset.c.sha256).where(source_asset.c.id == source.id)
+            ).scalar_one()
+            == source.sha256
+        )
+    assert initial_grouping_snapshot(owner, created.id) == before
+    assert reads.read_project(Reader(), created.id) == detail
+
+
+@pytest.mark.parametrize("change", ["receipt", "annotation", "assignment"])
+def test_approved_setup_summary_never_masks_corrupt_or_stale_evidence(database, change):
+    service, owner, _ = database
+    created, asset, source, _ = approved_setup_inputs(service, owner)
     reads = CanonicalManagementReads(service.engine, service.workspace_id)
     assert reads.read_project(Reader(), created.id).setup_summary_sha256 is not None
     with owner.begin() as connection:
@@ -7518,9 +7541,17 @@ def test_approved_setup_summary_never_masks_corrupt_or_stale_evidence(database, 
                 .where(canonical_event.c.id == receipt.id)
                 .values(payload={**receipt.payload, "evidence": evidence})
             )
-        elif change == "source":
-            connection.execute(
-                source_asset.update().where(source_asset.c.id == source.id).values(sha256="f" * 64)
+        elif change == "annotation":
+            append_review(
+                connection,
+                asset_id=asset.id,
+                actor_kind="human",
+                actor_id=Actor().id,
+                expected_revision=3,
+                approval_state="rejected",
+                review_tier="human_reviewed",
+                scope_completeness="unreviewed",
+                objects=[],
             )
         else:
             connection.execute(
