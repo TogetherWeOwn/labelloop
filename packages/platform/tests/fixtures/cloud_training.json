@@ -1,0 +1,29 @@
+{
+  "provenance": "Licence-clean synthetic examples of the normalized training port, derived from docs/plan.md v0.3 and ultralytics/sdk 8af3921 OpenAPI 0.1.107. Not live account recordings or a substitute for the transport owner's HTTP contract fixtures.",
+  "model": {
+    "model_id": "fixture-model",
+    "owner": "fixture-owner",
+    "project_slug": "fixture-project",
+    "state": "untrained"
+  },
+  "receipt": {
+    "model_id": "fixture-model",
+    "gpu_type": "rtx-4090",
+    "price_per_hour_microusd": 690000,
+    "gpu_memory_gb": 24,
+    "estimated_cost_microusd": 172500,
+    "balance_microusd": 10000000
+  },
+  "progress": {
+    "provider_run_id": "fixture-job",
+    "dataset_id": "fixture-dataset",
+    "dataset_version": 7,
+    "dataset_content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "charge": {
+    "transaction_id": "fixture-transaction",
+    "model_id": "fixture-model",
+    "provider_run_id": "fixture-job",
+    "actual_microusd": 120000
+  }
+}
