@@ -437,8 +437,15 @@ def test_management_http_runs_real_cpu_project_to_export(
     assert training_detail.json()["variant_id"] == compiled.resource.id
     exported = client.get(f"/models/{model_id}/export")
     assert exported.status_code == 200, exported.text
-    assert exported.json()["weights_sha256"] == exports[0].weights_sha256
-    assert exported.json()["export_sha256"] == exports[0].export_sha256
+    assert exported.json() == {
+        "model_id": model_id,
+        "recipe_id": recipe,
+        "weights_sha256": exports[0].weights_sha256,
+        "artifact_sha256": exports[0].export_sha256,
+        "format": "onnx",
+        "input_hw": [side, side],
+        "artifact_id": exports[0].export_sha256,
+    }
     evaluation_detail = client.get(f"/evaluations/{evaluated.resource.id}")
     assert evaluation_detail.status_code == 200, evaluation_detail.text
     detail = evaluation_detail.json()
