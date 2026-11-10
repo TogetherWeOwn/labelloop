@@ -121,13 +121,47 @@ exercise CSRF refusal and idempotent replay; reviewer-role reload retains summar
 and artifact reads but refuses training mutation. The existing pipeline JSON now
 records snapshot identity/summary, local publication and the consumed freeze/job
 pins alongside actual CPU/export/evaluation evidence. No extra training cohort is
-added. **This expanded path awaits exact-head Actions; no new pass is claimed.**
+added. Exact head `dfbbe15dc33751fc510e9a0d7eff0097b0b1a5f0` passed
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42858467894):
+[939 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42858467894/job/129977909077),
+plus unit, queue, web/drift, dev-stack, migrations, lint, types and import checks.
+CodeQL and gitleaks passed. The
+[retained artifact](https://github.com/TogetherWeOwn/labelloop/actions/runs/42858467894/artifacts/13783433985)
+contains both configuration-bound pipeline records: matching publication/freeze/
+training pins, four validation sources and nonempty ONNX comparisons at each size,
+matching checkpoint/export hashes and static signatures. Both cohorts have zero
+recall: execution/equivalence is not model quality or independent gold.
 
-Admission and annotation/grouping are still explicit licence-clean canonical
-fixture preparation, not HTTP producer acceptance or independent gold. The
-expansion does not prove complete bootstrap, quality, retrieval, operational role
-provisioning/dispatch, registry composition or default app mounting. Default
-management and real admission remain disabled under the retained Security gate.
+That verified head uses explicit licence-clean canonical admission, annotation
+and grouping fixtures, not their HTTP producers. The expansion does not prove
+complete bootstrap, quality, retrieval, operational role provisioning/dispatch,
+registry composition or default app mounting. Default management and real admission
+remain disabled under the retained Security gate.
+
+### Initial grouping-to-CPU acceptance expansion
+
+The same two CPU cases now commission the existing `publishInitialSourceGrouping`
+HTTP operation against actual normalized original rasters, before references and
+configuration publication. No split assignment, similarity relation or grouping
+receipt is seeded. The test requires an empty grouping history before submission,
+then one session-attributed receipt, all 16 locked assignments, 15 independent
+groups, train/validation membership and unchanged assignment/relation rows on retry
+or refused freeze. CSRF and idempotent replay use the same HTTP helper as the other
+commands. Grouping alone still cannot freeze an unpublished setup.
+
+Reference enrollment selects training sources from the actual persisted assignment,
+not the fixture's previous split oracle. Freeze/manifest assignment versions,
+every compiled source's group/split and validation report membership/support must
+match those persisted assignments. The pipeline artifact retains the grouping
+version, source-policy pin, toolchain and actual membership. No extra CPU cohort,
+new endpoint or production behavior is introduced. This expanded grouping path
+**awaits exact-head Actions**, not a claimed grouping-to-CPU pass.
+
+Admission and annotations remain explicit canonical fixture preparation, not HTTP
+producer acceptance or independent gold. This is first grouping only, not pair
+discovery, regrouping/quarantine, full bootstrap or quality qualification.
+Operational roles/dispatch, registry composition, default mounting and the existing
+real-admission Security gate are unchanged.
 
 ### Explicit internal local configuration publication
 

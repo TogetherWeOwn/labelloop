@@ -1,9 +1,9 @@
 """Opt-in HTTP -> disposable Actions DB -> queue -> CPU, never qualification.
 
 Reuse the API's restricted session/canonical/worker roles and actual adapters.
-Admission and annotation/grouping remain explicit licence-clean fixture setup.
-Configuration publication is exercised over HTTP; real admission, complete
-bootstrap, quality qualification and default app mounting are not proved.
+Admission and annotations remain explicit licence-clean fixture setup.
+Initial grouping and configuration publication are exercised over HTTP; real
+admission, complete bootstrap, quality and default app mounting are not proved.
 """
 
 import base64
@@ -137,7 +137,7 @@ def save_cpu_setup(client, headers, project_id, fixture, scope):
         headers,
         project_id,
         "setup/sources",
-        {"metadata_keys": ["session"], "collection_notes": "Seeded fixture split groups"},
+        {"metadata_keys": ["session"], "collection_notes": "Declared fixture capture groups"},
         "cpu-sources",
     )
     detail = project_detail(client, project_id)
@@ -214,7 +214,6 @@ def seed_reviewed_fixture(service, owner, client, headers):
             .limit(1)
         ).one()
     ingest_revision = project_detail(client, created.id)["resource"]["revision"]
-    assignment = fixture.release.assignment
     revisions, source_ids = {}, {}
     for index, sample in enumerate(fixture.release.samples):
         old_id = sample.asset.asset_id
@@ -238,19 +237,6 @@ def seed_reviewed_fixture(service, owner, client, headers):
             ).one()
             assert source.sha256 == sample.asset.sha256
             assert (source.width, source.height) == (sample.asset.width, sample.asset.height)
-            connection.execute(
-                insert(assignment_table).values(
-                    assignment_version=assignment.assignment_version,
-                    asset_id=source.id,
-                    group_id=sample.group_id,
-                    split=sample.split,
-                    seed=assignment.seed,
-                    algorithm=assignment.algorithm,
-                    thresholds={"phash_max_distance": 8, "embed_min_cosine": 0.95},
-                    reason="Validated fixture grouping, not a management grouping producer",
-                    locked=True,
-                )
-            )
             objects = [
                 {
                     "object_id": obj.object_id,
@@ -306,11 +292,70 @@ def seed_reviewed_fixture(service, owner, client, headers):
     return created, fixture, source_ids, revisions
 
 
-def publish_cpu_configuration(client, headers, project_id, fixture, source_ids, configure):
+def publish_cpu_grouping(service, owner, client, headers, project_id, revisions, identity):
+    from test_management_canonical_db import initial_grouping_snapshot
+
+    before = initial_grouping_snapshot(owner, project_id)
+    assert before[:2] == ([], [])
+    assert not any(row.event_type == "management.publish_initial_grouping" for row in before[2])
+    detail = project_detail(client, project_id)
+    body = {
+        "expected_revision": detail["resource"]["revision"],
+        "ontology_id": detail["versions"]["ontology_id"],
+        "source_policy_sha256": detail["setup_draft_sha256"]["sources"],
+        "annotation_revisions": revisions,
+    }
+    path = f"/projects/{project_id}/source-assignments/initial"
+    grouped = http_command(client, headers, path, body, "cpu-grouping", 200)
+    assignments, relations, receipts, _ = initial_grouping_snapshot(owner, project_id)
+    assert len(assignments) == len(revisions) and all(row.locked for row in assignments)
+    assert len({row.group_id for row in assignments}) == 15
+    assert {row.split for row in assignments} == {"train", "val"}
+    assert relations
+    (receipt,) = [
+        row for row in receipts if row.event_type == "management.publish_initial_grouping"
+    ]
+    assert receipt.actor_id == identity and receipt.actor_kind == "human"
+    evidence = receipt.payload["evidence"]
+    assert evidence["annotation_revisions"] == revisions
+    assert evidence["source_policy_sha256"] == body["source_policy_sha256"]
+    assert {row["asset_id"] for row in evidence["sources"]} == set(revisions)
+    assert {row.assignment_version for row in assignments} == {evidence["assignment_version"]}
+    with service.engine.connect() as connection:
+        rows = connection.execute(
+            select(source_asset.c.asset_key, assignment_table)
+            .join(assignment_table, assignment_table.c.asset_id == source_asset.c.id)
+            .where(source_asset.c.project_id == UUID(project_id))
+        ).all()
+    by_asset = {row.asset_key: {"group_id": row.group_id, "split": row.split} for row in rows}
+    assert set(by_asset) == set(revisions)
+    plan = client.get(f"/projects/{project_id}/freeze-plan")
+    assert plan.status_code == 200 and plan.json()["payload"] is None
+    # Grouping cannot clear draft setup by itself. Publication remains mandatory.
+    refused = client.post(
+        f"/projects/{project_id}/dataset-releases",
+        json={
+            "expected_revision": grouped["revision"],
+            "ontology_id": body["ontology_id"],
+            "assignment_version": evidence["assignment_version"],
+            "annotation_revisions": revisions,
+        },
+        headers={**headers, "Idempotency-Key": "cpu-before-publication"},
+    )
+    assert refused.status_code == 422 and refused.json() == {"detail": "missing_evidence"}
+    assert initial_grouping_snapshot(owner, project_id)[:2] == (assignments, relations)
+    assert project_detail(client, project_id)["resource"]["revision"] == grouped["revision"]
+    return evidence, by_asset
+
+
+def publish_cpu_configuration(client, headers, project_id, fixture, source_ids, groups, configure):
     detail = project_detail(client, project_id)
     entries = {}
     for sample in fixture.release.samples:
-        if sample.split != "train" or not sample.revision.objects:
+        if (
+            groups[source_ids[sample.asset.asset_id]]["split"] != "train"
+            or not sample.revision.objects
+        ):
             continue
         class_id = sample.revision.objects[0].class_id
         project_command(
@@ -356,7 +401,7 @@ def publish_cpu_configuration(client, headers, project_id, fixture, source_ids, 
         entries[reference["id"]] = {
             "annotation_revision": 3,
             "scene": "interface-fixture",
-            "cluster_id": sample.group_id,
+            "cluster_id": groups[source_ids[sample.asset.asset_id]]["group_id"],
             "validity_tags": ["fixture-only"],
             "utility": 1.0,
         }
@@ -491,6 +536,10 @@ def test_management_http_runs_real_cpu_project_to_export(
     client, headers, configure = management_http
     identity, _ = auth_account
     created, fixture, source_ids, revisions = seed_reviewed_fixture(service, owner, client, headers)
+    configure(grouping_objects=compiler_worker.objects)
+    grouping_evidence, groups = publish_cpu_grouping(
+        service, owner, client, headers, created.id, revisions, identity
+    )
     recipe = f"full-letterbox-{side}-v1"
     torch.set_num_threads(2)
     torch.manual_seed(0)
@@ -510,7 +559,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     )
     configure(profiles=(profile,))
     pin, configuration_summary, publication = publish_cpu_configuration(
-        client, headers, created.id, fixture, source_ids, configure
+        client, headers, created.id, fixture, source_ids, groups, configure
     )
     plan = client.get(f"/projects/{created.id}/freeze-plan")
     assert plan.status_code == 200 and plan.headers["cache-control"] == "no-store"
@@ -519,7 +568,7 @@ def test_management_http_runs_real_cpu_project_to_export(
     payload = plan["payload"]
     assert payload["annotation_revisions"] == revisions
     assert payload["expected_revision"] == publication["revision"]
-    assert payload["assignment_version"] == fixture.release.assignment.assignment_version
+    assert payload["assignment_version"] == grouping_evidence["assignment_version"]
     release = Resource.model_validate(
         http_command(
             client, headers, f"/projects/{created.id}/dataset-releases", payload, "cpu-freeze", 201
@@ -544,6 +593,10 @@ def test_management_http_runs_real_cpu_project_to_export(
     assert len(manifest["samples"]) >= 16
     assert {item["asset_id"] for item in manifest["samples"]} == set(source_ids.values())
     assert set(manifest["class_map"]) == set(fixture.release.ontology.class_map)
+    assert manifest["split_assignment_version"] == grouping_evidence["assignment_version"]
+    for sample in manifest["samples"]:
+        assert sample["split"] == groups[sample["asset_id"]]["split"]
+        assert sample["group_id"] == groups[sample["asset_id"]]["group_id"]
 
     profiles = client.get(f"/projects/{created.id}/training-profiles")
     assert profiles.status_code == 200 and profiles.json()["profiles"] == [
@@ -660,15 +713,13 @@ def test_management_http_runs_real_cpu_project_to_export(
     assert report["overall"] == selected_report["overall"]
     assert report["slices"] == selected_report["slices"]
     assert report["role"] == "development" and report["weights_sha256"] == model.weights_sha256
-    expected_validation = {
-        source_ids[sample.asset.asset_id]
-        for sample in fixture.release.samples
-        if sample.split == "val"
-    }
+    expected_validation = {key for key, row in groups.items() if row["split"] == "val"}
     assert {row["asset_id"] for row in report["coverage"]} == expected_validation
     assert all(row["covered_fraction"] == 1 for row in report["coverage"])
     assert report["overall"]["support"] == sum(
-        len(sample.revision.objects) for sample in fixture.release.samples if sample.split == "val"
+        len(sample.revision.objects)
+        for sample in fixture.release.samples
+        if source_ids[sample.asset.asset_id] in expected_validation
     )
     with service.engine.connect() as connection:
         linked = load_release(connection, model_uuid)
@@ -762,6 +813,7 @@ def test_management_http_runs_real_cpu_project_to_export(
                         "create",
                         "setup-drafts",
                         "class-publication",
+                        "initial-source-grouping",
                         "references",
                         "anchor-pack",
                         "setup-approvals",
@@ -777,7 +829,8 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "reviewer_reads": True,
                     "reviewer_mutation_refusal": True,
                     "admission": "independent-canonical-fixture-setup-only",
-                    "grouping_and_annotation": "seeded-fixture-not-producer-acceptance",
+                    "annotation": "seeded-fixture-not-producer-acceptance",
+                    "grouping": "http-initial-publication-from-canonical-rasters",
                     "default_mount": False,
                 },
                 "configuration": {
@@ -787,6 +840,15 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "freeze_receipt_pin": freeze_receipt.payload["evidence"]["configuration"],
                     "training_input_pin": job_input["configuration"],
                     "unbound_activation_refused": True,
+                },
+                "grouping": {
+                    "assignment_version": grouping_evidence["assignment_version"],
+                    "source_policy_sha256": grouping_evidence["source_policy_sha256"],
+                    "phash_algorithm": grouping_evidence["phash_algorithm"],
+                    "toolchain": grouping_evidence["toolchain"],
+                    "assignments": groups,
+                    "no_seeded_assignments_or_relations": True,
+                    "freeze_before_configuration_refused": True,
                 },
                 "recipe": recipe,
                 "project_id": created.id,
