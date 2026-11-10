@@ -13441,6 +13441,135 @@ def test_initial_grouping_http_grant_failure_is_atomic_and_recoverable(
         assert sum(row.event_type == "management.publish_initial_grouping" for row in after[2]) == 1
 
 
+@pytest.mark.parametrize("mode", ["unconfigured", "related", "unrelated"])
+def test_initial_pair_discovery_http_preserves_shared_identity_and_decision_lifecycle(
+    database, restricted_auth_store, auth_account, monkeypatch, mode
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal as auth_principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    synthetic_borderline_collector(monkeypatch, payload)
+    operations = CanonicalManagementOperations(
+        service.engine,
+        service.store,
+        service.workspace_id,
+        grouping_objects=None if mode == "unconfigured" else adapter.objects,
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    path = f"/projects/{created.id}/source-pairs/discover"
+    body = payload.model_dump(mode="json")
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        assert client.post(path, json=body).status_code == 403
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-discover",
+        }
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.post(path, json=body, headers=headers).status_code == 403
+        assert client.get(f"/projects/{created.id}").status_code == 200
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update().where(auth_principal.c.id == identity).values(role="admin")
+            )
+        assert (
+            client.post(path, json={**body, "thresholds": {}}, headers=headers).status_code == 422
+        )
+        assert initial_grouping_snapshot(owner, created.id) == before
+        assert discovered_pairs(owner, created.id) == []
+        saved = client.post(path, json=body, headers=headers)
+        assert saved.headers["cache-control"] == "no-store"
+        if mode == "unconfigured":
+            assert saved.status_code == 503 and saved.json() == {"detail": "management_unavailable"}
+            assert initial_grouping_snapshot(owner, created.id) == before
+            assert discovered_pairs(owner, created.id) == []
+        else:
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["revision"] == payload.expected_revision + 1
+            after = initial_grouping_snapshot(owner, created.id)
+            assert after[0] == [] and after[1] == []
+            pairs = discovered_pairs(owner, created.id)
+            assert len(pairs) == 1 and pairs[0].review_state == "pending"
+            receipt = next(
+                r for r in after[2] if r.event_type == "management.discover_initial_source_pairs"
+            )
+            assert receipt.actor_id == identity and receipt.actor_kind == "human"
+            assert client.post(path, json=body, headers=headers).json() == saved.json()
+            assert (
+                client.post(
+                    path, json={**body, "ontology_id": "other"}, headers=headers
+                ).status_code
+                == 409
+            )
+            detail = client.get(f"/projects/{created.id}")
+            assert detail.status_code == 200, detail.text
+            assert detail.headers["cache-control"] == "no-store"
+            assert [p["id"] for p in detail.json()["sources"]["pending_pairs"]] == [
+                str(pairs[0].id)
+            ]
+            assert detail.json()["sources"]["assignment_version"] is None
+            grouping_path = f"/projects/{created.id}/source-assignments/initial"
+            assert (
+                client.post(
+                    grouping_path,
+                    json={**body, "expected_revision": saved.json()["revision"]},
+                    headers={**headers, "Idempotency-Key": "pending-no-grouping"},
+                ).status_code
+                == 422
+            )
+            assert initial_grouping_snapshot(owner, created.id) == after
+            resolved = client.post(
+                f"/projects/{created.id}/source-pairs/resolve",
+                json={
+                    "expected_revision": saved.json()["revision"],
+                    "pair_id": str(pairs[0].id),
+                    "decision": mode,
+                    "reason": "Reviewed canonical source pair",
+                },
+                headers={**headers, "Idempotency-Key": "http-pair-decision"},
+            )
+            assert resolved.status_code == 200, resolved.text
+            assert initial_grouping_snapshot(owner, created.id)[0] == []
+            assert client.get(f"/projects/{created.id}").json()["sources"]["pending_pairs"] == []
+            publication_body = {**body, "expected_revision": resolved.json()["revision"]}
+            publication_headers = {**headers, "Idempotency-Key": "http-reviewed-grouping"}
+            published = client.post(
+                grouping_path, json=publication_body, headers=publication_headers
+            )
+            assert published.status_code == 200, published.text
+            assignments, relations, events, _ = initial_grouping_snapshot(owner, created.id)
+            assert len(assignments) == 4 and all(r.locked for r in assignments)
+            assert len(relations) == (1 if mode == "related" else 0)
+            receipt = next(
+                r for r in events if r.event_type == "management.publish_initial_grouping"
+            )
+            assert receipt.actor_id == identity and receipt.actor_kind == "human"
+            assert receipt.payload["evidence"]["reviewed_pairs"][0]["decision"] == mode
+            assert (
+                client.post(
+                    grouping_path, json=publication_body, headers=publication_headers
+                ).json()
+                == published.json()
+            )
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+
+
 def discover_pairs(adapter, project_id, payload, actor=None, key="discover-pairs"):
     actor = actor or Actor()
     context = MutationContext.bind(actor, key, "discover_initial_source_pairs", project_id, payload)

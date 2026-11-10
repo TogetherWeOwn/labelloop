@@ -132,6 +132,10 @@ class ManagementOperations(Protocol):
         self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
     ) -> Resource: ...
 
+    def discover_initial_source_pairs(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
+    ) -> Resource: ...
+
     def resolve_source_pair(
         self, actor: ManagementPrincipal, context: MutationContext, payload: SourcePairResolve
     ) -> Resource: ...

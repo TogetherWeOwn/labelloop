@@ -277,6 +277,11 @@ export class ManagementClient {
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
+  discoverInitialSourcePairs(input: { "project_id": string; "idempotency-key": string; body: InitialSourceGrouping }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/source-pairs/discover`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
   resolveSourcePair(input: { "project_id": string; "idempotency-key": string; body: SourcePairResolve }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/source-pairs/resolve`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);

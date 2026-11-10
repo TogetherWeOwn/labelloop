@@ -124,8 +124,12 @@ def test_facade_refuses_mutable_or_missing_server_configuration(operations, fiel
         )
 
 
+@pytest.mark.parametrize(
+    "operation,method",
+    [("publish_initial_grouping", "publish"), ("discover_initial_source_pairs", "discover")],
+)
 def test_initial_grouping_requires_explicit_reader_and_preserves_canonical_arguments(
-    operations, monkeypatch
+    operations, monkeypatch, operation, method
 ):
     from test_management_contract import Actor
 
@@ -136,11 +140,11 @@ def test_initial_grouping_requires_explicit_reader_and_preserves_canonical_argum
         source_policy_sha256="a" * 64,
         annotation_revisions={"a": 0, "b": 1},
     )
-    context = MutationContext.bind(actor, "grouping", "publish_initial_grouping", "p", payload)
+    context = MutationContext.bind(actor, "grouping", operation, "p", payload)
     with pytest.raises(ManagementFailure, match="management_unavailable"):
-        operations.publish_initial_grouping(actor, context, payload)
+        getattr(operations, operation)(actor, context, payload)
     with pytest.raises(ManagementFailure, match="invalid_request"):
-        operations.publish_initial_grouping(actor, replace(context, target_id="foreign"), payload)
+        getattr(operations, operation)(actor, replace(context, target_id="foreign"), payload)
     reader = SimpleNamespace(read=lambda key: pytest.fail("composition must not read objects"))
     configured = replace(operations, grouping_objects=reader)
     result = object()
@@ -151,8 +155,8 @@ def test_initial_grouping_requires_explicit_reader_and_preserves_canonical_argum
         calls.append(args)
         return result
 
-    monkeypatch.setattr(CanonicalInitialGrouping, "publish", publish)
-    assert configured.publish_initial_grouping(actor, context, payload) is result
+    monkeypatch.setattr(CanonicalInitialGrouping, method, publish)
+    assert getattr(configured, operation)(actor, context, payload) is result
     assert calls == [(actor, context, payload)]
 
 

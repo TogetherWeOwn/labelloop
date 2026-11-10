@@ -119,10 +119,25 @@ with a callable `read`; the canonical upload store is not implicitly treated as 
 reader. Absent configuration returns `management_unavailable` without object or DB
 access after actor/context validation. This capability does **not** enable original
 asset admission. Object keys resolve from owned canonical rows, never requests.
-The adapter atomically commits locked assignments, conservative relation closure,
-setup/automatic-acceptance invalidation and the attributed receipt. Any prior
-assignment/reference/borderline evidence refuses; there is no regrouping or holdout
-quarantine bypass. The existing ingest command accepts optional `source_metadata`:
+`discoverInitialSourcePairs` (`POST /projects/{project_id}/source-pairs/discover`)
+uses the same strict `InitialSourceGrouping` body, explicit trusted reader and
+admin/session/CSRF/revision/retry boundary. It computes current canonical pHash band
+suggestions through the existing core grouping engine and atomically saves pending
+pairs, setup/automatic-acceptance invalidation and a human-attributed receipt. It
+returns the project revision acknowledgment, not assignments or resolved decisions.
+Authorized `readProject.sources.pending_pairs` supplies server pair IDs for the
+existing `resolveSourcePair` operation. No request selects endpoints, observations,
+thresholds, split assignments or a human decision. Empty discovery also records a
+receipt; exact retry acknowledges it without renewing evidence.
+
+The grouping publisher atomically commits locked assignments, conservative relation
+closure, setup/automatic-acceptance invalidation and the attributed receipt. Prior
+assignment/reference history refuses. Persisted pairs require a current attributed
+discovery and one complete human decision receipt per pair, matching freshly
+recomputed source/annotation/policy/toolchain evidence. Pending, stale or corrupt
+receipts refuse. Related decisions retain their exact edge; unrelated decisions
+never remove automatic, declared or transitive constraints. There is no regrouping
+or holdout quarantine bypass. The existing ingest command accepts optional `source_metadata`:
 only `session`, `sequence` and `subject`, with bounded nonempty identifier values.
 These are attributed declarations, not inferred identities or assignment authority.
 The first-grouping adapter reads them from the owned ingest receipt and requires
@@ -132,8 +147,9 @@ these values transitively alongside declared groups and persisted relations;
 observed values and keys are pinned in the assignment receipt. Older ingests without
 metadata retain empty observations and their original retry fingerprints. Changing
 metadata under an existing retry key conflicts. No metadata-edit, regrouping or
-holdout-repair shortcut is added. Embedding evidence and pair-discovery publication
-remain missing. Default application mounting and real asset admission stay disabled.
+holdout-repair shortcut is added. Embedding evidence and the complete later-ingest,
+metadata-edit, regrouping/quarantine lifecycle remain missing. Default application
+mounting and real asset admission stay disabled.
 
 ## Internal anchor-pack preparation (not publication)
 

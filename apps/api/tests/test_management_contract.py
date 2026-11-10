@@ -154,6 +154,12 @@ MUTATIONS = [
         INITIAL_GROUPING,
         200,
     ),
+    (
+        "/projects/p/source-pairs/discover",
+        "discover_initial_source_pairs",
+        INITIAL_GROUPING,
+        200,
+    ),
     ("/projects/p/source-pairs/resolve", "resolve_source_pair", PAIR_RESOLVE, 200),
     ("/projects/p/references/revalidate", "revalidate_reference", REFERENCE_REVALIDATE, 200),
     ("/projects/p/setup/classes/publish", "publish_class_catalog", CATALOG_PUBLISH, 200),
@@ -960,10 +966,11 @@ def test_reference_revalidation_refuses_identity_replacement_and_untrusted_autho
         ("assignment_version", "forged"),
     ],
 )
-def test_initial_grouping_refuses_untrusted_pins_and_assignment_authority(field, value):
+@pytest.mark.parametrize("path", ["source-assignments/initial", "source-pairs/discover"])
+def test_initial_grouping_refuses_untrusted_pins_and_assignment_authority(field, value, path):
     client, service = client_for(Actor())
     response = client.post(
-        "/projects/p/source-assignments/initial",
+        f"/projects/p/{path}",
         json={**INITIAL_GROUPING, field: value},
         headers={"Idempotency-Key": "initial-grouping"},
     )
@@ -1011,8 +1018,12 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 36
-    assert sum(len(methods) for methods in spec["paths"].values()) == 37
+    assert len(spec["paths"]) == 37
+    assert sum(len(methods) for methods in spec["paths"].values()) == 38
+    assert (
+        spec["paths"]["/projects/{project_id}/source-pairs/discover"]["post"]["operationId"]
+        == "discoverInitialSourcePairs"
+    )
     for path, method, operation in (
         ("/projects/{project_id}/configuration-snapshots", "post", "publishConfigurationSnapshot"),
         (

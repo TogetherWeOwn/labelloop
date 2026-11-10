@@ -238,6 +238,23 @@ def management_router(
         return invoke(lambda: service.publish_initial_grouping(actor, context, payload))
 
     @router.post(
+        "/projects/{project_id}/source-pairs/discover",
+        response_model=Resource,
+        operation_id="discoverInitialSourcePairs",
+    )
+    def discover_initial_source_pairs(
+        project_id: Identifier,
+        payload: InitialSourceGrouping,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "discover_initial_source_pairs", project_id, payload
+        )
+        return invoke(lambda: service.discover_initial_source_pairs(actor, context, payload))
+
+    @router.post(
         "/projects/{project_id}/source-pairs/resolve",
         response_model=Resource,
         operation_id="resolveSourcePair",

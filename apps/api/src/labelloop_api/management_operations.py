@@ -150,6 +150,16 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
             actor, context, payload
         )
 
+    def discover_initial_source_pairs(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
+    ) -> Resource:
+        self.authorize(actor, context, "discover_initial_source_pairs", context.target_id, payload)
+        if self.grouping_objects is None:
+            refuse("management_unavailable")
+        return CanonicalInitialGrouping(self, self.grouping_objects).discover(
+            actor, context, payload
+        )
+
     def compile_variant(
         self, actor: ManagementPrincipal, context: MutationContext, payload: VariantCompile
     ) -> JobAccepted:
