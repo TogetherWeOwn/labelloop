@@ -208,7 +208,7 @@ class RecipeBoxRead(Contract):
 
 
 class RecipePreviewRead(Contract):
-    evidence_state: Literal["planned", "compiled"] = "compiled"
+    evidence_state: Literal["planned", "compiled", "excluded"] = "compiled"
     recipe_id: RecipeId
     recipe_revision: Revision
     source_asset_id: Identifier

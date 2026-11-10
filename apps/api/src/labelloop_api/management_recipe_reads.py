@@ -12,7 +12,7 @@ from labelloop_core.geometry import Box, full_frame_transform, target_flags
 from .management_canonical import refuse
 from .management_details import CheckRead, RecipeBoxRead, RecipePreviewRead
 from .management_training import verified_variant
-from .schema import annotation_revision, source_asset
+from .schema import annotation_revision, canonical_dataset_release, source_asset
 
 
 def recipe_plan(
@@ -95,10 +95,53 @@ def recipe_plan(
     )
 
 
+def excluded_preview(release, recipe_id, asset_id, manifest, manifest_digest) -> RecipePreviewRead:
+    # Membership alone is insufficient: only a selected, non-test, all-small
+    # source can be explained by this full-frame surface. Never invent a raster.
+    planned = recipe_plan(release, recipe_id, asset_id)
+    if (
+        manifest["release_membership"].get(asset_id) != "excluded"
+        or any(sample["asset_id"] == asset_id for sample in manifest["samples"])
+        or manifest["excluded_count"] < 1
+        or planned.excluded_images != 1
+        or planned.below_minimum_targets != len(planned.boxes)
+    ):
+        refuse("missing_evidence")
+    return planned.model_copy(
+        update={
+            "evidence_state": "excluded",
+            "checks": [
+                planned.checks[0],
+                CheckRead(
+                    code="publication_integrity",
+                    passed=True,
+                    reason="Published excluded membership; boxes are frozen geometry, not a raster",
+                ),
+                planned.checks[2],
+            ],
+            "manifest_artifact_id": manifest_digest,
+            "validation_artifact_id": manifest["file_hashes"]["validation-report.json"],
+        }
+    )
+
+
 def recipe_preview(connection, context, workspace_id: UUID, asset_id: str) -> RecipePreviewRead:
     variant = SimpleNamespace(**context, immutable=context["recipe_immutable"])
     manifest, manifest_digest, _ = verified_variant(connection, variant, workspace_id)
     samples = [sample for sample in manifest["samples"] if sample["asset_id"] == asset_id]
+    if not samples and manifest["release_membership"].get(asset_id) == "excluded":
+        from .management_compile_worker import frozen_release
+
+        release_row = connection.execute(
+            select(canonical_dataset_release).where(
+                canonical_dataset_release.c.release_key == context["release_key"],
+                canonical_dataset_release.c.project_id == context["project_id"],
+            )
+        ).one()
+        frozen, _ = frozen_release(
+            connection.connection.driver_connection, dict(release_row._mapping), workspace_id
+        )
+        return excluded_preview(frozen, context["recipe_key"], asset_id, manifest, manifest_digest)
     if len(samples) != 1:
         refuse("missing_evidence")
     sample = samples[0]

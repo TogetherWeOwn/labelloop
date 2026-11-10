@@ -76,8 +76,15 @@ A plan has null manifest/validation artifacts and unknown compiler-publication
 and model-qualification checks. It decodes no pixels, validates no file and does
 not prove a nonempty compiled validation set. On committed compiler publication,
 the same route returns `evidence_state: compiled` with the existing fenced
-publication checks and artifacts. Invalid published evidence never falls back
-to a plan. This is frozen full-frame geometry planning, not editable crop/ROI
+publication checks and artifacts for emitted sources. A selected training/validation
+source marked excluded by that same verified manifest returns `evidence_state:
+excluded` only if its frozen full-frame geometry confirms every target is below
+the recipe minimum. Its boxes are explanatory projections, **not an emitted
+raster**. Artifact IDs identify the variant's manifest/validation report, not a
+source image or download grant. Negative, mixed-size, unselected and final-test
+sources cannot use this exclusion path. Neither read fetches object bytes.
+Invalid published evidence never falls back to a plan. This is frozen full-frame
+geometry planning, not editable crop/ROI
 planning or a preview of unpinned labels, and does not enable real admission or
 default mounting.
 

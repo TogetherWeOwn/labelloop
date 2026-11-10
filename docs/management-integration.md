@@ -1111,6 +1111,35 @@ substituted. Schema/client, runtime grants, default mounting and real asset admi
 are unchanged. A usable pre-compilation preview and excluded-source planning remain
 explicit gaps, as do complete runtime/setup and final HTTP acceptance.
 
+### Published tiny-target exclusions
+
+The same preview route now distinguishes `evidence_state: excluded` from both a
+prepublication plan and an emitted `compiled` sample. After the normal unique,
+current fenced-compiler checks, an excluded manifest member is rehydrated through
+the existing historical frozen-release hash gate in the same SELECT-only snapshot.
+Only selected training/validation sources whose every target is below the
+code-owned full-frame minimum can use this path. Negative, mixed-size, unselected
+and final-test sources remain refused. Every original target stays visible in the
+explanatory geometry; none is represented as an emitted negative or raster.
+
+The manifest and validation artifact IDs identify the published variant, not an
+excluded image. No object bytes, exclusion-file bytes, raster decoding, job or
+state mutation occurs. The membership observation is verified publication evidence;
+its size explanation is deterministic frozen geometry, not fresh file verification,
+model quality or qualification. Corrupt publication still fails closed without
+falling back to planning. Default mounting and real admission are unchanged.
+
+Seven new disposable Actions DB cases commission both sizes, SELECT-only/no-object
+access, later rejection without historical rewrite, surviving validation membership,
+failed/stale generations and synthetic projection-boundary corruption. Eight pure
+cases cover explicit excluded state and negative/mixed/final-test/membership
+refusals. These new cases require exact-head Actions verification, not a local
+suite or claimed pass. The prior frozen-planning head `9af1a0a` passed
+[Actions](https://github.com/TogetherWeOwn/labelloop/actions/runs/42763118902):
+711 management DB, 24 ledger, 21 CPU and 1,788 unit tests (812 skipped); this does
+not verify the new excluded-source extension. Editable crop/ROI planning, full
+setup/runtime/registry composition, final mounting and native reviews remain open.
+
 ## Published export identity (partial, unmounted)
 
 `CanonicalManagementReads.read_export` resolves an owned persisted candidate in a

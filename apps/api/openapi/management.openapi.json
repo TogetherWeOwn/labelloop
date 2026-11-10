@@ -2062,7 +2062,8 @@
             "default": "compiled",
             "enum": [
               "planned",
-              "compiled"
+              "compiled",
+              "excluded"
             ],
             "title": "Evidence State",
             "type": "string"

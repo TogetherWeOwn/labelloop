@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from labelloop_api.management_ports import ManagementFailure
-from labelloop_api.management_recipe_reads import recipe_plan
+from labelloop_api.management_recipe_reads import excluded_preview, recipe_plan
 from labelloop_core.domain import (
     AnnotationRevision,
     CanonicalDatasetRelease,
@@ -118,6 +118,47 @@ def test_plan_cannot_read_test_or_unpinned_excluded_labels(asset_id):
     release = frozen(1920, 1080, (Box(30, 30, 90, 90),), split="test")
     with pytest.raises(ManagementFailure, match="missing_evidence"):
         recipe_plan(release, "full-letterbox-320-v1", asset_id)
+
+
+@pytest.mark.parametrize("side", [320, 640])
+def test_excluded_preview_distinguishes_published_membership_from_a_compiled_raster(side):
+    release = frozen(side * 3, side * 3, (Box(3, 3, 9, 9),))
+    manifest = {
+        "release_membership": {"source": "excluded"},
+        "samples": [],
+        "excluded_count": 1,
+        "file_hashes": {"validation-report.json": "a" * 64},
+    }
+    planned = recipe_plan(release, f"full-letterbox-{side}-v1", "source")
+    detail = excluded_preview(release, f"full-letterbox-{side}-v1", "source", manifest, "b" * 64)
+    assert detail.evidence_state == "excluded" and detail.excluded_images == 1
+    assert detail.boxes == planned.boxes and detail.transform == planned.transform
+    assert detail.boxes[0].flag == "exclude"
+    assert detail.manifest_artifact_id == "b" * 64
+    assert detail.validation_artifact_id == "a" * 64
+    assert [(check.code, check.passed) for check in detail.checks] == [
+        ("geometric_size_policy", True),
+        ("publication_integrity", True),
+        ("model_qualification", None),
+    ]
+
+
+@pytest.mark.parametrize("change", ["membership", "emitted", "count", "negative", "mixed", "test"])
+def test_excluded_preview_requires_exact_membership_and_all_small_non_test_source(change):
+    boxes = (Box(3, 3, 9, 9),)
+    if change == "negative":
+        boxes = ()
+    elif change == "mixed":
+        boxes += (Box(30, 30, 90, 90),)
+    release = frozen(960, 960, boxes, split="test" if change == "test" else "val")
+    manifest = {
+        "release_membership": {"source": "compiled" if change == "membership" else "excluded"},
+        "samples": [{"asset_id": "source"}] if change == "emitted" else [],
+        "excluded_count": 0 if change == "count" else 1,
+        "file_hashes": {"validation-report.json": "a" * 64},
+    }
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        excluded_preview(release, "full-letterbox-320-v1", "source", manifest, "b" * 64)
 
 
 def test_plan_rejects_unconfigured_recipe():

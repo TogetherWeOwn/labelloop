@@ -4456,6 +4456,202 @@ def test_compiler_publication_preserves_positive_original_frame_geometry(
     assert reads.read_recipe_preview(Reader(), release.id, recipe, asset.id) == detail
 
 
+def excluded_compilation(database, compilation, worker, recipe="full-letterbox-320-v1"):
+    from labelloop_worker_core.jobs import JobRunner, Stage
+
+    service, owner, _ = database
+    created, retained, _, payload = release_inputs(service, owner)
+    image = io.BytesIO()
+    Image.new("RGB", (24, 12), "black").save(image, format="PNG")
+    tiny = ingest(
+        service,
+        created.id,
+        AssetIngest(
+            expected_revision=2,
+            original_base64=base64.b64encode(image.getvalue()).decode(),
+            source_uri="fixture:tiny-target",
+            source_group="capture-b",
+        ),
+        key="ingest-tiny",
+    )
+    objects = [{"object_id": "tiny", "class_id": "package", "box": [1, 1, 1.05, 1.05]}]
+    with owner.begin() as connection:
+        source = connection.execute(
+            select(source_asset).where(source_asset.c.asset_key == tiny.id)
+        ).one()
+        ontology = connection.execute(
+            select(ontology_release).where(ontology_release.c.project_id == created.id)
+        ).one()
+        connection.execute(
+            insert(source_split_assignment).values(
+                assignment_version="assignment-1",
+                asset_id=source.id,
+                group_id="group-2",
+                split="val",
+                seed=7,
+                algorithm="union-find-grouped-stratified-v2",
+                thresholds={"phash_max_distance": 8},
+                reason="fixture tiny-target grouping",
+                locked=True,
+            )
+        )
+        append_review(
+            connection,
+            asset_id=tiny.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=1,
+            approval_state="draft",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=objects,
+        )
+        connection.execute(
+            insert(completeness_assessment).values(
+                asset_id=source.id,
+                revision=2,
+                ontology_hash=completeness_context_hash(
+                    ontology.class_map, ontology.classes, "Visible packages"
+                ),
+                scope_completeness="exhaustive_for_scope",
+                actor_kind="human",
+                actor_id=Actor().id,
+                output_truncated=False,
+                unresolved_regions=[],
+            )
+        )
+        append_review(
+            connection,
+            asset_id=tiny.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="human_accepted",
+            review_tier="human_reviewed",
+            scope_completeness="exhaustive_for_scope",
+            training_eligible=True,
+            objects=objects,
+        )
+    payload = payload.model_copy(
+        update={"expected_revision": 3, "annotation_revisions": {retained.id: 2, tiny.id: 3}}
+    )
+    release = freeze(service, created.id, payload)
+    accepted = compile_request(compilation, release.id, recipe=recipe)
+    assert JobRunner(
+        worker.store,
+        "compile_variant",
+        (Stage("compilation", worker.compile),),
+        worker.publish,
+        job_id=accepted.job_id,
+    ).run_once("fixture-compiler")
+    assert publication_state(owner, accepted)[3].status == "succeeded"
+    return created, retained, tiny, release, accepted
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_recipe_excluded_preview_is_frozen_select_only_geometry_not_an_emitted_raster(
+    database, compilation, compiler_worker, monkeypatch, recipe
+):
+    service, owner, role = database
+    created, retained, tiny, release, accepted = excluded_compilation(
+        database, compilation, compiler_worker, recipe
+    )
+    before = publication_state(owner, accepted)
+    manifest = before[0]
+    assert manifest["release_membership"] == {retained.id: "compiled", tiny.id: "excluded"}
+    assert all(sample["asset_id"] != tiny.id for sample in manifest["samples"])
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    planned = reads.read_recipe_preview(
+        Reader(),
+        release.id,
+        "full-letterbox-640-v1" if recipe.endswith("320-v1") else "full-letterbox-320-v1",
+        tiny.id,
+    )
+    assert planned.evidence_state == "planned" and planned.excluded_images == 1
+
+    def unexpected(*args):
+        pytest.fail("excluded previews must not read objects or run compilation")
+
+    monkeypatch.setattr(compiler_worker.objects, "read", unexpected)
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        detail = CanonicalManagementReads(readonly, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, recipe, tiny.id
+        )
+    finally:
+        readonly.dispose()
+    assert detail.evidence_state == "excluded" and detail.excluded_images == 1
+    assert detail.tiny_targets == detail.below_minimum_targets == 1
+    assert len(detail.boxes) == 1 and detail.boxes[0].object_id == "tiny"
+    assert detail.boxes[0].flag == "exclude" and detail.boxes[0].review_tier == "human_reviewed"
+    assert detail.checks[1].code == "publication_integrity" and detail.checks[1].passed is True
+    assert detail.checks[2].passed is None
+    assert detail.manifest_artifact_id is not None and detail.validation_artifact_id is not None
+    assert "sha256/" not in detail.model_dump_json() and "fixture:" not in detail.model_dump_json()
+    assert (
+        reads.read_recipe_preview(Reader(), release.id, recipe, retained.id).evidence_state
+        == "compiled"
+    )
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=tiny.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=3,
+            approval_state="rejected",
+            review_tier="human_reviewed",
+            scope_completeness="partial",
+            objects=[],
+        )
+    assert reads.read_recipe_preview(Reader(), release.id, recipe, tiny.id) == detail
+    assert publication_state(owner, accepted) == before
+    assert counts(owner, created.id)[0] == 2
+
+
+@pytest.mark.parametrize("change", ["generation", "failed", "membership", "count", "emitted"])
+def test_recipe_excluded_preview_refuses_broken_publication(
+    database, compilation, compiler_worker, monkeypatch, change
+):
+    from copy import deepcopy
+
+    from labelloop_api import management_recipe_reads
+
+    service, owner, _ = database
+    _, _, tiny, release, accepted = excluded_compilation(database, compilation, compiler_worker)
+    if change in {"generation", "failed"}:
+        with owner.begin() as connection:
+            assignment = "status='failed'" if change == "failed" else "generation=generation+1"
+            connection.execute(
+                text(f"UPDATE worker_job SET {assignment} WHERE job_id=:id"),
+                {"id": accepted.job_id},
+            )
+    else:
+        original = management_recipe_reads.verified_variant
+
+        def changed(*args):
+            manifest, digest, job_id = original(*args)
+            manifest = deepcopy(manifest)
+            if change == "membership":
+                manifest["release_membership"][tiny.id] = "compiled"
+            elif change == "count":
+                manifest["excluded_count"] = 0
+            else:
+                sample = deepcopy(manifest["samples"][0])
+                sample["asset_id"] = tiny.id
+                manifest["samples"].append(sample)
+            return manifest, digest, job_id
+
+        monkeypatch.setattr(management_recipe_reads, "verified_variant", changed)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        CanonicalManagementReads(service.engine, service.workspace_id).read_recipe_preview(
+            Reader(), release.id, "full-letterbox-320-v1", tiny.id
+        )
+
+
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_recipe_plan_uses_frozen_history_without_objects_jobs_or_write_privileges(
     database, compiler_worker, monkeypatch, recipe
