@@ -256,6 +256,202 @@ def test_registered_evaluation_executes_or_resumes_and_links_once(
     assert all(not path.exists() for path in paths)
 
 
+@pytest.fixture
+def published_indices(database, compilation, compiler_worker):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker
+    )
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    compiler_worker.store.complete(lease, ("evaluation",), publisher.publish)
+    identities = {
+        "variant": lease.input["variant_id"],
+        "training-run": lease.input["model_id"].removeprefix("model-"),
+        "evaluation": accepted.resource.id,
+        "model": lease.input["model_id"],
+    }
+    return accepted.resource.project_id, identities, lease
+
+
+@pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
+def test_published_indices_are_select_only_and_omit_checkpoint_reports(
+    database, compilation, compiler_worker, recipe
+):
+    publisher, accepted, lease, record = prepared_evaluation_publication(
+        database, compilation, compiler_worker, recipe
+    )
+    service, owner, role = database
+    compiler_worker.store.save_stage(lease, "evaluation", record)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    project_id = accepted.resource.project_id
+    # A claimed/saved standalone evaluation has no published resource yet.
+    assert reads.list_resources(Reader(), project_id, "evaluation", None, 100).items == []
+    with pytest.raises(ManagementFailure, match="not_found"):
+        reads.read(Reader(), "evaluation", accepted.resource.id)
+
+    def sink(connection, current, artifacts):
+        publisher.publish(connection, current, artifacts)
+        assert reads.list_resources(Reader(), project_id, "evaluation", None, 100).items == []
+
+    compiler_worker.store.complete(lease, ("evaluation",), sink)
+    identities = {
+        "variant": lease.input["variant_id"],
+        "training-run": lease.input["model_id"].removeprefix("model-"),
+        "evaluation": accepted.resource.id,
+        "model": lease.input["model_id"],
+    }
+    before = counts(owner, project_id), evaluation_publication_state(owner, lease)
+    with owner.begin() as connection:
+        connection.execute(
+            text(f'REVOKE INSERT, UPDATE ON ALL TABLES IN SCHEMA public FROM "{role}"')
+        )
+    readonly = create_engine(
+        os.environ["DATABASE_URL"],
+        connect_args={"options": f"-c role={role} -c default_transaction_read_only=on"},
+    )
+    try:
+        readonly_reads = CanonicalManagementReads(readonly, service.workspace_id)
+        for kind, identity in identities.items():
+            page = readonly_reads.list_resources(Reader(), project_id, kind, None, 1)
+            assert page.next_cursor is None and len(page.items) == 1
+            summary = page.items[0]
+            assert summary.model_dump() == {
+                "id": identity,
+                "project_id": project_id,
+                "kind": kind,
+                "revision": 1,
+                "state": "completed",
+            }
+            assert summary == readonly_reads.read(Reader(), kind, identity)
+            assert summary == reads.read(Actor(), kind, identity)
+        # The checkpoint report is not duplicated as a standalone evaluation.
+        assert reads.read_training(Reader(), identities["training-run"]).checkpoints
+    finally:
+        readonly.dispose()
+    assert (counts(owner, project_id), evaluation_publication_state(owner, lease)) == before
+
+
+@pytest.mark.parametrize("kind", ["variant", "training-run", "evaluation", "model"])
+@pytest.mark.parametrize("change", ["generation", "duplicate_receipt"])
+def test_published_indices_require_current_unique_fenced_authority(
+    database, published_indices, kind, change
+):
+    project_id, identities, lease = published_indices
+    service, owner, _ = database
+    event_type = {
+        "variant": "management.variant_compiled",
+        "training-run": "management.training_completed",
+        "evaluation": "management.evaluation_completed",
+        "model": "management.model_exported",
+    }[kind]
+    with owner.begin() as connection:
+        receipt = (
+            connection.execute(
+                select(canonical_event).where(
+                    canonical_event.c.event_type == event_type,
+                    canonical_event.c.aggregate_id == identities[kind],
+                )
+            )
+            .mappings()
+            .one()
+        )
+        if change == "duplicate_receipt":
+            connection.execute(
+                insert(canonical_event).values(
+                    **{
+                        key: value
+                        for key, value in receipt.items()
+                        if key not in {"id", "created_at"}
+                    }
+                )
+            )
+        else:
+            connection.execute(
+                text("UPDATE worker_job SET generation=generation+1 WHERE job_id=:id"),
+                {"id": receipt["payload"]["job_id"]},
+            )
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.read(Reader(), kind, identities[kind])
+    with pytest.raises(ManagementFailure, match="missing_evidence"):
+        reads.list_resources(Reader(), project_id, kind, None, 100)
+
+
+@pytest.mark.parametrize("kind", ["variant", "training-run", "evaluation", "model"])
+@pytest.mark.parametrize(
+    "overrides", [{"kind": "service"}, {"kind": "model"}, {"granted": False}, {"id": ""}]
+)
+def test_published_indices_deny_untrusted_principals_before_lookup(database, kind, overrides):
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.read(Reader(**overrides), kind, "unknown")
+    with pytest.raises(ManagementFailure, match="permission_denied"):
+        reads.list_resources(Reader(**overrides), "unknown", kind, None, 1)
+
+
+def test_published_indices_hide_foreign_and_unknown_ids_and_scope_cursors(
+    database, published_indices
+):
+    from labelloop_api.management_reads import page_position
+
+    project_id, identities, _ = published_indices
+    service, _, _ = database
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    foreign = replace(reads, workspace_id=uuid4())
+    other = create(service, key="other-index-project")
+    for kind, identity in identities.items():
+        with pytest.raises(ManagementFailure, match="not_found"):
+            foreign.read(Reader(), kind, identity)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            reads.read(Reader(), kind, "unknown")
+        with pytest.raises(ManagementFailure, match="not_found"):
+            foreign.list_resources(Reader(), project_id, kind, "invalid", 1)
+        assert reads.list_resources(Reader(), other.id, kind, None, 1).items == []
+        scope, _ = page_position(service.workspace_id, project_id, kind, None, 1)
+        for target, cursor_kind in [(other.id, kind), (project_id, "asset")]:
+            cursor = scope + "." + "0" * 32
+            with pytest.raises(ManagementFailure, match="invalid_request"):
+                reads.list_resources(Reader(), target, cursor_kind, cursor, 1)
+        # The scope tag is not an authority or signature; SQL still scopes ownership.
+        other_scope, _ = page_position(service.workspace_id, other.id, kind, None, 1)
+        assert (
+            reads.list_resources(Reader(), other.id, kind, other_scope + "." + "0" * 32, 1).items
+            == []
+        )
+
+
+@pytest.mark.parametrize("limit", [1, 2, 100])
+def test_published_variant_pages_follow_internal_uuid_keysets(
+    database, compilation, compiler_worker, limit
+):
+    from labelloop_api.management_workers import compilation_runner
+
+    service, owner, _ = database
+    created, _, _, payload = release_inputs(service, owner)
+    release = freeze(service, created.id, payload)
+    variants = []
+    for index, recipe in enumerate(["full-letterbox-320-v1", "full-letterbox-640-v1"]):
+        accepted = compile_request(compilation, release.id, recipe=recipe, key=f"index-{index}")
+        runner = compilation_runner(
+            compiler_worker.store,
+            compiler_worker.objects,
+            service.workspace_id,
+            job_id=accepted.job_id,
+        )
+        assert runner.run_once("index-compiler")
+        variants.append(accepted.resource.id)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    page = reads.list_resources(Reader(), created.id, "variant", None, limit)
+    found = list(page.items)
+    if limit == 1:
+        assert page.next_cursor is not None
+        assert page.next_cursor.rsplit(".", 1)[1] == UUID(sorted(variants)[0]).hex
+        page = reads.list_resources(Reader(), created.id, "variant", page.next_cursor, limit)
+        found.extend(page.items)
+    assert page.next_cursor is None
+    assert [item.id for item in found] == sorted(variants)
+
+
 @pytest.mark.parametrize("recipe", ["full-letterbox-320-v1", "full-letterbox-640-v1"])
 def test_export_read_is_read_only_and_requires_committed_fenced_publication(
     database, compilation, compiler_worker, recipe
@@ -4888,8 +5084,9 @@ def test_canonical_read_hides_foreign_legacy_and_unknown_resources(database):
     assert foreign.list_projects(Reader(), None, 100).items == []
     with pytest.raises(ManagementFailure, match="not_found"):
         foreign.list_resources(Reader(), created.id, "model", "invalid", 10)
-    with pytest.raises(ManagementFailure, match="management_unavailable"):
-        reads.list_resources(Reader(), created.id, "model", None, 10)
+    with owner.begin() as connection:
+        connection.execute(text(f'GRANT SELECT ON model_release TO "{database[2]}"'))
+    assert reads.list_resources(Reader(), created.id, "model", None, 10).items == []
     legacy_id = uuid4()
     with owner.begin() as connection:
         connection.execute(

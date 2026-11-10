@@ -7,8 +7,6 @@ from uuid import UUID
 
 from sqlalchemy import Engine, String, case, cast, func, literal, select, text
 
-from labelloop_core.json_records import canonical_json
-
 from .management_canonical import refuse
 from .management_contracts import ExportRead, Resource, ResourceKind, ResourcePage
 from .management_details import (
@@ -93,7 +91,11 @@ class CanonicalManagementReads:
         )
 
     def rows(self, kind: ResourceKind):
+        from .management_resource_reads import PUBLISHED_KINDS, published_rows
+
         owned = self.project_rows()
+        if kind in PUBLISHED_KINDS:
+            return published_rows(owned, kind, self.workspace_id)
         if kind == "project":
             return select(
                 owned.c.id.label("cursor_id"),
@@ -164,21 +166,31 @@ class CanonicalManagementReads:
             query = query.where(rows.c.project_id == project_id)
         if position is not None:
             query = query.where(rows.c.cursor_id > position)
-        with self.engine.connect() as connection:
-            found = connection.execute(query).all()
-        return ResourcePage(
-            items=[self.resource(kind, row) for row in found[:limit]],
-            next_cursor=f"{scope}.{found[limit - 1].cursor_id.hex}" if len(found) > limit else None,
-        )
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                found = connection.execute(query).all()
+                return ResourcePage(
+                    items=[self.resource(connection, kind, row) for row in found[:limit]],
+                    next_cursor=f"{scope}.{found[limit - 1].cursor_id.hex}"
+                    if len(found) > limit
+                    else None,
+                )
 
     def read(self, actor: ManagementPrincipal, kind: ResourceKind, resource_id: str) -> Resource:
         authorize_reader(actor)
         rows = self.rows(kind).subquery()
-        with self.engine.connect() as connection:
-            row = connection.execute(select(rows).where(rows.c.id == resource_id)).one_or_none()
-        if row is None:
-            refuse("not_found")
-        return self.resource(kind, row)
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(select(rows).where(rows.c.id == resource_id)).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                return self.resource(connection, kind, row)
 
     def read_project(self, actor: ManagementPrincipal, project_id: str) -> ProjectDetail:
         authorize_reader(actor)
@@ -373,9 +385,8 @@ class CanonicalManagementReads:
                     refuse("missing_evidence")
 
     def read_export(self, actor: ManagementPrincipal, model_id: str) -> ExportRead:
-        from .management_evaluation import verified_model
-        from .management_training_reads import training_detail
-        from .model_schema import model_release, training_run
+        from .management_resource_reads import export_detail
+        from .model_schema import model_release
 
         authorize_reader(actor)
         owned = self.project_rows()
@@ -392,45 +403,15 @@ class CanonicalManagementReads:
                 if row is None:
                     refuse("not_found")
                 try:
-                    release, job_id = verified_model(connection, row, self.workspace_id)
-                    run = connection.execute(
-                        select(training_run, literal(row.project_id).label("project_id")).where(
-                            training_run.c.id == row.training_run_id
-                        )
-                    ).one_or_none()
-                    if run is None:
-                        refuse("missing_evidence")
-                    # Reuse training's intent, compiler and saved-stage checks in
-                    # this same snapshot; an export receipt alone is not lineage.
-                    detail = training_detail(connection, run, self.workspace_id)
-                    stage = connection.execute(
-                        text(
-                            "SELECT payload,sha256 FROM worker_stage_artifact "
-                            "WHERE job_id=:id AND stage='export'"
-                        ),
-                        {"id": job_id},
-                    ).one_or_none()
-                    if (
-                        stage is None
-                        or stage.sha256 != hashlib.sha256(canonical_json(stage.payload)).hexdigest()
-                        or detail.resource.project_id != str(row.project_id)
-                        or detail.recipe_id != release.recipe_id
-                    ):
-                        refuse("missing_evidence")
-                    return ExportRead(
-                        model_id=release.release_id,
-                        recipe_id=release.recipe_id,
-                        weights_sha256=release.weights_sha256,
-                        artifact_sha256=release.export_sha256,
-                        format="onnx",
-                        input_hw=release.static_input_signature[2:],
-                        artifact_id=release.export_sha256,
-                    )
+                    return export_detail(connection, row, self.workspace_id)
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
 
-    @staticmethod
-    def resource(kind: ResourceKind, row) -> Resource:
+    def resource(self, connection, kind: ResourceKind, row) -> Resource:
+        from .management_resource_reads import PUBLISHED_KINDS, published_resource
+
+        if kind in PUBLISHED_KINDS:
+            return published_resource(connection, kind, row, self.workspace_id)
         return Resource(
             id=row.id, project_id=row.project_id, kind=kind, revision=row.revision, state=row.state
         )

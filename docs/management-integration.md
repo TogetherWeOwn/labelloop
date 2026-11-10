@@ -716,16 +716,22 @@ for canonical projects, assets and dataset releases. Each entry point requires a
 human admin/reviewer with review permission and constrains every query to the
 trusted deployment workspace. Unknown and foreign IDs return the same not-found
 response. Projects without a scoped management event are omitted pending explicit
-adoption. This is a partial adapter; unsupported producer kinds fail unavailable,
-not as an invented empty page or completed result.
+adoption. Compiled variants, completed local training runs, standalone development
+evaluations and exported candidates additionally use the persisted-publication
+indices below. This remains a partial adapter: queued/running/failed jobs are not
+invented from completed records or returned as completed resources.
 
 Lists use bounded UUID keysets (1–100 entries), fetch at most one lookahead row,
 and return a cursor within the published identifier bounds. Its scope tag binds
 workspace, project and resource kind to prevent accidental cursor reuse. The tag
 is not a signature, authorization or stable snapshot: the SQL query always applies
 ownership independently, and concurrent inserts before the position require a new
-traversal. No count-all query, unbounded response, offset walk or per-item query is
-used. Project revisions come from attributed management events; asset revisions
+traversal. No count-all query, unbounded response or offset walk is used. Project,
+asset and dataset-release summaries need no per-item query. Persisted-publication
+summaries revalidate each returned item's lineage with the existing detail readers
+inside one SELECT-only repeatable snapshot; lookahead rows are not validated until
+returned. This bounds the number of validations to the page size, not total
+history. Project revisions come from attributed management events; asset revisions
 come from current canonical annotation revisions. Asset review approval does not
 claim dataset publication, and project state remains draft until setup publication
 is implemented. Frozen dataset summaries report the actual frozen row state.
@@ -1055,6 +1061,40 @@ superseded jobs, duplicate intent/completion receipts, saved-stage digest mismat
 and hand-inserted models with/without borrowed receipts. Their ML artifacts remain
 explicitly synthetic; exact-head Actions verification is required. No schema/client,
 dependency, migration, runtime grant, default mount or real asset admission changes.
+
+## Persisted-publication indices (partial, unmounted)
+
+`list_resources` and `read` now support `variant`, `training-run`, `evaluation`
+and `model` in addition to the canonical summaries. Every returned publication
+is checked with the same compiler, training, standalone evaluation or export
+validator used by its detail path. Missing, duplicated or superseded application
+and receipt authority fails the read/page closed with `missing_evidence`; no
+hand-inserted row, saved stage or precommit result implies completion. Candidate
+`completed` means exported, not qualified, promoted or deployed.
+
+The indices contain only committed persisted publications at revision 1. Pending,
+running, failed and cancelled jobs require a separate owned intent/job projection;
+they are not discoverable through these completed-record indices. Evaluation
+indices select only reports with a scoped human standalone evaluation intent.
+Checkpoint-development reports stay inside training details instead of being
+duplicated as standalone evaluation resources. Unknown or inaccessible resource
+IDs return `not_found`; an authorized empty index is an observed empty result,
+not a claim that no asynchronous jobs exist. Current annotation edits do not
+replace historical frozen lineage.
+
+Workspace/project/kind-scoped UUID keysets and limits remain unchanged. Ownership,
+row selection and every publication check share the same read-only repeatable
+snapshot. Only IDs, project, kind, revision and `completed` cross the summary port;
+no object I/O, storage keys, provider metadata, logs or qualification authority.
+The export detail gate is factored for reuse, not weakened or independently copied.
+
+Thirty disposable Actions cases are commissioned: both recipe sizes, SELECT-only
+access, precommit invisibility, standalone/checkpoint-report separation, UUID page
+traversal, foreign project/workspace/unknown isolation, cursor scope, principal
+refusals, duplicated receipts and stale application generations for every kind.
+ML artifacts in these DB cases remain synthetic. Exact-head Actions verification
+is pending; no schema/client, migration, runtime grant, default mount or real
+asset-admission change is made.
 
 ## Acceptance evidence still required
 
