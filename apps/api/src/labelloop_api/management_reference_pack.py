@@ -9,7 +9,6 @@ import hashlib
 import json
 from dataclasses import asdict
 
-from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection, select
 
 from labelloop_core.domain import (
@@ -24,37 +23,15 @@ from labelloop_core.evidence import EvidenceScope, SourceAnnotationRevision
 from labelloop_core.geometry import Box
 from labelloop_core.references import MemoryExample, ReferencePack
 
-from .management_contracts import ManagementError, Mutation, Resource
+from .management_contracts import AnchorPackEntry as AnchorPackEntry
+from .management_contracts import AnchorPackPlan as AnchorPackPlan
+from .management_contracts import AnchorPackPublish as AnchorPackPublish
+from .management_contracts import ManagementError, Resource
 from .management_ports import ManagementFailure
 from .management_references import read_references, reference_context_sha256
 from .management_release import revision_refusal
 from .revision_store import completeness_context_hash
 from .schema import annotation_revision, canonical_event, completeness_assessment, ontology_release
-
-
-class AnchorPackEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-    annotation_revision: int = Field(ge=1)
-    scene: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    cluster_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    validity_tags: list[str] = Field(min_length=1, max_length=32)
-    utility: float = Field(ge=0, le=1, allow_inf_nan=False)
-
-
-class AnchorPackPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-    pack_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    version: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    ontology_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    assignment_version: str = Field(min_length=1, max_length=200, pattern=r"\S")
-    entries: dict[str, AnchorPackEntry] = Field(min_length=1, max_length=1000)
-
-
-class AnchorPackPublish(Mutation):
-    plan: AnchorPackPlan
-    reason: str = Field(min_length=1, max_length=4096, pattern=r"\S")
 
 
 def pack_snapshot(pack: ReferencePack) -> tuple[dict, str]:

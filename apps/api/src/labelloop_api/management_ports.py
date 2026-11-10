@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .management_contracts import (
+    AnchorPackPublish,
     AssetIngest,
     ClassCatalogDraft,
     ClassCatalogPublish,
@@ -133,6 +134,10 @@ class ManagementOperations(Protocol):
 
     def approve_setup_step(
         self, actor: ManagementPrincipal, context: MutationContext, payload: SetupStepApprove
+    ) -> Resource: ...
+
+    def publish_anchor_pack(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: AnchorPackPublish
     ) -> Resource: ...
 
     def enroll_reference(

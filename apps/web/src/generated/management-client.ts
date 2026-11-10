@@ -2,6 +2,9 @@
 // Unbound management contract: final session/queue integration is not asserted.
 
 export type AffineTransform = { "algorithm": string; "allow_upscale"?: boolean; "bottom": number; "crop": Crop; "forward": Matrix3; "inverse": Matrix3; "left": number; "output_size": number; "resized_height": number; "resized_width": number; "right": number; "scale_x": number; "scale_y": number; "source_height": number; "source_width": number; "top": number };
+export type AnchorPackEntry = { "annotation_revision": number; "cluster_id": string; "scene": string; "utility": number; "validity_tags": Array<string> };
+export type AnchorPackPlan = { "assignment_version": string; "entries": Record<string, AnchorPackEntry>; "ontology_id": string; "pack_id": string; "version": string };
+export type AnchorPackPublish = { "expected_revision": number; "plan": AnchorPackPlan; "reason": string };
 export type ArgumentMismatchRead = { "key": string; "requested": string | number | boolean | null; "resolved": string | number | boolean | null };
 export type AssetIngest = { "expected_revision": number; "original_base64": string; "source_group": string; "source_metadata"?: Record<string, string>; "source_uri"?: string };
 export type Box = { "x_max": number; "x_min": number; "y_max": number; "y_min": number };
@@ -162,6 +165,11 @@ export class ManagementClient {
   promoteModel(input: { "project_id": string; "idempotency-key": string; body: PromotionRequest }): Promise<PromotionResult> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/promotions`;
     return this.request<PromotionResult>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  publishAnchorPack(input: { "project_id": string; "idempotency-key": string; body: AnchorPackPublish }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/reference-packs`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 
   enrollReference(input: { "project_id": string; "idempotency-key": string; body: ReferenceEnroll }): Promise<Resource> {

@@ -194,6 +194,27 @@ class ReferenceWithdraw(Mutation):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
+class AnchorPackEntry(Contract):
+    annotation_revision: int = Field(ge=1)
+    scene: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    cluster_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    validity_tags: list[str] = Field(min_length=1, max_length=32)
+    utility: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
+class AnchorPackPlan(Contract):
+    pack_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    version: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    ontology_id: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    assignment_version: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    entries: dict[str, AnchorPackEntry] = Field(min_length=1, max_length=1000)
+
+
+class AnchorPackPublish(Mutation):
+    plan: AnchorPackPlan
+    reason: str = Field(min_length=1, max_length=4096, pattern=r"\S")
+
+
 class AssetIngest(Mutation):
     # Uploaded bytes only: neither a remote URL fetch nor a client storage key.
     original_base64: Annotated[

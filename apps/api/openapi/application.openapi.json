@@ -86,6 +86,132 @@
         "title": "AffineTransform",
         "type": "object"
       },
+      "AnchorPackEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_revision": {
+            "minimum": 1.0,
+            "title": "Annotation Revision",
+            "type": "integer"
+          },
+          "cluster_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Cluster Id",
+            "type": "string"
+          },
+          "scene": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Scene",
+            "type": "string"
+          },
+          "utility": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Utility",
+            "type": "number"
+          },
+          "validity_tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Validity Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "annotation_revision",
+          "scene",
+          "cluster_id",
+          "validity_tags",
+          "utility"
+        ],
+        "title": "AnchorPackEntry",
+        "type": "object"
+      },
+      "AnchorPackPlan": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_version": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "entries": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnchorPackEntry"
+            },
+            "maxProperties": 1000,
+            "minProperties": 1,
+            "title": "Entries",
+            "type": "object"
+          },
+          "ontology_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "pack_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Pack Id",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "version",
+          "ontology_id",
+          "assignment_version",
+          "entries"
+        ],
+        "title": "AnchorPackPlan",
+        "type": "object"
+      },
+      "AnchorPackPublish": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/AnchorPackPlan"
+          },
+          "reason": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "plan",
+          "reason"
+        ],
+        "title": "AnchorPackPublish",
+        "type": "object"
+      },
       "AnnotationHistory": {
         "additionalProperties": false,
         "properties": {
@@ -5857,6 +5983,123 @@
           }
         },
         "summary": "Promote Model",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/reference-packs": {
+      "post": {
+        "operationId": "publishAnchorPack",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnchorPackPublish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Publish Anchor Pack",
         "tags": [
           "management"
         ]

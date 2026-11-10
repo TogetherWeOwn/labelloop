@@ -62,6 +62,44 @@ describe('generated management client', () => {
     expect(csrf).not.toHaveBeenCalled();
   });
 
+  it('publishes explicit anchor pins without sending approval or snapshot authority', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 4,
+      plan: {
+        pack_id: 'fixture-anchors',
+        version: 'v1',
+        ontology_id: 'ontology-1',
+        assignment_version: 'assignment-1',
+        entries: {
+          'reference-a': {
+            annotation_revision: 2,
+            scene: 'studio',
+            cluster_id: 'capture-1',
+            validity_tags: ['daylight'],
+            utility: 1.0,
+          },
+        },
+      },
+      reason: 'Reviewed current source-bound anchors',
+    };
+    await client.publishAnchorPack({ project_id: 'p', 'idempotency-key': 'anchor-v1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/reference-packs', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf',
+        'Idempotency-Key': 'anchor-v1',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(body),
+    });
+  });
+
   it('transports source declarations without assigning identity or splits', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

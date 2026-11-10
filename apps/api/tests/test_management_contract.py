@@ -106,7 +106,27 @@ INITIAL_GROUPING = {
     "source_policy_sha256": "a" * 64,
     "annotation_revisions": {"source-a": 1, "source-b": 0},
 }
+ANCHOR_PACK = {
+    "expected_revision": 4,
+    "plan": {
+        "pack_id": "fixture-anchors",
+        "version": "v1",
+        "ontology_id": "ontology-1",
+        "assignment_version": "assignment-1",
+        "entries": {
+            "reference-a": {
+                "annotation_revision": 2,
+                "scene": "studio",
+                "cluster_id": "capture-1",
+                "validity_tags": ["daylight"],
+                "utility": 1.0,
+            }
+        },
+    },
+    "reason": "Reviewed current source-bound anchors",
+}
 MUTATIONS = [
+    ("/projects/p/reference-packs", "publish_anchor_pack", ANCHOR_PACK, 200),
     (
         "/projects/p/source-assignments/initial",
         "publish_initial_grouping",
@@ -905,13 +925,55 @@ def test_initial_grouping_refuses_untrusted_pins_and_assignment_authority(field,
     assert service.calls == []
 
 
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        ("body", "snapshot", {}),
+        ("body", "actor_id", "forged"),
+        ("body", "expected_revision", True),
+        ("body", "reason", " "),
+        ("plan", "entries", {}),
+        ("plan", "approved", True),
+        ("plan", "snapshot_sha256", "a" * 64),
+        ("plan", "split", "train"),
+        ("entry", "annotation_revision", "2"),
+        ("entry", "annotation_revision", 0),
+        ("entry", "utility", 2.0),
+        ("entry", "utility", "1.0"),
+        ("entry", "validity_tags", []),
+        ("entry", "teacher_generation", 1),
+        ("entry", "kind", "gold"),
+        ("entry", "object_key", "forged"),
+    ],
+)
+def test_anchor_pack_transport_refuses_snapshot_and_eligibility_authority(section, field, value):
+    from copy import deepcopy
+
+    body = deepcopy(ANCHOR_PACK)
+    target = {"body": body, "plan": body["plan"], "entry": body["plan"]["entries"]["reference-a"]}
+    target[section][field] = value
+    client, service = client_for(Actor())
+    response = client.post(
+        "/projects/p/reference-packs", json=body, headers={"Idempotency-Key": "anchor-v1"}
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert service.calls == []
+
+
 def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     generate(tmp_path)
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 31
-    assert sum(len(methods) for methods in spec["paths"].values()) == 32
+    assert len(spec["paths"]) == 32
+    assert sum(len(methods) for methods in spec["paths"].values()) == 33
+    assert (
+        spec["paths"]["/projects/{project_id}/reference-packs"]["post"]["operationId"]
+        == "publishAnchorPack"
+    )
+    assert "export type AnchorPackPublish =" in client
+    assert "export type AnchorPackPlan =" in client
+    assert "export type AnchorPackEntry =" in client
     assert (
         spec["paths"]["/projects/{project_id}/source-assignments/initial"]["post"]["operationId"]
         == "publishInitialSourceGrouping"

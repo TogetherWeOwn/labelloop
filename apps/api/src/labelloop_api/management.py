@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
 from .management_contracts import (
+    AnchorPackPublish,
     AssetIngest,
     ClassCatalogDraft,
     ClassCatalogPublish,
@@ -282,6 +283,23 @@ def management_router(
             actor, idempotency_key, "approve_setup_step", project_id, payload
         )
         return invoke(lambda: service.approve_setup_step(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/reference-packs",
+        response_model=Resource,
+        operation_id="publishAnchorPack",
+    )
+    def publish_anchor_pack(
+        project_id: Identifier,
+        payload: AnchorPackPublish,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_anchor_pack", project_id, payload
+        )
+        return invoke(lambda: service.publish_anchor_pack(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/references",

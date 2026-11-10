@@ -120,8 +120,9 @@ synchronize with existing review writers. A read-only caller must explicitly dis
 source locking and use one repeatable snapshot. Preparation writes nothing and
 fetches no objects.
 
-`CanonicalManagementMutations.publish_anchor_pack` is an internal-only publication
-transaction. Its strict `AnchorPackPublish` accepts an expected project revision,
+`publishAnchorPack` (`POST /projects/{project_id}/reference-packs`) exposes the
+existing `CanonicalManagementMutations.publish_anchor_pack` transaction only in
+explicitly composed management applications. Its strict `AnchorPackPublish` accepts an expected project revision,
 plan and reason, never a caller-authored snapshot or actor identity. The existing
 human-admin/workspace/project/retry locks and append-only event authority apply.
 The server prepares current source evidence under locks and stores a deterministic
@@ -133,7 +134,13 @@ return the original project receipt without revalidating or silently renewing th
 pack. Policy invalidation and the event commit atomically; setup approvals and any
 automatic-acceptance grant clear. The project remains draft.
 
-No API operation, retrieval binding, project release, freeze clearance, admission,
+The generated command uses shared human-admin/session/CSRF authorization and an
+actor-scoped `Idempotency-Key`; reviewers may read project details but cannot publish.
+Clients supply reference IDs and annotation pins plus bounded scene/diversity/tags/
+utility declarations, never source objects, snapshots, approval, split or gold claims.
+The server still rechecks all canonical evidence. The response contains the draft
+project revision only, not the internal pack snapshot or usable retrieval authority.
+No pack GET, retrieval binding, project release, freeze clearance, admission,
 worker startup or default mounting is added. Historical publication does not prove
 current eligibility after a later reference, annotation, grouping or context change.
 `read_current_anchor_pack` is an internal-only, SELECT-only verifier requiring an

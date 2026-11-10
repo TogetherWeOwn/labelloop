@@ -7414,6 +7414,167 @@ def test_anchor_pack_preparation_does_not_upgrade_approved_negative_metadata(dat
         prepare_pack(service, created.id, plan)
 
 
+def test_anchor_pack_http_reuses_shared_identity_and_canonical_publication(
+    database, restricted_auth_store, auth_account
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.auth_schema import principal as auth_principal
+    from labelloop_api.main import create_app
+    from labelloop_api.management_contracts import AnchorPackPublish
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    body = AnchorPackPublish(expected_revision=4, plan=plan, reason="Checked anchors").model_dump(
+        mode="json"
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        path = f"/projects/{created.id}/reference-packs"
+        assert client.post(path, json=body).status_code == 401
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-anchor-v1",
+        }
+        assert client.post(path, json=body).status_code == 403
+        assert client.post(path, json=body, headers={"origin": origin}).status_code == 403
+        assert client.post(path, json={**body, "snapshot": {}}, headers=headers).status_code == 422
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update()
+                .where(auth_principal.c.id == identity)
+                .values(role="reviewer")
+            )
+        assert client.post(path, json=body, headers=headers).status_code == 403
+        assert client.get(f"/projects/{created.id}").status_code == 200
+        assert initial_grouping_snapshot(owner, created.id) == before
+        with owner.begin() as connection:
+            connection.execute(
+                auth_principal.update().where(auth_principal.c.id == identity).values(role="admin")
+            )
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["revision"] == 5 and response.json()["state"] == "draft"
+        (receipt,) = pack_receipts(owner, created.id)
+        assert receipt.actor_kind == "human" and receipt.actor_id == identity
+        assert receipt.payload["evidence"]["plan"] == plan.model_dump(mode="json")
+        assert client.post(path, json=body, headers=headers).json() == response.json()
+        assert (
+            client.post(path, json={**body, "reason": "Different"}, headers=headers).status_code
+            == 409
+        )
+        after = initial_grouping_snapshot(owner, created.id)
+        assert after[0:2] == before[0:2]
+        assert len(after[2]) == len(before[2]) + 1
+        assert after[3]["management_setup_approvals"] == {}
+        detail = client.get(f"/projects/{created.id}").json()
+        assert detail["published_release_id"] is None and detail["approved_steps"] == []
+        # No snapshot/source-lineage read is added alongside the mutation.
+        assert client.get(path).status_code == 405
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+        assert client.post(path, json=body, headers=headers).status_code == 401
+        assert initial_grouping_snapshot(owner, created.id) == after
+
+
+@pytest.mark.parametrize("failure", ["workspace", "project", "revision", "withdrawn"])
+def test_anchor_pack_http_refuses_unowned_or_stale_evidence(
+    database, restricted_auth_store, auth_account, failure
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_contracts import AnchorPackPublish
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, _ = database
+    _, credentials = auth_account
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    revision = 4
+    if failure == "withdrawn":
+        withdraw(
+            service,
+            created.id,
+            ReferenceWithdraw(
+                expected_revision=4, reference_id=next(iter(plan.entries)), reason="Retired"
+            ),
+        )
+        revision = 5
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, uuid4() if failure == "workspace" else service.workspace_id
+    )
+    body = AnchorPackPublish(
+        expected_revision=revision - 1 if failure == "revision" else revision,
+        plan=plan,
+        reason="Checked anchors",
+    ).model_dump(mode="json")
+    before = initial_grouping_snapshot(owner, created.id)
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-anchor-refusal",
+        }
+        target = str(uuid4()) if failure == "project" else created.id
+        response = client.post(f"/projects/{target}/reference-packs", json=body, headers=headers)
+        expected = {"workspace": 404, "project": 404, "revision": 409, "withdrawn": 422}[failure]
+        assert response.status_code == expected, response.text
+        assert initial_grouping_snapshot(owner, created.id) == before
+        assert pack_receipts(owner, created.id) == []
+
+
+@pytest.mark.parametrize("grant", ["project", "canonical_event"])
+def test_anchor_pack_http_grant_failure_is_atomic_and_recoverable(
+    database, restricted_auth_store, auth_account, grant
+):
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_contracts import AnchorPackPublish
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    service, owner, role = database
+    _, credentials = auth_account
+    created, _, _, plan = anchor_pack_inputs(service, owner)
+    operations = CanonicalManagementOperations(service.engine, service.store, service.workspace_id)
+    body = AnchorPackPublish(expected_revision=4, plan=plan, reason="Checked anchors").model_dump(
+        mode="json"
+    )
+    before = initial_grouping_snapshot(owner, created.id)
+    privilege = "UPDATE" if grant == "project" else "INSERT"
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {
+            "origin": origin,
+            "x-csrf-token": login.json()["csrf_token"],
+            "Idempotency-Key": "http-anchor-rollback",
+        }
+        path = f"/projects/{created.id}/reference-packs"
+        with owner.begin() as connection:
+            connection.execute(text(f'REVOKE {privilege} ON {grant} FROM "{role}"'))
+        with pytest.raises(DBAPIError):
+            client.post(path, json=body, headers=headers)
+        assert initial_grouping_snapshot(owner, created.id) == before
+        with owner.begin() as connection:
+            connection.execute(text(f'GRANT {privilege} ON {grant} TO "{role}"'))
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["revision"] == 5
+        assert len(pack_receipts(owner, created.id)) == 1
+
+
 def publish_pack(service, project_id, plan, *, revision=4, key="publish-pack", actor=None):
     from labelloop_api.management_reference_pack import AnchorPackPublish
 
