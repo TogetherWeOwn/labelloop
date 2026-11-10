@@ -29,10 +29,9 @@ from sqlalchemy.exc import DBAPIError
 from labelloop_api.main import create_app
 from labelloop_api.management_configuration import ConfigurationTrainingBinding
 from labelloop_api.management_contracts import AssetIngest, JobAccepted, ProjectCreate, Resource
-from labelloop_api.management_dispatch import CompilationDispatch, LocalMLDispatch
 from labelloop_api.management_evaluation import ApprovedDevelopmentProtocol
 from labelloop_api.management_objects import BoundedMinioObjects
-from labelloop_api.management_operations import CanonicalManagementOperations
+from labelloop_api.management_runtime import api_operations, compiler_dispatch, local_ml_dispatch
 from labelloop_api.management_training import ApprovedTrainingProfile
 from labelloop_api.model_store import load_release
 from labelloop_api.revision_store import append_review, completeness_context_hash
@@ -233,17 +232,27 @@ def assert_runtime_separation(service, worker, auth_store, api_role):
     return {"distinct_auth_api_worker_roles": True, "privilege_refusals": len(refusals)}
 
 
+def runtime_object_settings(objects, workspace_id):
+    return {
+        "client": objects.client,
+        "bucket": objects.bucket,
+        "max_object_bytes": objects.max_object_bytes,
+        "workspace_id": workspace_id,
+    }
+
+
 @pytest.fixture
 def management_http(database, restricted_auth_store, auth_account, pipeline_objects):
     service, _, _ = database
-    operations = CanonicalManagementOperations(
-        service.engine, pipeline_objects, service.workspace_id
-    )
+    settings = runtime_object_settings(pipeline_objects, service.workspace_id)
+    operations = api_operations(engine=service.engine, **settings)
+    assert not hasattr(operations.grouping_objects, "put")
 
-    def configure(**settings):
+    def configure(**updates):
         nonlocal operations
         # Trusted fixture-server configuration, never an HTTP/request-selected profile.
-        operations = replace(operations, **settings)
+        settings.update(updates)
+        operations = api_operations(engine=service.engine, **settings)
 
     origin = "https://testserver"
     with TestClient(create_app(lambda: operations), base_url=origin) as client:
@@ -722,7 +731,6 @@ def test_management_http_runs_real_cpu_project_to_export(
     client, headers, configure = management_http
     identity, _ = auth_account
     created, fixture, source_ids, revisions = seed_reviewed_fixture(service, owner, client, headers)
-    configure(grouping_objects=pipeline_worker.objects)
     grouping_evidence, groups = publish_cpu_grouping(
         service, owner, client, headers, created.id, revisions, identity
     )
@@ -770,8 +778,9 @@ def test_management_http_runs_real_cpu_project_to_export(
         http_command(client, headers, compile_path, compile_body, "cpu-compile", 202)
     )
     assert client.get(f"/resources/job/{compiled.job_id}").json()["state"] == "queued"
-    compiler = CompilationDispatch(
-        pipeline_worker.store, pipeline_worker.objects, service.workspace_id
+    compiler = compiler_dispatch(
+        store=pipeline_worker.store,
+        **runtime_object_settings(pipeline_worker.objects, service.workspace_id),
     )
     assert compiler.run_once(compiled.job_id, "cpu-compiler")
     assert not compiler.run_once(compiled.job_id, "cpu-compiler")
@@ -834,14 +843,13 @@ def test_management_http_runs_real_cpu_project_to_export(
         exports.append(evidence)
         return asdict(evidence)
 
-    ml = LocalMLDispatch(
-        pipeline_worker.store,
-        pipeline_worker.engine,
-        pipeline_worker.objects,
-        service.workspace_id,
-        backend,
-        exporter,
-        predict_samples,
+    ml = local_ml_dispatch(
+        store=pipeline_worker.store,
+        engine=pipeline_worker.engine,
+        backend=backend,
+        exporter=exporter,
+        predictor=predict_samples,
+        **runtime_object_settings(pipeline_worker.objects, service.workspace_id),
     )
     with pytest.raises(ValueError, match="dispatch lane"):
         ml.run_once(compiled.job_id, "cpu-trainer")
@@ -1047,6 +1055,13 @@ def test_management_http_runs_real_cpu_project_to_export(
                     "assignments": groups,
                     "no_seeded_assignments_or_relations": True,
                     "freeze_before_configuration_refused": True,
+                },
+                "runtime_composition": {
+                    "module": "management_runtime",
+                    "api_grouping_read_only_port": True,
+                    "asset_admission": "unavailable",
+                    "connections": "caller-owned-restricted-fixtures",
+                    "default_mount_or_startup": False,
                 },
                 "dispatch": {
                     "selection": "persisted-kind-and-owned-human-intent",

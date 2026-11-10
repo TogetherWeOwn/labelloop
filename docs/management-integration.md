@@ -78,6 +78,43 @@ real admission, actual HTTP-to-CPU training/evaluation completion, full project
 publication, registry composition or model quality. Unit delegation/configuration
 cases prove wiring only; exact-head Actions must verify all new cases.
 
+### Deployment-owned runtime composition (source preparation)
+
+`management_runtime.api_operations`, `compiler_dispatch` and `local_ml_dispatch`
+assemble existing adapters from explicit caller-owned PostgreSQL engines/job stores,
+MinIO clients, bucket/cap, workspace UUID and immutable server configuration. They
+perform no connection, object or backend I/O during construction. Each process
+constructs only its own lane; there is no all-capabilities runtime container.
+Deployment code retains connection/client lifecycle and must supply the independently
+provisioned least-privilege roles. These factories neither inspect nor establish
+SQL/storage IAM isolation and never read deployment credentials or select endpoints.
+
+The API assembly gives grouping only a frozen `read(key)` port backed by the bounded,
+content-addressed MinIO reader. Its separate admission store always refuses writes;
+asset admission and registry operations remain unavailable. This narrows the exposed
+application port, not the underlying client's IAM authority or a Python sandbox.
+Do not supply a root storage client in a real deployment. Compiler composition has
+no ML callbacks, API operations or SQLAlchemy engine. Local-ML composition receives
+only its supplied execution engine/store and trusted backend/export/predict callbacks;
+it does not import ML libraries into the API package. Existing dispatcher ownership
+preflight, specific-job selection, stages, retries and transaction fencing are unchanged.
+
+Construction grants no mount or startup authority. The caller still uses the single
+shared-session `create_app` boundary when separately admitted, and must keep auth
+connections separate from canonical API and worker execution connections. Default
+`main.app` remains unmounted. No queue scan, scheduler, credential, grant, bucket,
+provisioning, installation or production change is introduced. Zero-idle staging/
+preview and independent Security/QA/release gates remain binding.
+
+Twelve bounded unit cases cover lazy construction, read-only API port/refused writes,
+actual bounded-reader delegation/cleanup, explicit profiles/native enqueue, lane
+shape, bounds/workspace/backend refusals and unchanged default mount. The existing
+320/640 disposable Actions cohorts now consume all three factories with their
+restricted roles and live MinIO; no extra CPU cohort is added. Their source records
+runtime-composition provenance, retains SQL refusal/ownership/replay/cross-lane and
+cleanup checks, and **awaits exact-head Actions**. This is not production auth/SQL/
+storage provisioning evidence, complete bootstrap, quality or real asset admission.
+
 ### Verified opt-in HTTP-to-CPU slice
 
 Exact head `e747622b376dec8ace382527f6583685c4e8c72e` passed
