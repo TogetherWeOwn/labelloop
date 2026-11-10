@@ -1,8 +1,11 @@
 """Pure constraints and internal pins; database publication is tested in Actions."""
 
 import io
+import json
 import random
+from collections import Counter
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest import TestCase
 
 from PIL import Image
@@ -15,7 +18,7 @@ from labelloop_api.management_grouping_publication import (
 )
 from labelloop_api.management_ports import ManagementFailure
 from labelloop_compiler.ingest import process_image
-from labelloop_core.grouping import AssetEvidence, assign_splits
+from labelloop_core.grouping import AssetEvidence, assign_splits, phash_grayscale
 
 
 def observations():
@@ -28,6 +31,38 @@ def observations():
 
 
 class InitialGroupingTests(TestCase):
+    def test_real_interface_rasters_reproduce_declared_fixture_partition(self):
+        root = Path(__file__).resolve().parents[3] / "fixtures"
+        document = json.loads((root / "golden/cc0-interface.labels.json").read_text())
+        evidence = []
+        for item in document["images"]:
+            asset, data = process_image(
+                (root / "cc0-interface/images" / item["file"]).read_bytes(),
+                asset_id=item["asset_id"],
+                project_id="cc0-interface",
+            )
+            observed = collect_source_grouping_evidence(
+                asset,
+                data,
+                metadata={},
+                class_counts=dict(Counter(obj["class_id"] for obj in item["objects"])),
+            )
+            self.assertEqual(asset.sha256, item["normalized_sha256"])
+            # Golden pHashes describe pre-normalization uploads. Publication
+            # must observe the canonical JPEG, not reuse those cached values.
+            with Image.open(io.BytesIO(data)) as normalized:
+                self.assertEqual(observed.phash, phash_grayscale(normalized))
+            self.assertEqual(observed.class_counts, item["evidence"]["class_counts"])
+            evidence.append(observed)
+        expected = document["split_assignment"]
+        constrained, relations = constrained_evidence(evidence, expected["group_ids"], [])
+        assignment = assign_splits(constrained)
+        self.assertEqual(len(evidence), 16)
+        self.assertEqual(len(set(assignment.group_ids.values())), 15)
+        self.assertEqual(assignment.group_ids, expected["group_ids"])
+        self.assertEqual(assignment.asset_splits, expected["asset_splits"])
+        self.assertTrue(relations)
+
     def test_actual_normalized_fixture_rasters_have_independent_groups(self):
         evidence = []
         for index in range(4):

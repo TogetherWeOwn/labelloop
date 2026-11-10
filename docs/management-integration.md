@@ -1317,14 +1317,36 @@ implicitly grants read access. The delegate uses the existing publisher unchange
 no request supplies an object key, threshold or split. Default mounting, admission,
 worker startup, production grants, tables, migrations and dependencies are unchanged.
 
-Four additional disposable Actions DB cases are commissioned, not yet passed:
-restricted shared-session attribution/role reload, anonymous and CSRF refusal,
-missing-reader refusal, exact replay and conflicting-body refusal, no-regroup/history
-protection, and assignment/audit grant-failure rollback with same-key recovery.
-Transport cases cover forbidden assignment claims and malformed pins; composition
-cases cover missing/malformed trusted readers, unchanged arguments and no I/O during
-construction. These assertions and the new generated-client request await exact-head
-Actions. Fixture ingest remains explicit setup, not HTTP real-asset admission.
+The HTTP binding is verified at `91c197be210917db5dcd3dfd1a91c360b7c7dd71`:
+[Actions CI](https://github.com/TogetherWeOwn/labelloop/actions/runs/42781152793)
+passed [780 management DB, 24 ledger and 21 CPU cases](https://github.com/TogetherWeOwn/labelloop/actions/runs/42781152793/job/129711304168)
+and [1,865 unit cases, 881 skipped](https://github.com/TogetherWeOwn/labelloop/actions/runs/42781152793/job/129711303893).
+CodeQL, gitleaks, queue, web/drift, dev-stack, migrations, lint, types and import
+checks also passed. Four HTTP cases cover restricted shared-session attribution/
+role reload, anonymous and CSRF refusal, missing-reader refusal, exact replay and
+conflicting-body refusal, no-regroup/history protection, and assignment/audit
+rollback with same-key recovery. Transport/composition/generated-client controls
+also passed there. These results do not establish full bootstrap acceptance.
+
+A further disposable DB case is commissioned, not yet verified: the actual
+16-image interface fixture goes through normalized canonical ingest and explicit
+fixture annotation preparation, then shared-session HTTP source-policy save and
+first grouping. No assignment, relation or grouping receipt is seeded. Assertions
+cover 15 locked groups, train/validation membership, actual canonical-JPEG pHashes,
+annotation-derived class counts, attributed receipt and replay. A covering pure
+case checks the actual normalized rasters preserve the fixture's declared group
+partition and split allocation. Golden fixture pHashes were measured on uploaded
+bytes; they are not substituted for canonical-raster observations.
+
+**The grouping-to-freeze publication gap is retained, not bypassed.** Even with
+complete eligible fixture annotations and first grouping, saved source-policy
+intent makes the freeze plan unavailable and POST freeze refuses `missing_evidence`
+without changing assignments, receipts or releases. Effective setup/project
+publication must resolve this through its own validated authority. Intent approval
+or a successful grouping receipt is not that authority. Consequently the existing
+HTTP-to-CPU cohorts still use explicit seeded grouping; this new fixture case does
+not connect first grouping to CPU training or qualify its labels as independent
+gold. Default management mounting and real-asset admission remain disabled.
 
 ## Acceptance evidence still required
 

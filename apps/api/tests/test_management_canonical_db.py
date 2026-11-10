@@ -10602,6 +10602,178 @@ def test_review_writer_and_freeze_share_source_row_synchronization(database):
     assert release_count(owner, created.id) == 0
 
 
+def test_initial_grouping_real_interface_http_does_not_publish_setup(
+    database, restricted_auth_store, auth_account
+):
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from labelloop_api.main import create_app
+    from labelloop_api.management_operations import CanonicalManagementOperations
+    from labelloop_core.grouping import phash_grayscale
+
+    service, owner, _ = database
+    identity, credentials = auth_account
+    actor = Actor(id=identity)
+    root = Path(__file__).resolve().parents[3] / "fixtures"
+    document = json.loads((root / "golden/cc0-interface.labels.json").read_text())
+    operations = CanonicalManagementOperations(
+        service.engine,
+        service.store,
+        service.workspace_id,
+        grouping_objects=SimpleNamespace(
+            read=lambda key: service.store.root.joinpath(*key.split("/")).read_bytes()
+        ),
+    )
+    origin = "https://testserver"
+    with TestClient(create_app(lambda: operations), base_url=origin) as client:
+        login = client.post("/auth/login", json=credentials, headers={"origin": origin})
+        assert login.status_code == 200, login.text
+        headers = {"origin": origin, "x-csrf-token": login.json()["csrf_token"]}
+
+        def command(path, body, key, status=200):
+            response = client.post(path, json=body, headers={**headers, "Idempotency-Key": key})
+            assert response.status_code == status, response.text
+            assert response.headers["cache-control"] == "no-store"
+            return response.json()
+
+        project_body = ProjectCreate.model_validate(
+            {**pack().model_dump(mode="json"), "classes": document["classes"]}
+        )
+        created = command("/projects", project_body.model_dump(mode="json"), "real-create", 201)
+        project_id = created["id"]
+        with owner.connect() as connection:
+            ontology = connection.execute(
+                select(ontology_release).where(ontology_release.c.project_id == project_id)
+            ).one()
+        keys, observations = {}, {}
+        # Admission and annotations remain fixture preparation. No assignments,
+        # similarity relations or grouping receipts are seeded here.
+        for index, item in enumerate(document["images"]):
+            asset = ingest(
+                service,
+                project_id,
+                AssetIngest(
+                    expected_revision=index + 1,
+                    original_base64=base64.b64encode(
+                        (root / "cc0-interface/images" / item["file"]).read_bytes()
+                    ).decode(),
+                    source_group=document["split_assignment"]["group_ids"][item["asset_id"]],
+                ),
+                actor=actor,
+                key=f"real-source-{index}",
+            )
+            keys[item["asset_id"]] = asset.id
+            with owner.begin() as connection:
+                source = connection.execute(
+                    select(source_asset).where(source_asset.c.asset_key == asset.id)
+                ).one()
+                assert source.sha256 == item["normalized_sha256"]
+                with Image.open(
+                    service.store.root.joinpath(*source.object_key.split("/"))
+                ) as image:
+                    observations[asset.id] = {
+                        "phash": phash_grayscale(image),
+                        "class_counts": item["evidence"]["class_counts"],
+                    }
+                append_review(
+                    connection,
+                    asset_id=asset.id,
+                    actor_kind="human",
+                    actor_id=identity,
+                    expected_revision=1,
+                    approval_state="proposed",
+                    review_tier="human_reviewed",
+                    scope_completeness="partial",
+                    objects=item["objects"],
+                )
+                connection.execute(
+                    insert(completeness_assessment).values(
+                        asset_id=source.id,
+                        revision=2,
+                        ontology_hash=completeness_context_hash(
+                            ontology.class_map, ontology.classes, project_body.scope
+                        ),
+                        scope_completeness="exhaustive_for_scope",
+                        actor_kind="human",
+                        actor_id=identity,
+                        output_truncated=False,
+                        unresolved_regions=[],
+                    )
+                )
+                append_review(
+                    connection,
+                    asset_id=asset.id,
+                    actor_kind="human",
+                    actor_id=identity,
+                    expected_revision=2,
+                    approval_state="human_accepted",
+                    review_tier="human_reviewed",
+                    scope_completeness="exhaustive_for_scope",
+                    objects=item["objects"],
+                    training_eligible=True,
+                )
+        assert initial_grouping_snapshot(owner, project_id)[:2] == ([], [])
+        sources = command(
+            f"/projects/{project_id}/setup/sources",
+            source_policy_payload(1 + len(keys)).model_dump(mode="json"),
+            "real-policy",
+        )
+        detail = client.get(f"/projects/{project_id}")
+        assert detail.status_code == 200, detail.text
+        body = {
+            "expected_revision": sources["revision"],
+            "ontology_id": ontology.ontology_key,
+            "source_policy_sha256": detail.json()["setup_draft_sha256"]["sources"],
+            "annotation_revisions": dict.fromkeys(keys.values(), 3),
+        }
+        path = f"/projects/{project_id}/source-assignments/initial"
+        assert client.post(path, json=body).status_code == 403
+        grouped = command(path, body, "real-grouping")
+        after = initial_grouping_snapshot(owner, project_id)
+        assignments, relations, receipts, _ = after
+        assert len(assignments) == 16 and all(row.locked for row in assignments)
+        assert len({row.group_id for row in assignments}) == 15
+        assert {row.split for row in assignments} == {"train", "val"}
+        assert relations
+        receipt = next(
+            row for row in receipts if row.event_type == "management.publish_initial_grouping"
+        )
+        assert receipt.actor_kind == "human" and receipt.actor_id == identity
+        evidence = receipt.payload["evidence"]
+        assert evidence["annotation_revisions"] == body["annotation_revisions"]
+        assert evidence["observed_metadata_keys"] == []
+        for observed in evidence["sources"]:
+            expected = observations[observed["asset_id"]]
+            assert observed["phash"] == expected["phash"]
+            assert observed["class_counts"] == expected["class_counts"]
+            assert observed["metadata"] == {} and observed["embedding"] == []
+        assert command(path, body, "real-grouping") == grouped
+        # Complete source fixtures plus published groups still do not turn draft
+        # source-policy intent into an effective published project configuration.
+        plan = client.get(f"/projects/{project_id}/freeze-plan")
+        assert plan.status_code == 200, plan.text
+        assert plan.json()["payload"] is None and plan.json()["exclusions"] == []
+        assert plan.json()["checks"] == [
+            {"code": "canonical_freeze", "passed": False, "reason": "missing_evidence"}
+        ]
+        freeze_body = {
+            "expected_revision": grouped["revision"],
+            "ontology_id": ontology.ontology_key,
+            "assignment_version": evidence["assignment_version"],
+            "annotation_revisions": body["annotation_revisions"],
+        }
+        assert command(
+            f"/projects/{project_id}/dataset-releases", freeze_body, "real-no-freeze", 422
+        ) == {"detail": "missing_evidence"}
+        assert initial_grouping_snapshot(owner, project_id) == after
+        assert release_count(owner, project_id) == 0
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+
+
 @pytest.mark.parametrize("configured", [True, False])
 def test_initial_grouping_http_uses_shared_identity_and_explicit_trusted_reader(
     database, restricted_auth_store, auth_account, configured
