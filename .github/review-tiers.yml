@@ -53,8 +53,13 @@ default_tier: sensitive
 
 tiers:
   low:
-    # Docs copy (prose only; AGENTS.md stays sensitive below).
-    - "docs/**"
+    # Docs prose only. Build/install scripts and other code under
+    # docs/design/mockups/src/ (e.g. fetch-fonts.sh, build-pages.cjs,
+    # shot.cjs, axe.cjs) stay unlisted => sensitive (see sensitive floor:
+    # build tools and install scripts). **/AGENTS.md in sensitive wins on
+    # overlap with this glob.
+    - "docs/*.md"
+    - "docs/**/*.md"
     - "README.md"
     - "LICENSE"
     # Static non-sensitive fixture data (licence-clean image/data dirs).
@@ -63,21 +68,33 @@ tiers:
     - "fixtures/golden/**"
     - "fixtures/cc0-interface/**"
     - "fixtures/commons-office-keyboards/**"
-    # Additive unit tests only (weakened/deleted tests escalate per rule 2).
-    - "apps/api/tests/**"
-    - "packages/*/tests/**"
-    - "workers/*/tests/**"
+    # Additive unit-test modules only (weakened/deleted tests escalate per
+    # rule 2). Shared harness (conftest.py, support.py, smoke modules) and
+    # recorded fixtures (tests/fixtures/**) stay unlisted => sensitive, so
+    # editing what every test proves requires Security review.
+    - "apps/api/tests/test_*.py"
+    - "apps/api/tests/**/test_*.py"
+    - "packages/*/tests/test_*.py"
+    - "packages/*/tests/**/test_*.py"
+    - "workers/*/tests/test_*.py"
+    - "workers/*/tests/**/test_*.py"
     - "apps/web/src/**/*.test.*"
     - "apps/web/src/**/*.spec.*"
 
   ordinary:
     # Audited modules only (justified in the bootstrap PR body):
-    # - packages/core/src/labelloop_core/geometry.py: pure dataclass
-    #   box/affine math; no I/O, network, persistence, auth, or secrets.
-    - "packages/core/src/labelloop_core/geometry.py"
     # - apps/web stylesheet files: pure presentation, no logic.
+    #   docs/design/mockups/src/tokens.css ships via @import in the web
+    #   app, so it is listed here as ordinary like the apps/web CSS.
+    #   The rest of docs/design/mockups/src/ (build/fetch scripts) stays
+    #   unlisted => sensitive.
+    # Note: packages/core/src/labelloop_core/geometry.py is NOT ordinary:
+    # Box.within gates model-patch validation and target_flags feeds
+    # dataset eligibility, i.e. a trust-boundary effect, so it stays
+    # unlisted => sensitive.
     - "apps/web/src/*.css"
     - "apps/web/src/**/*.css"
+    - "docs/design/mockups/src/tokens.css"
 
   sensitive:
     # Review-policy enforcement.
@@ -128,6 +145,8 @@ tiers:
     - "packages/compiler/src/**"
     # Runtime/network/IAM config, infra, dev storage.
     - "dev/**"
-    # Agent instructions, skills and tool permissions.
+    # Agent instructions, skills and tool permissions (nested too).
     - "AGENTS.md"
+    - "**/AGENTS.md"
     - ".claude/**"
+    - "**/.claude/**"
