@@ -14157,8 +14157,9 @@ def regrouping_inputs(service, created, payload, saved, version):
         ),
         key="regroup-source-4",
     )
+    # Ingest consumed saved.revision; its result revision is the asset's own.
     regroup = SourceRegrouping(
-        expected_revision=asset.revision,
+        expected_revision=saved.revision + 1,
         ontology_id=payload.ontology_id,
         source_policy_sha256=payload.source_policy_sha256,
         annotation_revisions={**payload.annotation_revisions, asset.id: 1},
@@ -14221,6 +14222,30 @@ def test_source_regrouping_publishes_new_locked_version_and_preserves_history(da
     with pytest.raises(ManagementFailure, match="revision_conflict"):
         publish_regrouping(adapter, created.id, stale, key="source-regrouping-stale")
     assert initial_grouping_snapshot(owner, created.id) == after
+    # Freeze-side readers follow publication order: the regrouped version is
+    # current and the historical version can no longer freeze.
+    from types import SimpleNamespace
+
+    from labelloop_api.management_grouping import current_assignment_version, load_grouping
+
+    with owner.connect() as connection:
+        identities = [
+            row.id
+            for row in connection.execute(
+                select(source_asset).where(source_asset.c.project_id == created.id)
+            )
+        ]
+        project_row = SimpleNamespace(id=created.id)
+        assert (
+            current_assignment_version(connection, created.id, identities)
+            == current[0].assignment_version
+        )
+        loaded = load_grouping(
+            connection, project_row, current[0].assignment_version, lock_sources=False
+        )
+        assert len(loaded[0]) == 5
+        with pytest.raises(ManagementFailure, match="missing_evidence|revision_conflict"):
+            load_grouping(connection, project_row, initial_version, lock_sources=False)
 
 
 def test_source_regrouping_refuses_without_assignment_or_with_pending_pair(database):

@@ -1,6 +1,6 @@
 """Project setup facts from canonical rows; absent setup evidence stays absent."""
 
-from sqlalchemy import Connection, func, select
+from sqlalchemy import Connection, select
 
 from labelloop_core.domain import ClassDefinition, OntologyRelease
 
@@ -21,7 +21,7 @@ from .management_details import (
     SourcePairRead,
     SourcePolicyRead,
 )
-from .management_grouping import validate_group_membership
+from .management_grouping import current_assignment_version, validate_group_membership
 from .management_ontology import read_catalog_publication
 from .management_ports import ManagementFailure
 from .management_references import read_references
@@ -74,26 +74,21 @@ def source_groups(connection: Connection, project_id) -> SourceGroupsRead:
         )
         for pair in pairs
     ]
-    # Return all latest ties, not an arbitrarily selected assignment. One
-    # complete, locked version is required to report materialized group counts.
-    latest = (
-        select(
-            source_split_assignment.c.asset_id,
-            func.max(source_split_assignment.c.created_at).label("created_at"),
-        )
-        .where(source_split_assignment.c.asset_id.in_(by_id))
-        .group_by(source_split_assignment.c.asset_id)
-        .subquery()
+    # Publication order selects the current version, never an arbitrary tie.
+    # One complete, locked version is required to report materialized counts.
+    version = current_assignment_version(connection, project_id, list(by_id))
+    assignments = (
+        connection.execute(
+            select(source_split_assignment)
+            .where(
+                source_split_assignment.c.asset_id.in_(by_id),
+                source_split_assignment.c.assignment_version == version,
+            )
+            .limit(10001)
+        ).all()
+        if version is not None
+        else []
     )
-    assignments = connection.execute(
-        select(source_split_assignment)
-        .join(
-            latest,
-            (source_split_assignment.c.asset_id == latest.c.asset_id)
-            & (source_split_assignment.c.created_at == latest.c.created_at),
-        )
-        .limit(10001)
-    ).all()
     usable = (
         bool(assets)
         and len(assignments) == len(assets)

@@ -9,6 +9,7 @@ from sqlalchemy import Connection, select
 
 from .management_contracts import ReleaseFreeze
 from .management_details import CheckRead, ExclusionRead, FreezePlanRead
+from .management_grouping import current_assignment_version
 from .management_ports import ManagementFailure
 from .management_release import freeze_candidate, revision_refusal
 from .revision_store import completeness_context_hash
@@ -53,14 +54,16 @@ def freeze_plan(
     if ontology is None:
         return unavailable_plan(project_id, "missing_evidence", [])
     identities = [asset.id for asset in assets]
+    version = current_assignment_version(connection, project_row.id, identities)
+    if version is None:
+        return unavailable_plan(project_id, "missing_evidence", [])
     assignments = connection.execute(
-        select(source_split_assignment)
-        .where(source_split_assignment.c.asset_id.in_(identities))
-        .distinct(source_split_assignment.c.asset_id)
-        .order_by(source_split_assignment.c.asset_id, source_split_assignment.c.created_at.desc())
+        select(source_split_assignment).where(
+            source_split_assignment.c.asset_id.in_(identities),
+            source_split_assignment.c.assignment_version == version,
+        )
     ).all()
-    versions = {row.assignment_version for row in assignments}
-    if len(assignments) != len(assets) or len(versions) != 1:
+    if len(assignments) != len(assets):
         return unavailable_plan(project_id, "missing_evidence", [])
     latest = (
         select(annotation_revision)
@@ -105,7 +108,7 @@ def freeze_plan(
     payload = ReleaseFreeze(
         expected_revision=project_revision,
         ontology_id=ontology.ontology_key,
-        assignment_version=next(iter(versions)),
+        assignment_version=version,
         annotation_revisions=selected,
     )
     try:

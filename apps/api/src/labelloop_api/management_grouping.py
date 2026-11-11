@@ -20,6 +20,66 @@ def reject(code):
     raise ManagementFailure(ManagementError(detail=code))
 
 
+def current_assignment_version(connection: Connection, project_id, identities):
+    """Current version by publication order, matching the lifecycle leaf.
+
+    The latest ``source_grouping_published`` event (its per-project
+    ``expected_revision`` sequence is monotonic) wins when its version covers
+    every asset. Without such an event, fall back to per-asset latest
+    ``created_at`` and require exactly one complete version; ties across
+    versions are ambiguous, not current. Returns ``None`` when no complete
+    current version exists.
+    """
+    if not identities:
+        return None
+    event = connection.execute(
+        select(canonical_event.c.payload)
+        .where(
+            canonical_event.c.aggregate_id == str(project_id),
+            canonical_event.c.event_type == "source_grouping_published",
+        )
+        .order_by(canonical_event.c.expected_revision.desc())
+        .limit(1)
+    ).one_or_none()
+    if event is not None:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        version = payload.get("assignment_version")
+        if not isinstance(version, str) or not version:
+            return None
+        covered = connection.execute(
+            select(func.count())
+            .select_from(source_split_assignment)
+            .where(
+                source_split_assignment.c.asset_id.in_(identities),
+                source_split_assignment.c.assignment_version == version,
+            )
+        ).scalar_one()
+        return version if covered == len(identities) else None
+    latest_times = (
+        select(
+            source_split_assignment.c.asset_id,
+            func.max(source_split_assignment.c.created_at).label("latest_at"),
+        )
+        .where(source_split_assignment.c.asset_id.in_(identities))
+        .group_by(source_split_assignment.c.asset_id)
+        .subquery()
+    )
+    latest = (
+        connection.execute(
+            select(source_split_assignment.c.assignment_version).join(
+                latest_times,
+                (source_split_assignment.c.asset_id == latest_times.c.asset_id)
+                & (source_split_assignment.c.created_at == latest_times.c.latest_at),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(latest) != len(identities) or len(set(latest)) != 1:
+        return None
+    return latest[0]
+
+
 def load_grouping(
     connection: Connection, project_row, assignment_version: str, *, lock_sources=True
 ):
@@ -61,27 +121,8 @@ def load_grouping(
     if pending is not None:
         reject("missing_evidence")
     # A caller cannot turn an obsolete assignment into current membership.
-    # Version labels are opaque; use publication order rather than lexical order.
-    latest_assignment_times = (
-        select(
-            source_split_assignment.c.asset_id,
-            func.max(source_split_assignment.c.created_at).label("latest_at"),
-        )
-        .where(source_split_assignment.c.asset_id.in_(identities))
-        .group_by(source_split_assignment.c.asset_id)
-        .subquery()
-    )
-    latest_assignments = connection.execute(
-        select(source_split_assignment).join(
-            latest_assignment_times,
-            (source_split_assignment.c.asset_id == latest_assignment_times.c.asset_id)
-            & (source_split_assignment.c.created_at == latest_assignment_times.c.latest_at),
-        )
-    ).all()
-    # Equal publication times for different versions are ambiguous, not current.
-    if len(latest_assignments) != len(assignments) or any(
-        row.assignment_version != assignment_version for row in latest_assignments
-    ):
+    # Version labels are opaque; publication order decides, never lexical order.
+    if current_assignment_version(connection, project_row.id, identities) != assignment_version:
         reject("revision_conflict")
     return assets, by_asset, assignments, group_splits
 
