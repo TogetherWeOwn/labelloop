@@ -37,6 +37,7 @@ from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
+    RecipePlanRead,
     RecipePreviewRead,
     ReferenceLifecycleList,
     RegistryDetail,
@@ -245,6 +246,22 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         self, actor: ManagementPrincipal, release_id: str, recipe_id: str, asset_id: str
     ) -> RecipePreviewRead:
         return self._reads().read_recipe_preview(actor, release_id, recipe_id, asset_id)
+
+    def read_recipe_plan(
+        self,
+        actor: ManagementPrincipal,
+        project_id: str,
+        asset_id: str,
+        recipe_id: str,
+        plan_id: str,
+        crop_x: int | None,
+        crop_y: int | None,
+        crop_width: int | None,
+        crop_height: int | None,
+    ) -> RecipePlanRead:
+        return self._reads().read_recipe_plan(
+            actor, project_id, asset_id, recipe_id, plan_id, crop_x, crop_y, crop_width, crop_height
+        )
 
     def read_training(self, actor: ManagementPrincipal, run_id: str) -> TrainingDetail:
         return self._reads().read_training(actor, run_id)

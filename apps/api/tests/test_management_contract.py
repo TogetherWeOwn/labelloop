@@ -1024,8 +1024,15 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 38
-    assert sum(len(methods) for methods in spec["paths"].values()) == 39
+    assert len(spec["paths"]) == 39
+    assert sum(len(methods) for methods in spec["paths"].values()) == 40
+    assert (
+        spec["paths"]["/projects/{project_id}/assets/{asset_id}/recipe-plans/{recipe_id}"]["get"][
+            "operationId"
+        ]
+        == "readRecipePlan"
+    )
+    assert "export type RecipePlanRead =" in client
     assert (
         spec["paths"]["/projects/{project_id}/source-assignments/regroup"]["post"]["operationId"]
         == "publishSourceRegrouping"

@@ -14,6 +14,7 @@ from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
+    RecipePlanRead,
     RecipePreviewRead,
     ReferenceLifecycleList,
     ReleaseDetail,
@@ -359,6 +360,55 @@ class CanonicalManagementReads:
                     )
                 except (KeyError, TypeError, ValueError):
                     refuse("missing_evidence")
+
+    def read_recipe_plan(
+        self,
+        actor: ManagementPrincipal,
+        project_id: str,
+        asset_id: str,
+        recipe_id: str,
+        plan_id: str,
+        crop_x: int | None,
+        crop_y: int | None,
+        crop_width: int | None,
+        crop_height: int | None,
+    ) -> RecipePlanRead:
+        from labelloop_core.geometry import Crop
+
+        from .management_recipe_planning import recipe_plan_read
+
+        authorize_reader(actor)
+        parts = (crop_x, crop_y, crop_width, crop_height)
+        if any(part is None for part in parts) and any(part is not None for part in parts):
+            refuse("invalid_request")
+        crop = None
+        if all(part is not None for part in parts):
+            try:
+                crop = Crop(crop_x, crop_y, crop_width, crop_height)
+            except (TypeError, ValueError):
+                refuse("invalid_request")
+        owned = self.project_rows()
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                row = connection.execute(
+                    select(project.c.id)
+                    .join(owned, project.c.id == owned.c.id)
+                    .where(cast(project.c.id, String) == project_id)
+                ).one_or_none()
+                if row is None:
+                    refuse("not_found")
+                return recipe_plan_read(
+                    connection,
+                    self.workspace_id,
+                    project_id=project_id,
+                    asset_id=asset_id,
+                    recipe_id=recipe_id,
+                    plan_id=plan_id,
+                    crop=crop,
+                )
 
     def read_evaluation(self, actor: ManagementPrincipal, evaluation_id: str) -> "EvaluationDetail":
         from .management_evaluation_reads import evaluation_detail

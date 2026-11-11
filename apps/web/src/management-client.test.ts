@@ -387,6 +387,28 @@ describe('generated management client', () => {
     });
   });
 
+  it('reads an editable recipe plan with an optional integral crop and no mutation headers', async () => {
+    const { request, result } = mockRequest();
+    const csrf = vi.fn(() => 'csrf');
+    const client = new ManagementClient(csrf);
+    await expect(client.readRecipePlan({
+      project_id: 'p', asset_id: 'a', recipe_id: 'full-letterbox-320-v1', plan_id: 'plan-1',
+      crop_x: 420, crop_y: 0, crop_width: 1080, crop_height: 1080,
+    })).resolves.toEqual(result);
+    expect(request).toHaveBeenCalledWith(
+      '/api/projects/p/assets/a/recipe-plans/full-letterbox-320-v1?plan_id=plan-1&crop_x=420&crop_y=0&crop_width=1080&crop_height=1080',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+        body: undefined,
+      },
+    );
+    expect(csrf).not.toHaveBeenCalled();
+  });
+
   it('regroups against a pinned assignment version without choosing groups or splits', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

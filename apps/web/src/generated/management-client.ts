@@ -24,6 +24,7 @@ export type ConfigurationSnapshotPublish = { "expected_revision": number; "reaso
 export type ConfigurationSnapshotRead = { "configuration": ConfigurationSnapshotPin; "project_id": string; "qualification"?: "not_assessed"; "runtime_binding"?: null; "setup_summary_sha256": string; "training_profile_ids": Array<string> };
 export type Coverage = { "asset_id": string; "covered_fraction": number; "partially_covered_targets": number; "uncovered_targets": number };
 export type Crop = { "height": number; "width": number; "x": number; "y": number };
+export type CropRead = { "height": number; "width": number; "x": number; "y": number };
 export type EvaluationDetail = { "candidate_id": string; "checks": Array<CheckRead>; "incumbent_id": string | null; "incumbent_report": EvaluationReport | null; "minimum_class_support": number | null; "opened_final_test_count": number; "qualification": "unqualified" | "evaluating" | "qualified"; "qualification_id": string | null; "reason": string; "report": EvaluationReport | null; "resource": Resource };
 export type EvaluationReport = { "class_map_sha256": string; "coverage": Array<Coverage>; "dataset_release_id": string; "overall": Metrics; "policy": InferencePolicy; "recipe_id": string; "role": "development" | "calibration" | "locked_final_test"; "run_id": string; "slices": Record<string, Metrics>; "weights_sha256": string };
 export type EvaluationStart = { "dataset_release_id": string; "expected_revision": number; "protocol_id": string };
@@ -45,6 +46,7 @@ export type ProjectDetail = { "annotation_guide": string; "approved_steps": Arra
 export type PromotionRequest = { "candidate_id": string; "expected_incumbent_id": string | null; "expected_revision": number; "qualification_id": string; "reason": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1" };
 export type PromotionResult = { "decision": "promoted" | "retained"; "gate_codes": Array<string>; "incumbent_id": string | null; "project_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number };
 export type RecipeBoxRead = { "box": Box; "class_id": string; "clipped": boolean; "consequence": string; "flag": "none" | "warn" | "exclude"; "object_id": string; "review_tier": "machine_verified_no_human_review" | "human_reviewed" | "adjudicated" };
+export type RecipePlanRead = { "annotation_revision": number; "asset_id": string; "assignment_version": string; "crop": CropRead | null; "evidence_state"?: "editable_plan"; "ontology_sha256": string; "ontology_version": number; "plan_id": string; "plan_sha256": string; "project_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "source_height": number; "source_sha256": string; "source_width": number; "transform": AffineTransform };
 export type RecipePreviewRead = { "below_minimum_targets": number; "boxes": Array<RecipeBoxRead>; "checks": Array<CheckRead>; "clipped_targets": number; "evidence_state"?: "planned" | "compiled" | "excluded"; "excluded_images": number; "manifest_artifact_id": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "recipe_revision": number; "source_asset_id": string; "source_height": number; "source_width": number; "tiny_targets": number; "transform": AffineTransform; "validation_artifact_id": string | null };
 export type ReferenceAccept = { "assignment_version": string; "base_ontology_id": string; "expected_revision": number; "reason": string; "reference_id": string };
 export type ReferenceEnroll = { "asset_id": string; "assignment_version": string; "base_ontology_id": string; "class_id": string; "confused_with": Array<string>; "expected_revision": number; "lighting": string; "permitted_use": string; "scale": string; "source": string; "validity_scope": string; "view": string };
@@ -158,6 +160,18 @@ export class ManagementClient {
   ingestAsset(input: { "project_id": string; "idempotency-key": string; body: AssetIngest }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/assets`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  readRecipePlan(input: { "project_id": string; "asset_id": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "plan_id": string; "crop_x"?: number | null; "crop_y"?: number | null; "crop_width"?: number | null; "crop_height"?: number | null }): Promise<RecipePlanRead> {
+    let path = `/projects/${encodeURIComponent(input["project_id"])}/assets/${encodeURIComponent(input["asset_id"])}/recipe-plans/${encodeURIComponent(input["recipe_id"])}`;
+    const query = new URLSearchParams();
+    if (input["plan_id"] != null) query.set("plan_id", String(input["plan_id"]));
+    if (input["crop_x"] != null) query.set("crop_x", String(input["crop_x"]));
+    if (input["crop_y"] != null) query.set("crop_y", String(input["crop_y"]));
+    if (input["crop_width"] != null) query.set("crop_width", String(input["crop_width"]));
+    if (input["crop_height"] != null) query.set("crop_height", String(input["crop_height"]));
+    if (query.size) path += `?${query}`;
+    return this.request<RecipePlanRead>(path, "GET");
   }
 
   publishConfigurationSnapshot(input: { "project_id": string; "idempotency-key": string; body: ConfigurationSnapshotPublish }): Promise<Resource> {

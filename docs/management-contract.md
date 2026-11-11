@@ -346,8 +346,15 @@ over the recipe-planning leaf: it builds a digest-bound editable plan for one
 owned asset from current canonical pins (source hash/dimensions, current
 ontology version/hash, publication-order assignment version, latest annotation
 revision) and a server-resolved recipe ID, revises its crop under core geometry,
-and refuses once any pin goes stale. It writes nothing and has no HTTP surface
-yet. The leaf's own pin loader and recipe-row publisher are deliberately not
+and refuses once any pin goes stale. It writes nothing and is bound as the
+write-free `readRecipePlan` read (`GET
+/projects/{id}/assets/{asset_id}/recipe-plans/{recipe_id}` with a caller plan
+label and an optional all-or-none integral crop): every read plans against
+current evidence and returns the pins, compiler transform and plan digest it
+used, so a crop revision is a fresh read and evidence drift shows up as changed
+pins rather than being silently carried. The plan label is a digest input only;
+the server still resolves the recipe and never accepts client pins, thresholds
+or policy. The leaf's own pin loader and recipe-row publisher are deliberately not
 used: the loader selects assignments by `created_at`, which canonical reads and
 freeze superseded with publication order, and the compile worker already owns
 `preprocessing_recipe` publication inside its fenced transaction. A plan is a

@@ -52,6 +52,7 @@ from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
+    RecipePlanRead,
     RecipePreviewRead,
     ReferenceLifecycleList,
     RegistryDetail,
@@ -247,6 +248,19 @@ class ManagementOperations(Protocol):
     def read_recipe_preview(
         self, actor: ManagementPrincipal, release_id: str, recipe_id: str, asset_id: str
     ) -> RecipePreviewRead: ...
+
+    def read_recipe_plan(
+        self,
+        actor: ManagementPrincipal,
+        project_id: str,
+        asset_id: str,
+        recipe_id: str,
+        plan_id: str,
+        crop_x: int | None,
+        crop_y: int | None,
+        crop_width: int | None,
+        crop_height: int | None,
+    ) -> RecipePlanRead: ...
 
     def read_training(self, actor: ManagementPrincipal, run_id: str) -> TrainingDetail: ...
 

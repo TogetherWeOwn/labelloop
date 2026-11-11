@@ -7132,6 +7132,98 @@ def test_recipe_planning_refuses_unknown_recipe_and_out_of_bounds_crop(database)
             )
 
 
+def test_recipe_plan_read_projects_current_pins_and_writes_nothing(database):
+    from labelloop_api.management_reads import CanonicalManagementReads
+    from labelloop_api.management_recipe_planning import build_plan
+    from labelloop_core.geometry import Crop
+
+    service, owner, _ = database
+    created, asset, _, _ = release_inputs(service, owner)
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    before = counts(owner, created.id)
+    full = reads.read_recipe_plan(
+        Reader(), created.id, asset.id, "full-letterbox-320-v1", "plan-1", None, None, None, None
+    )
+    with owner.connect() as connection:
+        _, expected = build_plan(
+            connection,
+            service.workspace_id,
+            plan_id="plan-1",
+            project_id=created.id,
+            asset_id=asset.id,
+            recipe_id="full-letterbox-320-v1",
+        )
+    assert full.plan_sha256 == expected
+    assert full.evidence_state == "editable_plan"
+    assert full.crop is None
+    assert full.assignment_version == "assignment-1"
+    assert full.annotation_revision == 2
+    cropped = reads.read_recipe_plan(
+        Reader(),
+        created.id,
+        asset.id,
+        "full-letterbox-320-v1",
+        "plan-1",
+        0,
+        0,
+        full.source_width,
+        full.source_height,
+    )
+    with owner.connect() as connection:
+        _, expected_cropped = build_plan(
+            connection,
+            service.workspace_id,
+            plan_id="plan-1",
+            project_id=created.id,
+            asset_id=asset.id,
+            recipe_id="full-letterbox-320-v1",
+            crop=Crop(0, 0, full.source_width, full.source_height),
+        )
+    assert cropped.plan_sha256 == expected_cropped
+    assert cropped.crop.width == full.source_width
+    assert counts(owner, created.id) == before
+    with pytest.raises(ManagementFailure, match="not_found"):
+        CanonicalManagementReads(service.engine, uuid4()).read_recipe_plan(
+            Reader(),
+            created.id,
+            asset.id,
+            "full-letterbox-320-v1",
+            "plan-1",
+            None,
+            None,
+            None,
+            None,
+        )
+    with pytest.raises(ManagementFailure, match="not_found"):
+        reads.read_recipe_plan(
+            Reader(),
+            created.id,
+            "missing-asset",
+            "full-letterbox-320-v1",
+            "plan-1",
+            None,
+            None,
+            None,
+            None,
+        )
+    with pytest.raises(ManagementFailure, match="invalid_request"):
+        reads.read_recipe_plan(
+            Reader(), created.id, asset.id, "full-letterbox-320-v1", "plan-1", 0, None, None, None
+        )
+    with pytest.raises(ManagementFailure, match="incompatible_recipe"):
+        reads.read_recipe_plan(
+            Reader(),
+            created.id,
+            asset.id,
+            "full-letterbox-320-v1",
+            "plan-1",
+            0,
+            0,
+            full.source_width + 1,
+            full.source_height,
+        )
+
+
 @pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])
 def test_catalog_publication_refuses_nonadmin_principals(database, actor):
     service, owner, _ = database

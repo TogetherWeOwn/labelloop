@@ -1207,6 +1207,39 @@
         "title": "Crop",
         "type": "object"
       },
+      "CropRead": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "integer"
+          },
+          "x": {
+            "minimum": 0.0,
+            "title": "X",
+            "type": "integer"
+          },
+          "y": {
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "CropRead",
+        "type": "object"
+      },
       "EvaluationDetail": {
         "additionalProperties": false,
         "properties": {
@@ -2626,6 +2659,119 @@
           "flag"
         ],
         "title": "RecipeBoxRead",
+        "type": "object"
+      },
+      "RecipePlanRead": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_revision": {
+            "minimum": 1.0,
+            "title": "Annotation Revision",
+            "type": "integer"
+          },
+          "asset_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "assignment_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Assignment Version",
+            "type": "string"
+          },
+          "crop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CropRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_state": {
+            "const": "editable_plan",
+            "default": "editable_plan",
+            "title": "Evidence State",
+            "type": "string"
+          },
+          "ontology_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Ontology Sha256",
+            "type": "string"
+          },
+          "ontology_version": {
+            "minimum": 1.0,
+            "title": "Ontology Version",
+            "type": "integer"
+          },
+          "plan_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "plan_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Sha256",
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "recipe_id": {
+            "enum": [
+              "full-letterbox-320-v1",
+              "full-letterbox-640-v1"
+            ],
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "source_height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Source Height",
+            "type": "integer"
+          },
+          "source_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "source_width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Source Width",
+            "type": "integer"
+          },
+          "transform": {
+            "$ref": "#/components/schemas/AffineTransform"
+          }
+        },
+        "required": [
+          "plan_id",
+          "project_id",
+          "asset_id",
+          "recipe_id",
+          "source_sha256",
+          "source_width",
+          "source_height",
+          "ontology_version",
+          "ontology_sha256",
+          "assignment_version",
+          "annotation_revision",
+          "crop",
+          "transform",
+          "plan_sha256"
+        ],
+        "title": "RecipePlanRead",
         "type": "object"
       },
       "RecipePreviewRead": {
@@ -6063,6 +6209,202 @@
         "summary": "Annotation Snapshot",
         "tags": [
           "annotations"
+        ]
+      }
+    },
+    "/projects/{project_id}/assets/{asset_id}/recipe-plans/{recipe_id}": {
+      "get": {
+        "operationId": "readRecipePlan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "enum": [
+                "full-letterbox-320-v1",
+                "full-letterbox-640-v1"
+              ],
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "crop_x",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Crop X"
+            }
+          },
+          {
+            "in": "query",
+            "name": "crop_y",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Crop Y"
+            }
+          },
+          {
+            "in": "query",
+            "name": "crop_width",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Crop Width"
+            }
+          },
+          {
+            "in": "query",
+            "name": "crop_height",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Crop Height"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipePlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read Recipe Plan",
+        "tags": [
+          "management"
         ]
       }
     },

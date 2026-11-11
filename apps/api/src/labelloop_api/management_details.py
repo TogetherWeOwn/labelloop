@@ -241,6 +241,34 @@ class RecipePreviewRead(Contract):
     validation_artifact_id: Identifier | None
 
 
+class CropRead(Contract):
+    x: Count
+    y: Count
+    width: Annotated[int, Field(gt=0)]
+    height: Annotated[int, Field(gt=0)]
+
+
+class RecipePlanRead(Contract):
+    # An editable, digest-bound proposal over current canonical pins. The
+    # read persists nothing and publishes no recipe; compilation re-derives
+    # and rechecks its own pins, so a stale plan can never become authority.
+    evidence_state: Literal["editable_plan"] = "editable_plan"
+    plan_id: Identifier
+    project_id: Identifier
+    asset_id: Identifier
+    recipe_id: RecipeId
+    source_sha256: Digest
+    source_width: Annotated[int, Field(gt=0)]
+    source_height: Annotated[int, Field(gt=0)]
+    ontology_version: Annotated[int, Field(ge=1)]
+    ontology_sha256: Digest
+    assignment_version: Identifier
+    annotation_revision: Annotated[int, Field(ge=1)]
+    crop: CropRead | None
+    transform: AffineTransform
+    plan_sha256: Digest
+
+
 class TrainingProfileRead(Contract):
     id: Identifier
     revision: Revision

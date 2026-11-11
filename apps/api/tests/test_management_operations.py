@@ -88,6 +88,7 @@ def test_setup_mutations_reuse_canonical_implementation_unchanged(name):
             "read_anchor_pack",
             "read_release",
             "read_recipe_preview",
+            "read_recipe_plan",
             "read_training",
             "read_evaluation",
         )

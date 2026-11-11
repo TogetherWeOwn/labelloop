@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from test_management_contract import Actor, client_for
 
 from labelloop_api.management_details import ReferenceLifecycleList, TrainingProfileRead
-from labelloop_core.geometry import full_frame_transform
+from labelloop_core.geometry import Crop, full_frame_transform
 
 RESOURCE = {"id": "result", "project_id": "p", "kind": "project", "revision": 1, "state": "draft"}
 REFERENCE_LIFECYCLE_RESULT = {
@@ -141,6 +141,27 @@ DETAIL_READS = [
             "checks": [],
             "manifest_artifact_id": None,
             "validation_artifact_id": None,
+        },
+    ),
+    (
+        "/projects/p/assets/a/recipe-plans/full-letterbox-320-v1?plan_id=plan-1&crop_x=420&crop_y=0&crop_width=1080&crop_height=1080",
+        "read_recipe_plan",
+        ("p", "a", "full-letterbox-320-v1", "plan-1", 420, 0, 1080, 1080),
+        {
+            "plan_id": "plan-1",
+            "project_id": "p",
+            "asset_id": "a",
+            "recipe_id": "full-letterbox-320-v1",
+            "source_sha256": "a" * 64,
+            "source_width": 1920,
+            "source_height": 1080,
+            "ontology_version": 1,
+            "ontology_sha256": "b" * 64,
+            "assignment_version": "assignment-1",
+            "annotation_revision": 2,
+            "crop": {"x": 420, "y": 0, "width": 1080, "height": 1080},
+            "transform": full_frame_transform(1920, 1080, 320, crop=Crop(420, 0, 1080, 1080)),
+            "plan_sha256": "c" * 64,
         },
     ),
     (

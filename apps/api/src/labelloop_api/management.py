@@ -48,6 +48,7 @@ from .management_details import (
     EvaluationDetail,
     FreezePlanRead,
     ProjectDetail,
+    RecipePlanRead,
     RecipePreviewRead,
     ReferenceLifecycleList,
     RegistryDetail,
@@ -673,6 +674,37 @@ def management_router(
         service: Annotated[ManagementOperations, Depends(operations)],
     ) -> RecipePreviewRead:
         return invoke(lambda: service.read_recipe_preview(actor, release_id, recipe_id, asset_id))
+
+    @router.get(
+        "/projects/{project_id}/assets/{asset_id}/recipe-plans/{recipe_id}",
+        response_model=RecipePlanRead,
+        operation_id="readRecipePlan",
+    )
+    def read_recipe_plan(
+        project_id: Identifier,
+        asset_id: Identifier,
+        recipe_id: RecipeId,
+        plan_id: Identifier,
+        actor: Annotated[ManagementPrincipal, Depends(reader)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+        crop_x: int | None = None,
+        crop_y: int | None = None,
+        crop_width: int | None = None,
+        crop_height: int | None = None,
+    ) -> RecipePlanRead:
+        return invoke(
+            lambda: service.read_recipe_plan(
+                actor,
+                project_id,
+                asset_id,
+                recipe_id,
+                plan_id,
+                crop_x,
+                crop_y,
+                crop_width,
+                crop_height,
+            )
+        )
 
     @router.get(
         "/projects/{project_id}/training-profiles",

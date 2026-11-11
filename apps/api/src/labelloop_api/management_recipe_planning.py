@@ -1,7 +1,10 @@
 """Editable ROI/recipe planning over the recipe-planning leaf.
 
-Internal adapter only: no HTTP operation, schema or default mounting yet,
-and no writes at all. The leaf owns plan geometry, crop revision and the
+Bound as the write-free ``readRecipePlan`` detail read through the shared
+reader boundary; no default mounting and no writes at all. A plan revision
+is a fresh read with a new crop: it always plans against current evidence
+and returns the pins it used, so drift shows up as changed pins and digest
+rather than being silently carried. The leaf owns plan geometry and the
 deterministic digest; this integrator resolves the pins those plans are
 checked against, because two leaf DB helpers cannot be consumed as-is:
 
@@ -27,9 +30,10 @@ from dataclasses import asdict
 from sqlalchemy import select
 
 from labelloop_compiler.compiler import resolve_recipe
-from labelloop_core.geometry import Crop
+from labelloop_core.geometry import Crop, full_frame_transform
 
 from .management_contracts import ManagementError
+from .management_details import CropRead, RecipePlanRead
 from .management_grouping import current_assignment_version
 from .management_ontology import validate_ontology
 from .management_ports import ManagementFailure
@@ -126,6 +130,50 @@ def build_plan(connection, workspace_id, *, plan_id, project_id, asset_id, recip
     """Editable plan pinned to current canonical evidence; writes nothing."""
     pins = plan_pins(connection, workspace_id, project_id, asset_id)
     return assemble_plan(plan_id, pins, server_recipe(recipe_id), crop)
+
+
+def recipe_plan_read(
+    connection, workspace_id, *, project_id, asset_id, recipe_id, plan_id, crop=None
+):
+    """Public plan projection; the transform is the compiler's own geometry."""
+    plan, digest = build_plan(
+        connection,
+        workspace_id,
+        plan_id=plan_id,
+        project_id=project_id,
+        asset_id=asset_id,
+        recipe_id=recipe_id,
+        crop=crop,
+    )
+    return RecipePlanRead(
+        plan_id=plan.plan_id,
+        project_id=project_id,
+        asset_id=asset_id,
+        recipe_id=recipe_id,
+        source_sha256=plan.source_sha256,
+        source_width=plan.source_width,
+        source_height=plan.source_height,
+        ontology_version=plan.ontology_version,
+        ontology_sha256=plan.ontology_hash,
+        assignment_version=plan.assignment_version,
+        annotation_revision=plan.annotation_revision,
+        crop=CropRead(
+            x=int(plan.crop.x),
+            y=int(plan.crop.y),
+            width=int(plan.crop.width),
+            height=int(plan.crop.height),
+        )
+        if plan.crop is not None
+        else None,
+        transform=full_frame_transform(
+            plan.source_width,
+            plan.source_height,
+            plan.recipe.output_size,
+            crop=plan.crop,
+            allow_upscale=plan.recipe.allow_upscale,
+        ),
+        plan_sha256=digest,
+    )
 
 
 def revise_crop(plan, crop: Crop | None):
