@@ -387,6 +387,25 @@ describe('generated management client', () => {
     });
   });
 
+  it('regroups against a pinned assignment version without choosing groups or splits', async () => {
+    const { request } = mockRequest();
+    const client = new ManagementClient(() => 'csrf');
+    const body = {
+      expected_revision: 6, ontology_id: 'ontology-1', source_policy_sha256: 'a'.repeat(64),
+      annotation_revisions: { 'source-a': 1, 'source-b': 0 },
+      expected_assignment_version: 'assignment-1',
+    };
+    await client.publishSourceRegrouping({ project_id: 'p', 'idempotency-key': 'regroup-1', body });
+    expect(request).toHaveBeenCalledWith('/api/projects/p/source-assignments/regroup', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf', 'Idempotency-Key': 'regroup-1',
+      },
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error', body: JSON.stringify(body),
+    });
+  });
+
   it('discovers initial pairs using source pins without supplying similarity or decisions', async () => {
     const { request } = mockRequest();
     const client = new ManagementClient(() => 'csrf');

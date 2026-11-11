@@ -43,6 +43,7 @@ from .management_contracts import (
     SetupStepApprove,
     SourcePairResolve,
     SourcePolicyDraft,
+    SourceRegrouping,
     TrainingStart,
     VariantCompile,
 )
@@ -134,6 +135,10 @@ class ManagementOperations(Protocol):
 
     def discover_initial_source_pairs(
         self, actor: ManagementPrincipal, context: MutationContext, payload: InitialSourceGrouping
+    ) -> Resource: ...
+
+    def publish_source_regrouping(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SourceRegrouping
     ) -> Resource: ...
 
     def resolve_source_pair(

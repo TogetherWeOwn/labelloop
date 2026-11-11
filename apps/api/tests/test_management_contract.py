@@ -160,6 +160,12 @@ MUTATIONS = [
         INITIAL_GROUPING,
         200,
     ),
+    (
+        "/projects/p/source-assignments/regroup",
+        "publish_source_regrouping",
+        {**INITIAL_GROUPING, "expected_assignment_version": "assignment-1"},
+        200,
+    ),
     ("/projects/p/source-pairs/resolve", "resolve_source_pair", PAIR_RESOLVE, 200),
     ("/projects/p/references/revalidate", "revalidate_reference", REFERENCE_REVALIDATE, 200),
     ("/projects/p/setup/classes/publish", "publish_class_catalog", CATALOG_PUBLISH, 200),
@@ -1018,8 +1024,13 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
     spec = json.loads((tmp_path / "management.openapi.json").read_text())
     client = (tmp_path / "management-client.ts").read_text()
     assert client == render_client(spec)
-    assert len(spec["paths"]) == 37
-    assert sum(len(methods) for methods in spec["paths"].values()) == 38
+    assert len(spec["paths"]) == 38
+    assert sum(len(methods) for methods in spec["paths"].values()) == 39
+    assert (
+        spec["paths"]["/projects/{project_id}/source-assignments/regroup"]["post"]["operationId"]
+        == "publishSourceRegrouping"
+    )
+    assert "export type SourceRegrouping =" in client
     assert (
         spec["paths"]["/projects/{project_id}/source-pairs/discover"]["post"]["operationId"]
         == "discoverInitialSourcePairs"

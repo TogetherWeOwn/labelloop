@@ -14408,6 +14408,42 @@ def test_source_regrouping_publishes_new_locked_version_and_preserves_history(da
             load_grouping(connection, project_row, initial_version, lock_sources=False)
 
 
+def test_source_regrouping_through_operations_facade_requires_trusted_reader(database):
+    service, owner, _ = database
+    created, payload, adapter = initial_grouping_inputs(service, owner)
+    saved = publish_grouping(adapter, created.id, payload)
+    initial_version = initial_grouping_snapshot(owner, created.id)[0][0].assignment_version
+    _, regroup = regrouping_inputs(service, created, payload, saved, initial_version)
+    before = initial_grouping_snapshot(owner, created.id)
+
+    from labelloop_api.management_operations import CanonicalManagementOperations
+
+    actor = Actor()
+    context = MutationContext.bind(
+        actor, "source-regrouping-facade", "publish_source_regrouping", created.id, regroup
+    )
+    unconfigured = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id
+    )
+    with pytest.raises(ManagementFailure, match="management_unavailable"):
+        unconfigured.publish_source_regrouping(actor, context, regroup)
+    assert initial_grouping_snapshot(owner, created.id) == before
+
+    operations = CanonicalManagementOperations(
+        service.engine, service.store, service.workspace_id, grouping_objects=adapter.objects
+    )
+    result = operations.publish_source_regrouping(actor, context, regroup)
+    assert result.revision == regroup.expected_revision + 1
+    assert operations.publish_source_regrouping(actor, context, regroup) == result
+    assignments, _, events, _ = initial_grouping_snapshot(owner, created.id)
+    current = [row for row in assignments if row.assignment_version != initial_version]
+    assert len(current) == 5 and all(row.locked for row in current)
+    receipt = next(
+        row for row in events if row.event_type == "management.publish_source_regrouping"
+    )
+    assert receipt.actor_kind == "human" and receipt.actor_id == actor.id
+
+
 def test_source_regrouping_refuses_without_assignment_or_with_pending_pair(database):
     service, owner, _ = database
     created, payload, adapter = initial_grouping_inputs(service, owner)

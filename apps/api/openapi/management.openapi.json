@@ -4132,6 +4132,59 @@
         "title": "SourcePolicyRead",
         "type": "object"
       },
+      "SourceRegrouping": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_revisions": {
+            "maxProperties": 256,
+            "minProperties": 2,
+            "patternProperties": {
+              "^[A-Za-z0-9_.-]+$": {
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "propertyNames": {
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "title": "Annotation Revisions",
+            "type": "object"
+          },
+          "expected_assignment_version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Expected Assignment Version",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "ontology_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Ontology Id",
+            "type": "string"
+          },
+          "source_policy_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Policy Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "ontology_id",
+          "source_policy_sha256",
+          "annotation_revisions",
+          "expected_assignment_version"
+        ],
+        "title": "SourceRegrouping",
+        "type": "object"
+      },
       "TrainingDetail": {
         "additionalProperties": false,
         "properties": {
@@ -8113,6 +8166,123 @@
           }
         },
         "summary": "Publish Initial Grouping",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/projects/{project_id}/source-assignments/regroup": {
+      "post": {
+        "operationId": "publishSourceRegrouping",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceRegrouping"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Publish Source Regrouping",
         "tags": [
           "management"
         ]

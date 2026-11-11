@@ -1,7 +1,8 @@
 """Canonical regrouping publication over the source-group lifecycle leaf.
 
-Internal adapter only: no HTTP operation, schema or default mounting yet.
-The leaf recomputes relations from trusted observations plus pair decisions
+Bound as ``publishSourceRegrouping`` through the explicit trusted reader
+and shared human-admin/session/CSRF boundary; no default mounting. The
+leaf recomputes relations from trusted observations plus pair decisions
 and never reads management receipts, so this integrator maps verified
 canonical evidence into its DTOs under the existing management transaction
 authority (admin principal, project/retry locks, revision and replay):

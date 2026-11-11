@@ -151,8 +151,9 @@ holdout-repair shortcut is added. Embedding evidence and the complete later-inge
 metadata-edit, regrouping/quarantine lifecycle remain missing. Default application
 mounting and real asset admission stay disabled.
 
-Regrouping after first publication is an internal canonical adapter
-(`CanonicalSourceRegrouping`), not yet an HTTP operation. It consumes the
+Regrouping after first publication is `publishSourceRegrouping`
+(`CanonicalSourceRegrouping`) behind the shared human-admin/session/CSRF
+boundary and the explicit trusted reader; a missing reader refuses. It consumes the
 delivered source-group lifecycle leaf under the same admin principal,
 project/retry locks, aggregate revision and replay authority as first
 grouping. The caller pins the reviewed assignment version plus the usual
@@ -171,9 +172,8 @@ releases and any fresh-holdout requirement are reported in the attributed
 receipt evidence. Leaf publication events keep their system actor kind with
 the human actor ID preserved, and the human management receipt in the same
 transaction is the final audit record. Freeze-side current-version
-selection still uses its existing time-based check; aligning it with the
-leaf publication sequence remains integration work, as do the typed HTTP
-binding, metadata edits and embedding evidence.
+selection follows the leaf publication sequence (see grouping reads).
+Metadata edits and embedding evidence remain integration work.
 
 ## Internal anchor-pack preparation (not publication)
 
@@ -746,7 +746,7 @@ idempotency/audit tests and disposable Actions DB concurrency evidence.
 |---|---|
 | Remaining `save_setup`, `add_class` | Management facade: proposed reference enrollment and typed setup draft saves above are implemented separately, not generic capture payloads or approval; source admission/grouping binding and effective ontology publication/migration remain missing |
 | `accept_class`, `approve_step` | Management facade: authenticated admin events, not client-set `approval`/human fields; `accept_reference` has the separate unmounted typed operation above |
-| Remaining `resolve_pair` regrouping | Internal canonical regrouping adapter above consumes the delivered lifecycle leaf with verified pair receipts and reported quarantine; typed HTTP binding and post-initial pair discovery remain management work |
+| Remaining `resolve_pair` regrouping | `publishSourceRegrouping` above consumes the delivered lifecycle leaf with verified pair receipts and reported quarantine; post-initial pair discovery remains management work |
 | `publish_project` | Management facade freezes approved ontology, guide, reference, split, recipe and policy versions; validates prerequisite approvals, keeps null targets fail-closed |
 | `new_recipe_version` | Management facade's canonical recipe/version adapter; immutable released recipes and delivered compiler transform rules, not browser geometry |
 | `cancel_local_run` | Management facade requests cancellation through the shared fenced queue producer; the worker owns lease/fence and terminal state, no browser process kill |

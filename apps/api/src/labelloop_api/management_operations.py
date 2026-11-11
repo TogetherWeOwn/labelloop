@@ -28,6 +28,7 @@ from .management_contracts import (
     Resource,
     ResourceKind,
     ResourcePage,
+    SourceRegrouping,
     TrainingStart,
     VariantCompile,
 )
@@ -47,6 +48,7 @@ from .management_evaluation import ApprovedDevelopmentProtocol, CanonicalManagem
 from .management_grouping_publication import CanonicalInitialGrouping
 from .management_ports import ManagementPrincipal, MutationContext
 from .management_reads import CanonicalManagementReads, authorize_reader
+from .management_regrouping import CanonicalSourceRegrouping
 from .management_training import ApprovedTrainingProfile, CanonicalManagementTraining
 
 
@@ -157,6 +159,16 @@ class CanonicalManagementOperations(CanonicalManagementMutations):
         if self.grouping_objects is None:
             refuse("management_unavailable")
         return CanonicalInitialGrouping(self, self.grouping_objects).discover(
+            actor, context, payload
+        )
+
+    def publish_source_regrouping(
+        self, actor: ManagementPrincipal, context: MutationContext, payload: SourceRegrouping
+    ) -> Resource:
+        self.authorize(actor, context, "publish_source_regrouping", context.target_id, payload)
+        if self.grouping_objects is None:
+            refuse("management_unavailable")
+        return CanonicalSourceRegrouping(self, self.grouping_objects).publish(
             actor, context, payload
         )
 

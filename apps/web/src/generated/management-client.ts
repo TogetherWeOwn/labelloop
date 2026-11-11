@@ -70,6 +70,7 @@ export type SourcePairRead = { "id": string; "left_asset_id": string; "right_ass
 export type SourcePairResolve = { "decision": "related" | "unrelated"; "expected_revision": number; "pair_id": string; "reason": string };
 export type SourcePolicyDraft = { "collection_notes": string; "expected_revision": number; "metadata_keys": Array<"session" | "sequence" | "subject"> };
 export type SourcePolicyRead = { "collection_notes": string; "metadata_keys": Array<"session" | "sequence" | "subject"> };
+export type SourceRegrouping = { "annotation_revisions": Record<string, unknown>; "expected_assignment_version": string; "expected_revision": number; "ontology_id": string; "source_policy_sha256": string };
 export type TrainingDetail = { "checkpoints": Array<Checkpoint>; "dataset_release_id": string; "epoch": number; "epochs": number; "images": number; "initialization_sha256": string; "mismatches": Array<ArgumentMismatchRead>; "reason": string | null; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "requested_arguments": Record<string, unknown>; "resolved_arguments": Record<string, unknown> | null; "resource": Resource; "retention": RetentionRead | null; "training_profile_id": string; "training_profile_revision": number; "updated_at": string; "variant_id": string };
 export type TrainingProfileRead = { "arguments": Record<string, unknown>; "backend": "local_ultralytics"; "epochs": number; "id": string; "initialization_sha256": string; "recipe_id": "full-letterbox-320-v1" | "full-letterbox-640-v1"; "revision": number };
 export type TrainingProfilesRead = { "profiles": Array<TrainingProfileRead>; "project_id": string };
@@ -275,6 +276,11 @@ export class ManagementClient {
 
   publishInitialSourceGrouping(input: { "project_id": string; "idempotency-key": string; body: InitialSourceGrouping }): Promise<Resource> {
     const path = `/projects/${encodeURIComponent(input["project_id"])}/source-assignments/initial`;
+    return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
+  }
+
+  publishSourceRegrouping(input: { "project_id": string; "idempotency-key": string; body: SourceRegrouping }): Promise<Resource> {
+    const path = `/projects/${encodeURIComponent(input["project_id"])}/source-assignments/regroup`;
     return this.request<Resource>(path, "POST", input.body, input["idempotency-key"]);
   }
 

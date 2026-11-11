@@ -39,6 +39,7 @@ from .management_contracts import (
     SetupStepApprove,
     SourcePairResolve,
     SourcePolicyDraft,
+    SourceRegrouping,
     TrainingStart,
     VariantCompile,
 )
@@ -236,6 +237,23 @@ def management_router(
             actor, idempotency_key, "publish_initial_grouping", project_id, payload
         )
         return invoke(lambda: service.publish_initial_grouping(actor, context, payload))
+
+    @router.post(
+        "/projects/{project_id}/source-assignments/regroup",
+        response_model=Resource,
+        operation_id="publishSourceRegrouping",
+    )
+    def publish_source_regrouping(
+        project_id: Identifier,
+        payload: SourceRegrouping,
+        idempotency_key: IdempotencyKey,
+        actor: Annotated[ManagementPrincipal, Depends(admin)],
+        service: Annotated[ManagementOperations, Depends(operations)],
+    ) -> Resource:
+        context = MutationContext.bind(
+            actor, idempotency_key, "publish_source_regrouping", project_id, payload
+        )
+        return invoke(lambda: service.publish_source_regrouping(actor, context, payload))
 
     @router.post(
         "/projects/{project_id}/source-pairs/discover",
