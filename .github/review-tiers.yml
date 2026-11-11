@@ -71,7 +71,9 @@ tiers:
     # Additive unit-test modules only (weakened/deleted tests escalate per
     # rule 2). Shared harness (conftest.py, support.py, smoke modules) and
     # recorded fixtures (tests/fixtures/**) stay unlisted => sensitive, so
-    # editing what every test proves requires Security review.
+    # editing what every test proves requires Security review. Test-named
+    # harness modules imported by other tests are pinned explicitly in
+    # sensitive (sensitive wins on overlap).
     - "apps/api/tests/test_*.py"
     - "apps/api/tests/**/test_*.py"
     - "packages/*/tests/test_*.py"
@@ -145,6 +147,17 @@ tiers:
     - "packages/compiler/src/**"
     # Runtime/network/IAM config, infra, dev storage.
     - "dev/**"
+    # Shared test harness living inside test-named modules: these files
+    # define fakes/helpers (Journal, Coordinator, Transport, intent,
+    # remote, reconcile, model, report, _decode_dimensions, _png) that
+    # other test modules import, so weakening a fake changes what the
+    # dependent tests prove without touching any assertion. Sensitive
+    # wins on overlap with the low test_*.py globs. Any future test
+    # module imported by another test module must be pinned here likewise.
+    - "packages/platform/tests/test_label_sync.py"
+    - "packages/platform/tests/test_sync_reconciliation.py"
+    - "packages/platform/tests/test_sync_transport.py"
+    - "packages/core/tests/test_registry.py"
     # Agent instructions, skills and tool permissions (nested too).
     - "AGENTS.md"
     - "**/AGENTS.md"
