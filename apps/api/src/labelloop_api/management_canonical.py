@@ -426,14 +426,39 @@ class CanonicalManagementMutations:
             if draft_sha256(catalog) != payload.draft_sha256:
                 refuse("revision_conflict")
             proposed_ids = {item.stable_id for item in draft.classes}
-            # No implicit deletion, merge or split of an established identity.
-            if not ontology.class_map.keys() <= proposed_ids:
-                refuse("unsupported_classes")
+            migration_evidence = None
+            steps = None
+            if payload.migration_steps is None:
+                # No implicit deletion, merge or split of an established identity.
+                if not ontology.class_map.keys() <= proposed_ids:
+                    refuse("unsupported_classes")
+                mapping = dict(ontology.class_map)
+                for identifier in sorted(proposed_ids - mapping.keys()):
+                    mapping[identifier] = len(mapping)
+            else:
+                from .management_ontology_migration import migration_steps, prepare_migration
+
+                steps = migration_steps(payload.migration_steps)
+                mapping, export_map = prepare_migration(owned.id, ontology, catalog, steps)
+                migration_evidence = {
+                    "steps": [
+                        {
+                            "kind": step.kind,
+                            "old_ids": list(step.old_ids),
+                            "new_ids": list(step.new_ids),
+                        }
+                        for step in steps
+                    ],
+                    "export_index_map": export_map,
+                }
             read_setup_approvals(connection, owned, self.workspace_id, lock_sources=True)
             require_retired_references(connection, owned, self.workspace_id)
-            mapping = dict(ontology.class_map)
-            for identifier in sorted(proposed_ids - mapping.keys()):
-                mapping[identifier] = len(mapping)
+            if steps is not None:
+                from .management_ontology_migration import bounded_review_queue
+
+                migration_evidence["review_queue"] = bounded_review_queue(
+                    connection, owned.id, steps
+                )
             ontology_id = str(uuid4())
             connection.execute(
                 insert(ontology_release).values(
@@ -462,20 +487,18 @@ class CanonicalManagementMutations:
                 revision=payload.expected_revision + 1,
                 state="draft",
             )
+            evidence = {
+                "class_catalog": catalog,
+                "draft_sha256": payload.draft_sha256,
+                "ontology_id": ontology_id,
+                "ontology_version": ontology.version + 1,
+                "class_map": mapping,
+                "reason": payload.reason,
+            }
+            if migration_evidence is not None:
+                evidence["ontology_migration"] = migration_evidence
             self.record(
-                connection,
-                context,
-                str(owned.id),
-                payload.expected_revision,
-                result,
-                {
-                    "class_catalog": catalog,
-                    "draft_sha256": payload.draft_sha256,
-                    "ontology_id": ontology_id,
-                    "ontology_version": ontology.version + 1,
-                    "class_map": mapping,
-                    "reason": payload.reason,
-                },
+                connection, context, str(owned.id), payload.expected_revision, result, evidence
             )
             return result
 

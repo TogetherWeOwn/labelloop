@@ -1091,6 +1091,10 @@ def test_codegen_is_deterministic_and_has_all_operations(tmp_path):
         == "publishClassCatalog"
     )
     assert "export type ClassCatalogPublish =" in client
+    assert "export type ClassMigrationStepInput =" in client
+    assert spec["components"]["schemas"]["ClassMigrationStepInput"]["properties"]["kind"][
+        "enum"
+    ] == ["retain", "rename", "add", "remove", "merge", "split"]
     assert (
         spec["paths"]["/projects/{project_id}/references/withdraw"]["post"]["operationId"]
         == "withdrawReference"

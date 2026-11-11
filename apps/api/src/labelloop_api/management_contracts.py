@@ -141,10 +141,21 @@ class ClassCatalogDraft(Mutation):
         return self
 
 
+class ClassMigrationStepInput(Contract):
+    kind: Literal["retain", "rename", "add", "remove", "merge", "split"]
+    old_ids: Annotated[list[Identifier], Field(max_length=1000)]
+    new_ids: Annotated[list[Identifier], Field(max_length=1000)]
+
+
 class ClassCatalogPublish(Mutation):
     base_ontology_id: Identifier
     draft_sha256: Digest
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    # Present only for an explicit identity-changing migration; omitted from
+    # serialization when absent so historical retry fingerprints are unchanged.
+    migration_steps: (
+        Annotated[list[ClassMigrationStepInput], Field(min_length=1, max_length=1000)] | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SourcePolicyDraft(Mutation):

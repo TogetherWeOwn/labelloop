@@ -24,6 +24,7 @@ from labelloop_api.management_contracts import (
     AssetIngest,
     ClassCatalogDraft,
     ClassCatalogPublish,
+    ClassMigrationStepInput,
     GuideDraft,
     ProjectCreate,
     ReferenceAccept,
@@ -6969,6 +6970,71 @@ def test_catalog_publication_refuses_removed_identity_and_missing_draft(database
     save_catalog(service, created.id, draft)
     with pytest.raises(ManagementFailure, match="unsupported_classes"):
         publish_catalog(service, created.id, publication_payload(service, created.id))
+    assert len(ontology_rows(owner, created.id)) == 1
+
+
+def test_catalog_migration_publishes_new_identity_with_review_evidence(database):
+    service, owner, _ = database
+    created, _, _, freeze_payload = release_inputs(service, owner)
+    frozen = freeze(service, created.id, freeze_payload)
+    draft = catalog_payload(service, created.id, 3)
+    draft = draft.model_copy(
+        update={"classes": [draft.classes[0].model_copy(update={"stable_id": "replacement"})]}
+    )
+    original = ontology_rows(owner, created.id)[0]
+    save_catalog(service, created.id, draft)
+    payload = publication_payload(service, created.id).model_copy(
+        update={
+            "migration_steps": [
+                ClassMigrationStepInput(kind="remove", old_ids=["package"], new_ids=[]),
+                ClassMigrationStepInput(kind="add", old_ids=[], new_ids=["replacement"]),
+            ]
+        }
+    )
+    result = publish_catalog(service, created.id, payload, key="migrate-catalog")
+    assert result.revision == 5
+    assert publish_catalog(service, created.id, payload, key="migrate-catalog") == result
+    old, new = ontology_rows(owner, created.id)
+    assert old == original and new.class_map == {"replacement": 0} and new.version == 2
+    reads = CanonicalManagementReads(service.engine, service.workspace_id)
+    detail = reads.read_project(Reader(), created.id)
+    assert detail.versions["ontology"] == "2" and detail.class_catalog_draft is None
+    assert {item.stable_id for item in detail.classes} == {"replacement"}
+    assert reads.read_release(Reader(), frozen.id).resource == frozen
+    with owner.connect() as connection:
+        receipt = connection.execute(
+            select(canonical_event).where(
+                canonical_event.c.aggregate_id == created.id,
+                canonical_event.c.event_type == "management.publish_class_catalog",
+            )
+        ).one()
+        migration = receipt.payload["evidence"]["ontology_migration"]
+        assert migration["export_index_map"]["package"] == {"old_index": 0, "new_index": None}
+        assert migration["export_index_map"]["replacement"] == {"old_index": None, "new_index": 0}
+        assert migration["review_queue"], "removed-class objects must stay explicit review work"
+        assert {item["class_id"] for item in migration["review_queue"]} == {"package"}
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        # Rename-only is the ordinary identity-preserving publication path.
+        [ClassMigrationStepInput(kind="rename", old_ids=["package"], new_ids=["package"])],
+        # A removed identity without an explicit disposition for the new one.
+        [ClassMigrationStepInput(kind="remove", old_ids=["package"], new_ids=[])],
+    ],
+)
+def test_catalog_migration_refuses_non_migrations_and_incomplete_steps(database, steps):
+    service, owner, _ = database
+    created = create(service)
+    draft = catalog_payload(service, created.id)
+    draft = draft.model_copy(
+        update={"classes": [draft.classes[0].model_copy(update={"stable_id": "replacement"})]}
+    )
+    save_catalog(service, created.id, draft)
+    payload = publication_payload(service, created.id).model_copy(update={"migration_steps": steps})
+    with pytest.raises(ManagementFailure, match="unsupported_classes"):
+        publish_catalog(service, created.id, payload, key="bad-migration")
     assert len(ontology_rows(owner, created.id)) == 1
 
 

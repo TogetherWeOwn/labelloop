@@ -463,8 +463,9 @@ and its still-current base ontology. A draft save never changes an ontology,
 released class identity, YOLO export index, reference bank or frozen dataset.
 
 Catalog edits block new freezes until the separate approval/publication and
-ontology migration path validates them. Added/removed/merged/split class intent
-is not an effective identity migration. Scope, guide and class drafts preserve
+ontology migration path validates them. A saved draft alone is never an
+effective identity migration; removed/merged/split identities take effect only
+through explicit migration steps at publication, below. Scope, guide and class drafts preserve
 each other but consume one shared project revision sequence. Historical frozen
 releases remain readable. This does not enable real asset admission.
 
@@ -479,10 +480,21 @@ after the mutation; the project resource remains `draft`.
 
 The owned-project/retry locks and atomic attributed receipt are shared with draft
 saves. Publication checks the latest saved catalog receipt and exact digest. All
-existing stable IDs must remain: removal, merge and split migrations require a
-separate explicit migration path and are refused here. Existing export indices
-are preserved regardless of draft order; added stable IDs receive dense indices
-in sorted order after the existing map. Earlier ontologies, annotations,
+existing stable IDs must remain unless the request carries explicit
+`migration_steps`: typed retain/rename/add/remove/merge/split dispositions that
+cover every old and new stable ID exactly once. A one-to-one step changing the
+stable ID is refused as an inferred relabel; identity changes must be declared
+as remove/merge/split (plus add where a new identity appears), and at least one
+identity-changing step is required, otherwise the ordinary path applies. Steps
+are validated by the ontology-migration leaf; publication still inserts the
+canonical immutable version here, because the leaf's own key format cannot be
+pinned by management identifiers. Existing export indices are preserved
+regardless of draft order; added stable IDs receive dense indices in sorted
+order after the existing map. A migration reindexes densely in survivor order
+and records the old/new export index map plus a bounded per-object review
+queue for removed/merged/split classes in the receipt evidence. Publication
+never relabels annotations: queued objects need explicit review, and evidence
+bound to the old ontology refuses as stale afterwards. Earlier ontologies, annotations,
 completeness assessments, frozen datasets and descendants are never rewritten.
 Names, definitions, aliases and parents enter the canonical ontology. Prose
 examples, exclusions and mirror-safety intent are retained in the publication

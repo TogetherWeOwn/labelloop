@@ -564,6 +564,22 @@
             "title": "Expected Revision",
             "type": "integer"
           },
+          "migration_steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ClassMigrationStepInput"
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migration Steps"
+          },
           "reason": {
             "maxLength": 4096,
             "minLength": 1,
@@ -799,6 +815,52 @@
           "recall"
         ],
         "title": "ClassMetrics",
+        "type": "object"
+      },
+      "ClassMigrationStepInput": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "retain",
+              "rename",
+              "add",
+              "remove",
+              "merge",
+              "split"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "new_ids": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "New Ids",
+            "type": "array"
+          },
+          "old_ids": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Old Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "old_ids",
+          "new_ids"
+        ],
+        "title": "ClassMigrationStepInput",
         "type": "object"
       },
       "ClassRead": {

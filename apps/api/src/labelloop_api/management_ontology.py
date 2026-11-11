@@ -1,4 +1,4 @@
-"""Immutable catalog versions; identity-removing migrations are not implemented."""
+"""Immutable catalog versions; identity-changing steps use the migration adapter."""
 
 from sqlalchemy import Connection, select
 
