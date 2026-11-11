@@ -1,0 +1,133 @@
+# Risk-tiered review map for labelloop (owner-approved risk-tiered review;
+# schema v1, canonical policy in the adopting parent card's "plan" document).
+#
+# Classification rules (identical in every repo):
+#   1. A PR's tier is the HIGHEST tier of any changed file
+#      (sensitive > ordinary > low). On overlap, sensitive wins.
+#      A file matching no glob below defaults to sensitive.
+#   2. Content triggers escalate to sensitive regardless of path:
+#      new/changed public endpoint or input parsing; auth/authz/session
+#      logic; crypto or key handling; secrets/credentials; permission
+#      checks; tenant-isolation or personal-data handling; SQL/schema/
+#      migrations; dependency or lockfile changes; CI/workflow changes;
+#      weakened test assertions, deleted tests/snapshots, or lowered
+#      gates in test files (so test paths are low only for additive tests).
+#   3. The author records the tier in the PR attestation (`risk_tier`);
+#      QA verifies it against this file and the diff. Any doubt
+#      escalates. QA may pull in Security on any PR.
+#   4. Review per tier: low -> QA; ordinary -> QA;
+#      sensitive/unclassified -> Security -> QA.
+#   5. This file itself, and any change to it, is always sensitive
+#      (review-policy enforcement). No glob in the sensitive floor
+#      below may be moved to low/ordinary without the Security
+#      Engineer's approval recorded on that PR.
+#
+# Sensitive floor (never downgraded): CI/workflows, this file, CODEOWNERS;
+# dependency manifests and lockfiles (incl. dev deps), build tools and
+# install scripts; auth/session/crypto/secrets, public endpoints and input
+# parsing, tenant isolation, personal data, DB schema/migrations;
+# runtime/network/IAM config, infra and deploy/release paths; agent
+# instructions/skills/tool permissions. Every new top-level path is
+# sensitive until explicitly classified here (default_tier below).
+#
+# Low is allowlist-only: docs copy, static non-sensitive fixtures,
+# additive unit tests (content triggers still apply).
+# Ordinary is audited modules only: bounded behaviour change with no
+# untrusted input, no sensitive output, no permissions, no persistence,
+# no trust-boundary effect. Anything unlisted is sensitive by default —
+# when in doubt, leave it unlisted.
+#
+# Layout inventory (actual top-level paths in this repo):
+#   apps/api          public HTTP API (auth, DB stores, endpoints)
+#   apps/web          React review/operations UI
+#   packages/core     canonical domain logic, geometry, review/budget gates
+#   packages/compiler deterministic YOLO dataset compiler + image ingest
+#   packages/platform Ultralytics Platform adapter (account creds, spend)
+#   packages/llm      LLM review codecs (untrusted model output boundary)
+#   workers/core      trusted Postgres job queue
+#   workers/ml        ML training worker (vendor ultralytics imports)
+#   docs, fixtures, scripts, dev (local minio/dev storage), .github, .claude
+
+version: 1
+default_tier: sensitive
+
+tiers:
+  low:
+    # Docs copy (prose only; AGENTS.md stays sensitive below).
+    - "docs/**"
+    - "README.md"
+    - "LICENSE"
+    # Static non-sensitive fixture data (licence-clean image/data dirs).
+    # Fixture build scripts (fixtures/*.py) stay unlisted => sensitive.
+    - "fixtures/README.md"
+    - "fixtures/golden/**"
+    - "fixtures/cc0-interface/**"
+    - "fixtures/commons-office-keyboards/**"
+    # Additive unit tests only (weakened/deleted tests escalate per rule 2).
+    - "apps/api/tests/**"
+    - "packages/*/tests/**"
+    - "workers/*/tests/**"
+    - "apps/web/src/**/*.test.*"
+    - "apps/web/src/**/*.spec.*"
+
+  ordinary:
+    # Audited modules only (justified in the bootstrap PR body):
+    # - packages/core/src/labelloop_core/geometry.py: pure dataclass
+    #   box/affine math; no I/O, network, persistence, auth, or secrets.
+    - "packages/core/src/labelloop_core/geometry.py"
+    # - apps/web stylesheet files: pure presentation, no logic.
+    - "apps/web/src/*.css"
+    - "apps/web/src/**/*.css"
+
+  sensitive:
+    # Review-policy enforcement.
+    - ".github/workflows/**"
+    - ".github/review-tiers.yml"
+    - "CODEOWNERS"
+    - "**/CODEOWNERS"
+    # Dependency manifests and lockfiles, incl. dev deps.
+    - "pyproject.toml"
+    - "**/pyproject.toml"
+    - "uv.lock"
+    - "**/uv.lock"
+    - "package.json"
+    - "**/package.json"
+    - "pnpm-lock.yaml"
+    - "**/pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "**/requirements*.txt"
+    # Build tools and install scripts.
+    - "Makefile"
+    - "**/Makefile"
+    - "Dockerfile"
+    - "**/Dockerfile*"
+    - "compose.yaml"
+    - "importlinter.ini"
+    - "apps/web/vite*.config.*"
+    - "**/tsconfig*.json"
+    # Auth/session/crypto/secrets surfaces.
+    - "apps/api/src/labelloop_api/auth.py"
+    - "apps/api/src/labelloop_api/auth_schema.py"
+    - "apps/api/src/labelloop_api/auth_store.py"
+    - "apps/api/src/labelloop_api/database_url.py"
+    - ".env.example"
+    - ".gitleaks.toml"
+    - ".gitleaksignore"
+    # Public endpoints and input parsing (HTTP API entry + request models).
+    - "apps/api/src/**"
+    # DB schema and migrations.
+    - "apps/api/migrations/**"
+    # Trusted job queue and ML worker (vendor imports, spend, creds).
+    - "workers/core/src/**"
+    - "workers/ml/src/**"
+    # Platform adapter: account credentials, dataset sync, training spend.
+    - "packages/platform/src/**"
+    # LLM review codecs: untrusted model output / image-byte boundary.
+    - "packages/llm/src/**"
+    # Dataset compiler and image ingest (parsing, derivative persistence).
+    - "packages/compiler/src/**"
+    # Runtime/network/IAM config, infra, dev storage.
+    - "dev/**"
+    # Agent instructions, skills and tool permissions.
+    - "AGENTS.md"
+    - ".claude/**"
