@@ -15,7 +15,19 @@ class Rows:
         return self.rows
 
     def scalars(self):
-        return self.rows
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def one_or_none(self):
+        return self.rows[0] if self.rows else None
+
+    def first(self):
+        return self.rows[0] if self.rows else None
+
+    def scalar_one(self):
+        return self.rows[0]
 
 
 class Snapshot:
@@ -55,7 +67,9 @@ def snapshot(*, same_hash=False, same_declaration=False, same_group=False, relat
         )
     ]
     relations = [SimpleNamespace(left_asset_id=left, right_asset_id=right)] if relation else []
-    return Snapshot(assets, [], assignments, events, relations)
+    # No publication event, so current-version selection falls back to the
+    # per-asset latest timestamps, which agree on one complete version.
+    return Snapshot(assets, [], [], ["assignment-1"] * len(assets), assignments, events, relations)
 
 
 def test_source_group_read_withholds_inconsistent_current_assignment_pins():
