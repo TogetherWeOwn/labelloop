@@ -6975,8 +6975,22 @@ def test_catalog_publication_refuses_removed_identity_and_missing_draft(database
 
 def test_catalog_migration_publishes_new_identity_with_review_evidence(database):
     service, owner, _ = database
-    created, _, _, freeze_payload = release_inputs(service, owner)
+    created, asset, source, freeze_payload = release_inputs(service, owner)
     frozen = freeze(service, created.id, freeze_payload)
+    # Latest evidence carries a removed-class object; the frozen release
+    # keeps its historical revision and is never relabelled.
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="draft",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=[{"object_id": "box-1", "class_id": "package", "box": [1, 1, 11, 9]}],
+        )
     draft = catalog_payload(service, created.id, 3)
     draft = draft.model_copy(
         update={"classes": [draft.classes[0].model_copy(update={"stable_id": "replacement"})]}
@@ -7013,6 +7027,10 @@ def test_catalog_migration_publishes_new_identity_with_review_evidence(database)
         assert migration["export_index_map"]["replacement"] == {"old_index": None, "new_index": 0}
         assert migration["review_queue"], "removed-class objects must stay explicit review work"
         assert {item["class_id"] for item in migration["review_queue"]} == {"package"}
+        assert [
+            (item["asset_id"], item["revision"], item["object_id"])
+            for item in migration["review_queue"]
+        ] == [(str(source.id), 3, "box-1")]
 
 
 @pytest.mark.parametrize(
@@ -7036,6 +7054,82 @@ def test_catalog_migration_refuses_non_migrations_and_incomplete_steps(database,
     with pytest.raises(ManagementFailure, match="unsupported_classes"):
         publish_catalog(service, created.id, payload, key="bad-migration")
     assert len(ontology_rows(owner, created.id)) == 1
+
+
+def test_recipe_planning_pins_current_evidence_and_refuses_stale(database):
+    from labelloop_api.management_recipe_planning import build_plan, plan_pins, require_current
+    from labelloop_core.geometry import Crop
+
+    service, owner, _ = database
+    created, asset, source, _ = release_inputs(service, owner)
+    before = counts(owner, created.id)
+    with owner.connect() as connection:
+        pins = plan_pins(connection, service.workspace_id, created.id, asset.id)
+        plan, digest = build_plan(
+            connection,
+            service.workspace_id,
+            plan_id="plan-1",
+            project_id=created.id,
+            asset_id=asset.id,
+            recipe_id="full-letterbox-320-v1",
+            crop=Crop(0, 0, pins["source_width"], pins["source_height"]),
+        )
+        assert plan.asset_id == str(source.id)
+        assert plan.assignment_version == "assignment-1"
+        assert plan.annotation_revision == 2
+        assert plan.ontology_version == 1
+        assert (
+            require_current(connection, service.workspace_id, created.id, asset.id, plan) == digest
+        )
+        with pytest.raises(ManagementFailure, match="not_found"):
+            plan_pins(connection, uuid4(), created.id, asset.id)
+        with pytest.raises(ManagementFailure, match="not_found"):
+            plan_pins(connection, service.workspace_id, created.id, "missing-asset")
+    assert counts(owner, created.id) == before
+    with owner.begin() as connection:
+        append_review(
+            connection,
+            asset_id=asset.id,
+            actor_kind="human",
+            actor_id=Actor().id,
+            expected_revision=2,
+            approval_state="draft",
+            review_tier="human_reviewed",
+            scope_completeness="unreviewed",
+            objects=[],
+        )
+    with owner.connect() as connection:
+        with pytest.raises(ManagementFailure, match="revision_conflict"):
+            require_current(connection, service.workspace_id, created.id, asset.id, plan)
+
+
+def test_recipe_planning_refuses_unknown_recipe_and_out_of_bounds_crop(database):
+    from labelloop_api.management_recipe_planning import build_plan, plan_pins
+    from labelloop_core.geometry import Crop
+
+    service, owner, _ = database
+    created, asset, _, _ = release_inputs(service, owner)
+    with owner.connect() as connection:
+        pins = plan_pins(connection, service.workspace_id, created.id, asset.id)
+        with pytest.raises(ManagementFailure, match="incompatible_recipe"):
+            build_plan(
+                connection,
+                service.workspace_id,
+                plan_id="plan-1",
+                project_id=created.id,
+                asset_id=asset.id,
+                recipe_id="invented-recipe-v9",
+            )
+        with pytest.raises(ManagementFailure, match="incompatible_recipe"):
+            build_plan(
+                connection,
+                service.workspace_id,
+                plan_id="plan-1",
+                project_id=created.id,
+                asset_id=asset.id,
+                recipe_id="full-letterbox-320-v1",
+                crop=Crop(0, 0, pins["source_width"] + 1, pins["source_height"]),
+            )
 
 
 @pytest.mark.parametrize("actor", [Actor(kind="service"), Actor(role="reviewer"), Actor(id="")])

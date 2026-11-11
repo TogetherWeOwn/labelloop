@@ -338,9 +338,20 @@ raster**. Artifact IDs identify the variant's manifest/validation report, not a
 source image or download grant. Negative, mixed-size, unselected and final-test
 sources cannot use this exclusion path. Neither read fetches object bytes.
 Invalid published evidence never falls back to a plan. This is frozen full-frame
-geometry planning, not editable crop/ROI
-planning or a preview of unpinned labels, and does not enable real admission or
-default mounting.
+geometry planning, not a preview of unpinned labels, and does not enable real
+admission or default mounting.
+
+Editable ROI/crop planning is an internal adapter (`management_recipe_planning`)
+over the recipe-planning leaf: it builds a digest-bound editable plan for one
+owned asset from current canonical pins (source hash/dimensions, current
+ontology version/hash, publication-order assignment version, latest annotation
+revision) and a server-resolved recipe ID, revises its crop under core geometry,
+and refuses once any pin goes stale. It writes nothing and has no HTTP surface
+yet. The leaf's own pin loader and recipe-row publisher are deliberately not
+used: the loader selects assignments by `created_at`, which canonical reads and
+freeze superseded with publication order, and the compile worker already owns
+`preprocessing_recipe` publication inside its fenced transaction. A plan is a
+proposal for that path, never a second recipe authority or a compiled variant.
 
 ## Local model publication (unmounted)
 
