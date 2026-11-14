@@ -1,5 +1,5 @@
-/* labelloop workbench mockups. Every value is a kit variable from tokens.css (two-design-kit,
-   workbench additions). Component ids in comments refer to the kit's docs/components.md. */
+/* labelloop workbench mockups. Every value is a token variable from tokens.css (see
+   docs/design/tokens/). Component ids in comments refer to docs/design/components.md. */
 @import url(fonts.css);
 @import url(tokens.css);
 

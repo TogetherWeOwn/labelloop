@@ -2,7 +2,7 @@
 
 These are the specs the review and v1 management UI is built from ([plan §13.1](../plan.md#131-main-screens) and [§15](../plan.md#15-implementation-milestones)). Design readiness before M3 implementation does not mean every screen ships in M3. Build only what is here. If something you need is missing, ask the UX Designer on your card rather than inventing it.
 
-**Design system:** [TogetherWeOwn/two-design-kit](https://github.com/TogetherWeOwn/two-design-kit), Ember Hours theme, **v0.3.0 or later**. That release adds the workbench tokens (label provenance, image well, box overlay sizes), components **J1–J22**, layout patterns **P6/P7** and the tool-copy rules in voice.md §7. Until v0.3.0 is tagged, the additions are in kit PR [#7](https://github.com/TogetherWeOwn/two-design-kit/pull/7), stacked on [#8](https://github.com/TogetherWeOwn/two-design-kit/pull/8) (the 24 px box-handle target exception, accessibility.md §4). Vendor `dist/css/tokens.css` and `dist/ts/tokens.ts` as the kit README describes. Use tokens only: no raw colours, sizes or durations. Component ids (A1, J4, …) refer to the kit's `docs/components.md`.
+**Design system:** labelloop's own workbench design, in this directory: [components.md](components.md) (J1–J22), [templates.md](templates.md) (layout patterns P6 and P7), [voice.md](voice.md) (tool-surface copy and terms), [accessibility.md](accessibility.md) (the 24 px box-handle exception) and [tokens/](tokens/README.md) (workbench tokens). It sits on the Ember Hours theme; the base tokens are vendored in `mockups/src/tokens.css` and the base components (A–I ids) are those of kit v0.3.1. Everything here was moved from TogetherWeOwn/two-design-kit v0.3.1 (`4eb4181`) on 2026-11-14 ([ADR 0004](../adr/0004-workbench-design-in-labelloop.md)); each file names its source. Use tokens only: no raw colours, sizes or durations. Component ids (J4, P7, …) refer to the files here.
 
 ## Screens
 
@@ -31,21 +31,21 @@ Each mockup has `mockups/png/<name>-1280.png` (1280 × 800 viewport) and `<name>
 
 ## Rules that apply to every screen
 
-1. **Provenance is always visible.** Anything a model made or judged says so in words, wherever it appears: on a box, in a table, in history, in a count. Proposed, auto-accepted and reviewed never share a look (kit components.md §J, the provenance table). Only a person reviews; a model proposes or auto-accepts.
+1. **Provenance is always visible.** Anything a model made or judged says so in words, wherever it appears: on a box, in a table, in history, in a count. Proposed, auto-accepted and reviewed never share a look ([components.md](components.md), the provenance rule). Only a person reviews; a model proposes or auto-accepts.
 2. **One ember surface per view.** It is the page's primary action. Accepting a model's proposal is never the ember action.
 3. **Money and spend:** nothing paid starts from one click. J20 shows the estimate, the button names it ("Start · estimate $1.38") and a line says which limits are enforced; an estimate is never worded as a cap. When paid steps are paused, every page's header says so (J1 paused variant: "Paid steps paused" in `state.danger` in place of the meter, on the Costs mockup).
 4. **Secrets:** only J18 fingerprints, ever.
 5. **Honest numbers:** a metric names its set and size; estimates say "Estimate"; unsupported classes show the reason, never a number.
 6. **Times:** UTC in tables and audit (labelled), viewer-local with the zone in sentences.
 7. **No toasts.** Results go in place (notices, history lines) and in the one polite status region.
-8. **Live data** (runs, compiles, queues) refreshes every 30 s while visible, by text swap, with a freshness line; never animated (kit accessibility.md §6).
+8. **Live data** (runs, compiles, queues) refreshes every 30 s while visible, by text swap, with a freshness line; never animated (Ember Hours accessibility, kit v0.3.1 `docs/accessibility.md` §6).
 
 ## Shell and navigation
 
 - **J1 header** on every screen: product mark · project switcher · sections: Review (with queue count) · Releases · Recipes · Runs · Evaluation · Models · Costs · Audit log · spend status · account menu (Connections, account settings including shortcut preferences, sign out).
 - New project is reached from the project switcher ("New project").
 - Patterns: Image review uses **P7** (review canvas); every other screen uses **P6** (workbench page).
-- The AGPL source offer is in the footer on every page: the full footer on P6, on P7 a one-line footer inside the viewport height above 820 px; at 820 px and below the review page scrolls and the footer follows the inspector (kit templates.md shell rule): "labelloop is free software under the AGPL-3.0. Get the source code." (plan §12.3).
+- The AGPL source offer is in the footer on every page: the full footer on P6, on P7 a one-line footer inside the viewport height above 820 px; at 820 px and below the review page scrolls and the footer follows the inspector ([templates.md](templates.md) shell rule): "labelloop is free software under the AGPL-3.0. Get the source code." (plan §12.3).
 
 ## Roles (plan §12.2)
 
@@ -68,7 +68,7 @@ Every screen renders: loading (structure first, no shimmer), empty (C3: an hones
 
 ## Regenerating the mockups
 
-The mockups are HTML rendered from `mockups/src` using the kit's `tokens.css` (copied from kit PR #7). From `docs/design/mockups/src`:
+The mockups are HTML rendered from `mockups/src` using the vendored `tokens.css` (see [tokens/](tokens/README.md)). From `docs/design/mockups/src`:
 
 ```sh
 ./fetch-fonts.sh                       # OFL fonts, not committed
@@ -78,4 +78,4 @@ REPO=… node shot.cjs review.html ../png/review tall
 REPO=… node axe.cjs *.html             # exits 1 on any WCAG 2.0–2.2 A/AA or best-practice violation
 ```
 
-The mockup CSS (`workbench.css`) is a reference for spacing and composition, not production code. It uses kit variables only.
+The mockup CSS (`workbench.css`) is a reference for spacing and composition, not production code. It uses token variables only.
