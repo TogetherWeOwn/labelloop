@@ -339,7 +339,7 @@ jobs:
         run: uv run pytest apps/api/tests/test_budget_store.py -v
         env:
           LABELLOOP_BUDGET_POSTGRES: "1"
-      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence
+      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py workers/ml/tests/test_experiment_cpu.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

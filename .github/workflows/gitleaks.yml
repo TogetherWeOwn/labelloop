@@ -22,6 +22,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check count-only scan diagnostics
+        run: python3 -I -m unittest discover -s scripts/tests -p test_secret_scan_summary.py
       - name: Check Platform example classification across new commit identities
         run: python3 scripts/check-platform-secret-classification.py --image zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
       - name: Scan full history
@@ -32,16 +34,4 @@ jobs:
           --report-format json --report-path /reports/gitleaks.json
       - name: Show finding count without report metadata
         if: failure()
-        run: |
-          python3 -I - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          report = Path(os.environ["RUNNER_TEMP"]) / "gitleaks.json"
-          if report.exists():
-              # All report fields, including filenames, are untrusted. Emit only
-              # a computed count; never report metadata, matches or an artifact.
-              findings = json.loads(report.read_text())
-              print(json.dumps({"finding_count": len(findings)}))
-          PY
+        run: python3 -I scripts/summarize-secret-scan.py "$RUNNER_TEMP/gitleaks.json"
