@@ -13,10 +13,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from labelloop_api.auth import require_reviewer
 from labelloop_api.auth_store import Principal
 from labelloop_api.database_url import quoted_database_url
+from labelloop_api.http_contract import BOUNDARY_RESPONSES, BoundaryError
 from labelloop_api.schema import annotation_revision, project, source_asset
 
 # Persisted UUIDs are opaque lookup handles; canonical keys need not be URL segments.
-router = APIRouter(prefix="/projects/{project_id}/assets/{asset_id}", tags=["annotations"])
+router = APIRouter(
+    prefix="/projects/{project_id}/assets/{asset_id}",
+    tags=["annotations"],
+    responses={**BOUNDARY_RESPONSES, 404: {"model": BoundaryError}},
+)
 Reviewer = Annotated[Principal, Depends(require_reviewer)]
 
 
