@@ -9,8 +9,11 @@ import hashlib
 import json
 from dataclasses import asdict
 
+import psycopg
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from sqlalchemy.dialects.postgresql import dialect, insert
 
 from labelloop_api import model_schema as db
 from labelloop_api.schema import (
@@ -76,45 +79,41 @@ def decode_report(value: dict) -> EvaluationReport:
     )
 
 
-def variant_context(connection: sa.Connection, variant_id: object) -> sa.RowMapping:
+def variant_context_query(variant_id: object):
     return (
-        connection.execute(
-            sa.select(
-                yolo_dataset_variant.c.id,
-                yolo_dataset_variant.c.class_map,
-                yolo_dataset_variant.c.file_manifest,
-                yolo_dataset_variant.c.validated,
-                yolo_dataset_variant.c.non_empty_val,
-                canonical_dataset_release.c.frozen,
-                canonical_dataset_release.c.release_key,
-                canonical_dataset_release.c.assignment_version,
-                project.c.id.label("project_id"),
-                project.c.project_key,
-                preprocessing_recipe.c.id.label("recipe_id"),
-                preprocessing_recipe.c.recipe_key,
-                preprocessing_recipe.c.policy,
-                preprocessing_recipe.c.immutable.label("recipe_immutable"),
-            )
-            .select_from(
-                yolo_dataset_variant.join(canonical_dataset_release)
-                .join(project)
-                .join(preprocessing_recipe)
-            )
-            .where(yolo_dataset_variant.c.id == variant_id)
+        sa.select(
+            yolo_dataset_variant.c.id,
+            yolo_dataset_variant.c.class_map,
+            yolo_dataset_variant.c.file_manifest,
+            yolo_dataset_variant.c.validated,
+            yolo_dataset_variant.c.non_empty_val,
+            canonical_dataset_release.c.frozen,
+            canonical_dataset_release.c.release_key,
+            canonical_dataset_release.c.assignment_version,
+            project.c.id.label("project_id"),
+            project.c.project_key,
+            preprocessing_recipe.c.id.label("recipe_id"),
+            preprocessing_recipe.c.recipe_key,
+            preprocessing_recipe.c.policy,
+            preprocessing_recipe.c.immutable.label("recipe_immutable"),
         )
-        .mappings()
-        .one()
+        .select_from(
+            yolo_dataset_variant.join(canonical_dataset_release)
+            .join(project)
+            .join(preprocessing_recipe)
+        )
+        .where(yolo_dataset_variant.c.id == variant_id)
     )
 
 
-def save_training(
-    connection: sa.Connection,
-    *,
-    variant_id: object,
-    result: TrainingResult,
-    reports: tuple[EvaluationReport, ...],
+def variant_context(connection: sa.Connection, variant_id: object) -> sa.RowMapping:
+    return connection.execute(variant_context_query(variant_id)).mappings().one()
+
+
+def validate_training(
+    context, result: TrainingResult, reports: tuple[EvaluationReport, ...]
 ) -> None:
-    context = variant_context(connection, variant_id)
+    """Shared lineage gate for SQLAlchemy callers and the native queue transaction."""
     request = result.request
     if not all(
         context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
@@ -142,6 +141,14 @@ def save_training(
         or manifest["recipe"]["output_size"] != request.policy.imgsz
     ):
         raise ValueError("persisted variant digests or recipe do not match training")
+    validate_checkpoint_reports(result, reports, context["class_map"])
+
+
+def validate_checkpoint_reports(
+    result: TrainingResult, reports: tuple[EvaluationReport, ...], class_map: dict
+) -> None:
+    """Shared artifact-only gate, including export before training is published."""
+    request = result.request
     if len(reports) != len(result.checkpoints) or {r.run_id for r in reports} != {
         c.evaluation_run_id for c in result.checkpoints
     }:
@@ -155,10 +162,63 @@ def save_training(
             or report.weights_sha256 != checkpoint.sha256
             or report.class_map_sha256 != request.class_map_sha256
             or report.policy != request.policy
-            or set(report.overall.per_class) != set(context["class_map"])
+            or set(report.overall.per_class) != set(class_map)
             or report.overall.map50_95 != checkpoint.validation_map
         ):
             raise ValueError("checkpoint evaluation lineage mismatch")
+
+
+def save_training_transaction(
+    connection: psycopg.Connection,
+    *,
+    variant_id: object,
+    result: TrainingResult,
+    reports: tuple[EvaluationReport, ...],
+) -> None:
+    """Append through the queue's caller-owned transaction, never another connection.
+
+    Compile only the shared SELECT (one UUID bind, no expanding/literal binds).
+    Native writes explicitly adapt JSON; no SQLAlchemy pool owns this connection.
+    """
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("training publication requires an active caller transaction")
+    query = variant_context_query(variant_id).compile(dialect=dialect())
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+    if context is None:
+        raise ValueError("missing training variant")
+    validate_training(context, result, reports)
+    # Inside the queue transaction this is a savepoint, not a commit boundary.
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO training_run(run_key,variant_id,input_manifest,record) "
+            "VALUES (%s,%s,%s,%s) RETURNING id",
+            (
+                result.request.run_id,
+                variant_id,
+                Jsonb(context["file_manifest"]),
+                Jsonb(json_record(result)),
+            ),
+        )
+        run_id = cursor.fetchone()[0]
+        cursor.executemany(
+            "INSERT INTO evaluation_run(run_key,training_run_id,variant_id,record) "
+            "VALUES (%s,%s,%s,%s)",
+            [(report.run_id, run_id, variant_id, Jsonb(json_record(report))) for report in reports],
+        )
+
+
+def save_training(
+    connection: sa.Connection,
+    *,
+    variant_id: object,
+    result: TrainingResult,
+    reports: tuple[EvaluationReport, ...],
+) -> None:
+    context = variant_context(connection, variant_id)
+    validate_training(context, result, reports)
+    request, manifest = result.request, context["file_manifest"]
     with connection.begin_nested():
         run_id = connection.execute(
             sa.insert(db.training_run).values(
@@ -182,21 +242,8 @@ def save_training(
         )
 
 
-def save_model(
-    connection: sa.Connection,
-    *,
-    training_run_key: str,
-    release: ModelRelease,
-    export_evidence: dict,
-) -> None:
-    run = (
-        connection.execute(
-            sa.select(db.training_run).where(db.training_run.c.run_key == training_run_key)
-        )
-        .mappings()
-        .one()
-    )
-    context = variant_context(connection, run["variant_id"])
+def validate_model(context, run, release: ModelRelease, export_evidence: dict, evaluations) -> None:
+    """One lineage/export gate for both transaction adapters; never promotion authority."""
     result = run["record"]
     request = result["request"]
     inputs = run["input_manifest"]
@@ -219,20 +266,97 @@ def save_model(
         or result["selected"]["evaluation_run_id"] not in release.evaluation_run_ids
     ):
         raise ValueError("model release disagrees with persisted training lineage")
+    validate_export(release, export_evidence)
+    if len(evaluations) != len(release.evaluation_run_ids) or {
+        row["run_key"] for row in evaluations
+    } != set(release.evaluation_run_ids):
+        raise ValueError("model release evaluation is not persisted for this run")
+    for evaluation in evaluations:
+        report = decode_report(evaluation["record"])
+        if report.weights_sha256 != release.weights_sha256 or report.policy != release.policy:
+            raise ValueError("model release evaluation artifact mismatch")
+
+
+def validate_export(release: ModelRelease, export_evidence: dict) -> None:
     if (
         export_evidence.get("weights_sha256") != release.weights_sha256
         or export_evidence.get("export_sha256") != release.export_sha256
         or tuple(export_evidence.get("static_input_signature", ()))
         != release.static_input_signature
         or export_evidence.get("policy") != asdict(release.policy)
-        or export_evidence.get("sample_count", 0) < 1
-        or len(export_evidence.get("detection_counts", ())) != export_evidence["sample_count"]
+        or type(export_evidence.get("sample_count")) is not int
+        or export_evidence["sample_count"] < 1
+        or not isinstance(export_evidence.get("detection_counts"), (list, tuple))
+        or len(export_evidence["detection_counts"]) != export_evidence["sample_count"]
         or any(type(count) is not int or count < 0 for count in export_evidence["detection_counts"])
         or sum(export_evidence["detection_counts"]) < 1
         or export_evidence.get("coordinate_atol_px") != 0.01
         or export_evidence.get("confidence_atol") != 1e-5
     ):
         raise ValueError("model release needs matching static export verification")
+
+
+def save_model_transaction(
+    connection: psycopg.Connection,
+    *,
+    training_run_key: str,
+    release: ModelRelease,
+    export_evidence: dict,
+) -> None:
+    """Append a candidate and its links inside the queue's caller-owned transaction."""
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("model publication requires an active caller transaction")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM training_run WHERE run_key=%s", (training_run_key,))
+        run = cursor.fetchone()
+        if run is None:
+            raise ValueError("missing persisted training run")
+        query = variant_context_query(run["variant_id"]).compile(dialect=dialect())
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+        if context is None:
+            raise ValueError("missing model variant")
+        cursor.execute(
+            "SELECT * FROM evaluation_run WHERE training_run_id=%s AND run_key=ANY(%s)",
+            (run["id"], list(release.evaluation_run_ids)),
+        )
+        evaluations = cursor.fetchall()
+    validate_model(context, run, release, export_evidence, evaluations)
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO model_release(release_key,training_run_id,project_id,recipe_id,"
+            "record,export_evidence) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (
+                release.release_id,
+                run["id"],
+                context["project_id"],
+                context["recipe_id"],
+                Jsonb(json_record(release)),
+                Jsonb(export_evidence),
+            ),
+        )
+        model_id = cursor.fetchone()[0]
+        cursor.executemany(
+            "INSERT INTO model_evaluation(model_id,evaluation_id) VALUES (%s,%s)",
+            [(model_id, row["id"]) for row in evaluations],
+        )
+
+
+def save_model(
+    connection: sa.Connection,
+    *,
+    training_run_key: str,
+    release: ModelRelease,
+    export_evidence: dict,
+) -> None:
+    run = (
+        connection.execute(
+            sa.select(db.training_run).where(db.training_run.c.run_key == training_run_key)
+        )
+        .mappings()
+        .one()
+    )
+    context = variant_context(connection, run["variant_id"])
     evaluations = (
         connection.execute(
             sa.select(db.evaluation_run).where(
@@ -243,12 +367,7 @@ def save_model(
         .mappings()
         .all()
     )
-    if len(evaluations) != len(release.evaluation_run_ids):
-        raise ValueError("model release evaluation is not persisted for this run")
-    for evaluation in evaluations:
-        report = decode_report(evaluation["record"])
-        if report.weights_sha256 != release.weights_sha256 or report.policy != release.policy:
-            raise ValueError("model release evaluation artifact mismatch")
+    validate_model(context, run, release, export_evidence, evaluations)
     with connection.begin_nested():
         model_id = connection.execute(
             sa.insert(db.model_release).values(
@@ -283,6 +402,23 @@ def save_evaluation(
     )
     release = decode_release(row["record"])
     context = variant_context(connection, variant_id)
+    validate_evaluation(context, release, report)
+    with connection.begin_nested():
+        evaluation_id = connection.execute(
+            sa.insert(db.evaluation_run).values(
+                run_key=report.run_id,
+                training_run_id=row["training_run_id"],
+                variant_id=variant_id,
+                record=json_record(report),
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            sa.insert(db.model_evaluation).values(model_id=row["id"], evaluation_id=evaluation_id)
+        )
+
+
+def validate_evaluation(context, release: ModelRelease, report: EvaluationReport) -> None:
+    """Shared frozen lineage gate; callers separately own protocol/role authority."""
     if (
         not all(
             context[key] for key in ("frozen", "validated", "non_empty_val", "recipe_immutable")
@@ -303,17 +439,35 @@ def save_evaluation(
         or report.role not in {"development", "calibration", "locked_final_test"}
     ):
         raise ValueError("independent evaluation does not match the model and frozen release")
-    with connection.begin_nested():
-        evaluation_id = connection.execute(
-            sa.insert(db.evaluation_run).values(
-                run_key=report.run_id,
-                training_run_id=row["training_run_id"],
-                variant_id=variant_id,
-                record=json_record(report),
-            )
-        ).inserted_primary_key[0]
-        connection.execute(
-            sa.insert(db.model_evaluation).values(model_id=row["id"], evaluation_id=evaluation_id)
+
+
+def save_evaluation_transaction(
+    connection: psycopg.Connection, *, model_key: str, variant_id: object, report: EvaluationReport
+) -> None:
+    """Append report/link through the native queue transaction, never a second commit."""
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.INTRANS:
+        raise ValueError("evaluation publication requires an active caller transaction")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM model_release WHERE release_key=%s", (model_key,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("missing evaluation model")
+        query = variant_context_query(variant_id).compile(dialect=dialect())
+        cursor.execute(str(query), query.params)
+        context = cursor.fetchone()
+        if context is None:
+            raise ValueError("missing evaluation variant")
+    validate_evaluation(context, decode_release(row["record"]), report)
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO evaluation_run(run_key,training_run_id,variant_id,record) "
+            "VALUES (%s,%s,%s,%s) RETURNING id",
+            (report.run_id, row["training_run_id"], variant_id, Jsonb(json_record(report))),
+        )
+        evaluation_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO model_evaluation(model_id,evaluation_id) VALUES (%s,%s)",
+            (row["id"], evaluation_id),
         )
 
 

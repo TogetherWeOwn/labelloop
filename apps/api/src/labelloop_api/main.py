@@ -4,6 +4,7 @@ import html
 import logging
 import os
 import socket
+from collections.abc import Callable
 
 import certifi
 import psycopg
@@ -14,13 +15,15 @@ from fastapi.exceptions import RequestValidationError
 from minio import Minio
 
 from labelloop_api.annotation_reads import router as annotation_router
-from labelloop_api.auth import authentication_boundary, router, validation_error
+from labelloop_api.auth import (
+    authentication_boundary,
+    current_principal,
+    router,
+    validation_error,
+)
+from labelloop_api.management import management_router
+from labelloop_api.management_ports import ManagementOperations
 
-app = FastAPI(title="Labelloop", version="0.0.0", docs_url=None, redoc_url=None, openapi_url=None)
-app.middleware("http")(authentication_boundary)
-app.add_exception_handler(RequestValidationError, validation_error)
-app.include_router(router)
-app.include_router(annotation_router)
 logger = logging.getLogger(__name__)
 
 
@@ -58,12 +61,10 @@ def storage_client() -> Minio:
     )
 
 
-@app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "api"}
 
 
-@app.get("/readyz")
 def readyz() -> dict[str, str]:
     """Check dependencies and the migrated schema without logging connection details."""
     try:
@@ -99,6 +100,31 @@ def readyz() -> dict[str, str]:
         log_readiness_failure("storage", error)
         raise HTTPException(status_code=503, detail={"dependency": "storage"}) from error
     return {"status": "ready", "storage": "connected", "database": "connected"}
+
+
+def create_app(
+    management_operations: Callable[[], ManagementOperations] | None = None,
+) -> FastAPI:
+    """Compose optional trusted adapters behind the single session/CSRF boundary.
+
+    No request or environment toggle supplies operations or actor claims. The
+    default app remains unmounted until real producer and admission gates pass.
+    """
+    application = FastAPI(
+        title="Labelloop", version="0.0.0", docs_url=None, redoc_url=None, openapi_url=None
+    )
+    application.middleware("http")(authentication_boundary)
+    application.add_exception_handler(RequestValidationError, validation_error)
+    application.include_router(router)
+    application.include_router(annotation_router)
+    application.add_api_route("/healthz", healthz, methods=["GET"])
+    application.add_api_route("/readyz", readyz, methods=["GET"])
+    if management_operations is not None:
+        application.include_router(management_router(current_principal, management_operations))
+    return application
+
+
+app = create_app()
 
 
 def run() -> None:

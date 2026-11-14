@@ -3,7 +3,7 @@
 import json
 import os
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -269,6 +269,23 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
     assert not output.exists()
     rogue_image.unlink()
     result = backend.train(request)
+    # Exercise management's artifact collector on the actual CPU backend output,
+    # without claiming this standalone fixture is a DB-backed management job.
+    from types import SimpleNamespace
+
+    from labelloop_api.management_train_worker import collect_training
+
+    saved_checkpoints = {}
+    stage_record = collect_training(
+        request,
+        result,
+        manifest,
+        output,
+        SimpleNamespace(put=lambda key, data: saved_checkpoints.__setitem__(key, data)),
+    )
+    assert stage_record["result"]["selected"]["sha256"] == result.selected.sha256
+    assert stage_record["reports"][0]["weights_sha256"] == result.selected.sha256
+    assert len(saved_checkpoints) == 1
     assert len(result.checkpoints) == 1
     assert result.selected == result.checkpoints[0]
     epoch_file = output / "trainer" / "weights" / "epoch0.pt"
@@ -295,21 +312,63 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         for path in dataset.rglob("*")
         if path.is_file()
     }
-    exported = export_and_compare(
-        weights=epoch_file,
-        expected_weights_sha256=result.selected.sha256,
-        images=tuple(
-            dataset / sample["image_path"]
-            for sample in manifest["samples"]
-            if sample["split"] == "val"
+    from labelloop_api.management_compile_worker import content_key
+    from labelloop_api.management_model_worker import export_training
+
+    # Exercise the real orchestration helper with CPU export_and_compare, not a
+    # synthetic exporter. This standalone fixture still does not prove DB wiring.
+    stored = saved_checkpoints | {
+        content_key(digest): (dataset / name).read_bytes()
+        for name, digest in manifest["file_hashes"].items()
+    }
+    stored[content_key(request.dataset_manifest_sha256)] = (dataset / "manifest.json").read_bytes()
+    saved_exports, results = {}, []
+
+    def exporter(**kwargs):
+        exported = export_and_compare(**kwargs)
+        (output / "export-equivalence.json").write_bytes(kwargs["evidence"].read_bytes())
+        results.append(exported)
+        return asdict(exported)
+
+    export_stage = export_training(
+        request,
+        manifest,
+        stage_record,
+        SimpleNamespace(
+            read=stored.__getitem__,
+            put=lambda key, data: saved_exports.__setitem__(key, data),
         ),
-        policy=request.policy,
-        evidence=output / "export-equivalence.json",
+        exporter,
     )
+    exported = results[0]
+    assert list(saved_exports) == [export_stage["export_key"]]
+    assert export_stage["evidence"] == asdict(exported)
+    epoch_file.with_suffix(".onnx").write_bytes(saved_exports[export_stage["export_key"]])
     assert exported.static_input_signature == (1, 3, side, side)
     assert exported.export_sha256 == file_digest(epoch_file.with_suffix(".onnx"))
     assert exported.sample_count == len(validation_images)
     assert all(0 < count < request.policy.max_det for count in exported.detection_counts)
+    from labelloop_api.management_evaluate_worker import evaluate_model
+    from labelloop_api.management_model_worker import candidate_release
+    from labelloop_worker_ml.training import predict_samples
+
+    # Run standalone development inference through the same delivered predictor and
+    # original-frame evaluator. This is not queue/DB publication or qualification.
+    model = candidate_release(result, manifest, request.project_id, export_stage["evidence"])
+    evaluated = evaluate_model(
+        f"standalone-{side}",
+        model,
+        manifest,
+        validation_images,
+        SimpleNamespace(read=stored.__getitem__),
+        predict_samples,
+    )
+    (output / "management-development-evaluation.json").write_text(json.dumps(evaluated))
+    assert evaluated["report"]["role"] == "development"
+    assert evaluated["report"]["weights_sha256"] == result.selected.sha256
+    assert evaluated["report"]["overall"] == report["overall"]
+    assert evaluated["report"]["slices"] == report["slices"]
+    assert evaluated["sample_count"] == len(validation_images)
     import numpy as np
     import onnxruntime as ort
 

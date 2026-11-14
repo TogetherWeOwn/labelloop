@@ -411,6 +411,245 @@ def test_database_rejects_service_admin_and_human_worker_roles(store):
             )
 
 
+class ManagementProbe:
+    """Records the composed identity boundary, not canonical/queue integration."""
+
+    def __init__(self):
+        self.calls = []
+
+    def create_project(self, actor, context, payload):
+        from labelloop_api.management_contracts import Resource
+
+        self.calls.append((actor, context, payload))
+        return Resource(
+            id="created", project_id="created", kind="project", revision=1, state="draft"
+        )
+
+    def list_projects(self, actor, cursor, limit):
+        from labelloop_api.management_contracts import ResourcePage
+
+        self.calls.append((actor, cursor, limit))
+        return ResourcePage(items=[])
+
+
+@pytest.fixture
+def management_client(store):
+    from labelloop_api.main import create_app
+
+    operations = ManagementProbe()
+    resolutions = []
+
+    def resolve():
+        resolutions.append(True)
+        return operations
+
+    with TestClient(create_app(resolve), base_url=ORIGIN) as client:
+        yield client, operations, resolutions
+
+
+def management_project():
+    return {
+        "project_key": "wildlife",
+        "scope": "Visible birds",
+        "domain": "wildlife",
+        "annotation_guide": "Visible extent only",
+        "source_permitted_use": "Generated fixture",
+        "classes": [{"stable_id": "bird", "name": "Bird", "definition": "A visible bird"}],
+    }
+
+
+def management_headers(csrf):
+    return {"origin": ORIGIN, "x-csrf-token": csrf, "Idempotency-Key": "create-fixture"}
+
+
+def test_management_composition_uses_persisted_session_identity(management_client, store):
+    client, operations, resolutions = management_client
+    csrf = login(client, "admin").json()["csrf_token"]
+    response = client.post("/projects", json=management_project(), headers=management_headers(csrf))
+    assert response.status_code == 201, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert len(resolutions) == len(operations.calls) == 1
+    actor, context, payload = operations.calls[0]
+    with store.engine.connect() as connection:
+        identity = connection.execute(
+            select(principal.c.id).where(principal.c.name == "admin")
+        ).scalar_one()
+    assert actor.id == context.actor_id == identity
+    assert actor.kind == "human" and actor.role == "admin"
+    assert context.operation == "create_project" and context.idempotency_key == "create-fixture"
+    assert payload.project_key == "wildlife"
+    assert client.get("/auth/me").json()["id"] == actor.id
+
+
+@pytest.mark.parametrize("name", ["admin", "reviewer"])
+def test_management_shared_session_allows_human_reads(management_client, name):
+    client, operations, resolutions = management_client
+    assert login(client, name).status_code == 200
+    response = client.get("/projects", headers={"x-actor-id": "forged", "x-role": "admin"})
+    assert response.status_code == 200 and response.json() == {"items": [], "next_cursor": None}
+    assert response.headers["cache-control"] == "no-store"
+    assert operations.calls[0][0].name == name
+    assert len(resolutions) == 1
+
+
+def test_management_reviewer_cannot_select_admin_identity(management_client):
+    client, operations, resolutions = management_client
+    csrf = login(client).json()["csrf_token"]
+    response = client.post(
+        "/projects",
+        json=management_project(),
+        headers={**management_headers(csrf), "x-role": "admin", "x-actor-id": "admin"},
+    )
+    assert response.status_code == 403 and response.json() == {"detail": "permission_denied"}
+    assert operations.calls == resolutions == []
+
+
+@pytest.mark.parametrize("field", ["actor_id", "kind", "role", "workspace_id", "review_tier"])
+def test_management_identity_fields_are_refused_without_echo(management_client, field):
+    client, operations, _ = management_client
+    csrf = login(client, "admin").json()["csrf_token"]
+    response = client.post(
+        "/projects",
+        json={**management_project(), field: "must-not-echo"},
+        headers=management_headers(csrf),
+    )
+    assert response.status_code == 422 and response.json() == {"detail": "invalid_request"}
+    assert "must-not-echo" not in response.text
+    assert operations.calls == []
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_management_anonymous_claims_never_resolve_operations(management_client, method):
+    client, operations, resolutions = management_client
+    response = getattr(client, method)(
+        "/projects", headers={"x-role": "admin", "x-actor-id": "admin"}
+    )
+    assert response.status_code == 401
+    assert response.headers["cache-control"] == "no-store"
+    assert operations.calls == resolutions == []
+
+
+@pytest.mark.parametrize("name", ["worker-core", "worker-ml", "worker-llm", "worker-platform"])
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_management_shared_service_tokens_have_no_human_authority(
+    management_client, store, name, method
+):
+    client, operations, resolutions = management_client
+    response = getattr(client, method)(
+        "/projects",
+        headers={"authorization": "Bearer " + worker_token(store, name), "x-role": "admin"},
+    )
+    assert response.status_code == 403
+    assert operations.calls == resolutions == []
+
+
+@pytest.mark.parametrize("proof", ["missing", "incorrect", "foreign-origin", "no-origin"])
+def test_management_csrf_fails_before_adapter_resolution(management_client, store, proof):
+    client, operations, resolutions = management_client
+    csrf = login(client, "admin").json()["csrf_token"]
+    headers = management_headers(csrf)
+    if proof == "missing":
+        headers.pop("x-csrf-token")
+    elif proof == "incorrect":
+        headers["x-csrf-token"] = "invalid-proof"
+    elif proof == "foreign-origin":
+        headers["origin"] = "https://foreign.invalid"
+    else:
+        headers.pop("origin")
+    response = client.post("/projects", json=management_project(), headers=headers)
+    assert response.status_code == 403 and response.json() == {"detail": "csrf_denied"}
+    assert operations.calls == resolutions == []
+    with store.engine.connect() as connection:
+        assert connection.execute(select(auth_event.c.action)).scalars().all() == [
+            "login_succeeded",
+            "csrf_denied",
+        ]
+
+
+@pytest.mark.parametrize("change", ["expired", "disabled", "logout", "ambiguous", "unavailable"])
+def test_management_invalid_sessions_never_resolve_operations(
+    management_client, store, monkeypatch, change
+):
+    client, operations, resolutions = management_client
+    csrf = login(client, "admin").json()["csrf_token"]
+    headers = management_headers(csrf)
+    if change == "expired":
+        monkeypatch.setattr(auth, "clock", lambda: NOW + SESSION_LIFETIME)
+    elif change == "disabled":
+        with store.engine.begin() as connection:
+            connection.execute(
+                update(principal).where(principal.c.name == "admin").values(enabled=False)
+            )
+    elif change == "logout":
+        assert client.post("/auth/logout", headers=headers).status_code == 204
+    elif change == "ambiguous":
+        headers["authorization"] = "Bearer " + "w" * 43
+    else:
+
+        def unavailable():
+            raise SQLAlchemyError("must-not-echo")
+
+        monkeypatch.setattr(auth, "auth_store", unavailable)
+    response = client.post("/projects", json=management_project(), headers=headers)
+    assert response.status_code == (503 if change == "unavailable" else 401)
+    assert "must-not-echo" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert operations.calls == resolutions == []
+
+
+def test_management_authority_is_reloaded_after_role_change(management_client, store):
+    client, operations, resolutions = management_client
+    csrf = login(client, "admin").json()["csrf_token"]
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(principal).where(principal.c.name == "admin").values(role="reviewer")
+        )
+    assert (
+        client.post(
+            "/projects", json=management_project(), headers=management_headers(csrf)
+        ).status_code
+        == 403
+    )
+    assert operations.calls == resolutions == []
+    assert client.get("/projects").status_code == 200
+    assert operations.calls[0][0].role == "reviewer"
+
+
+@pytest.mark.parametrize("name", ["admin", "reviewer"])
+def test_published_application_contract_keeps_unavailable_adapters_and_private_schema(store, name):
+    from labelloop_api.management_codegen import application_contract_app
+
+    with TestClient(application_contract_app(), base_url=ORIGIN) as client:
+        assert client.get("/projects").status_code == 401
+        csrf = login(client, name).json()["csrf_token"]
+        assert client.get("/auth/me").json()["name"] == name
+        response = client.get("/projects")
+        assert response.status_code == 503
+        assert response.json() == {"detail": "management_unavailable"}
+        assert response.headers["cache-control"] == "no-store"
+        for path in ("/openapi.json", "/docs", "/redoc"):
+            assert client.get(path).status_code == 404
+        response = client.post("/projects", json=management_project())
+        assert response.status_code == 403 and response.json() == {"detail": "csrf_denied"}
+        response = client.post(
+            "/projects", json=management_project(), headers=management_headers(csrf)
+        )
+        assert response.status_code == (503 if name == "admin" else 403)
+        assert response.json() == {
+            "detail": "management_unavailable" if name == "admin" else "permission_denied"
+        }
+        assert client.post("/auth/logout", headers=management_headers(csrf)).status_code == 204
+        assert client.get("/projects").status_code == 401
+
+
+def test_default_application_still_does_not_mount_management(management_client):
+    from labelloop_api.main import app
+
+    assert "/projects" not in {getattr(route, "path", None) for route in app.routes}
+    client, _, _ = management_client
+    assert "/projects" in {getattr(route, "path", None) for route in client.app.routes}
+
+
 def test_production_application_uses_authentication_boundary(store):
     from labelloop_api.main import app
 
