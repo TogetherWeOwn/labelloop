@@ -4,6 +4,8 @@ The tokens labelloop's workbench uses that are not part of the shared Ember Hour
 
 **Shared base tokens** (grounds, text, lines, state, focus, type, space, radius, motion) are copied with the same provenance: [`mockups/src/tokens.css`](../mockups/src/tokens.css) is byte-identical to kit v0.3.1 `dist/css/tokens.css` (sha256 `42a80525774dd7ac886097a91d1dd20ca838c3a4eb6d62d22adc48c2f26d86cd`), and holds every value in the tables below as `--two-*` custom properties. Use tokens only: no raw colours, sizes or durations.
 
+**Changing a token.** labelloop has no token generator. The `DO NOT EDIT: generated from tokens/*.tokens.json by npm run build` header in `tokens.css` describes the kit's build and is kept only so the file stays byte-identical to the kit. To change a token, edit the custom property in `tokens.css` by hand and update its row below in the same PR. When the file stops matching kit v0.3.1, replace the header with a note saying it is edited here, and remove the checksum above.
+
 ## Colour: image well and label provenance
 
 | Token | CSS | Value | Kit source | Use |
