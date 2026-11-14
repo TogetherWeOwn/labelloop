@@ -23,7 +23,7 @@ Users: `reviewer` and `admin` roles (plan §12.2). Both can review. Only an admi
 
 ## 2. Provenance: what the screen shows for each state
 
-The data model keeps separate fields (plan §4.2). The screen maps them to one visible tier per box, using the kit's provenance rule (components.md §J):
+The data model keeps separate fields (plan §4.2). The screen maps them to one visible tier per box, using the provenance rule ([components.md](../components.md)):
 
 | Shown as | `approval_state` | `review_tier` | `label_state` | Box (J4) | Badge (J2) |
 |---|---|---|---|---|---|
@@ -60,7 +60,7 @@ The stage and inspector scroll independently. The image well never scrolls out o
 
 Order: header (compact) · tool row (queue link, file name, position, previous / next) · **note** "Drawing, redrawing, split and merge need a screen wider than 820 px. Here you can decide proposals, change a class and mark uncertain." · image well (only the selected box keeps its tab) · legend (scrolls sideways) · crop strip · inspector · the decision dock as a fixed bottom bar (B4 behaviour; the mockup shows it at the end of the page because full-page captures can't show fixed bars).
 
-**Audit samples are never served at 820 px or narrower** (the kit's one layout switch, `breakpoint.compact-max`, is inclusive). At 390 the queue skips them (they stay in the queue for a wider screen). An audit sample opened by link shows the tool row, then only the info notice "Audit samples need a screen wider than 820 px. You need to box every object yourself before you compare, and drawing needs the larger screen." with Skip alone in the decision dock; no image, no proposals and no "Compare with proposals" (mockup R3 at 390).
+**Audit samples are never served at 820 px or narrower** (the one layout switch, `breakpoint.compact-max`, is inclusive). At 390 the queue skips them (they stay in the queue for a wider screen). An audit sample opened by link shows the tool row, then only the info notice "Audit samples need a screen wider than 820 px. You need to box every object yourself before you compare, and drawing needs the larger screen." with Skip alone in the decision dock; no image, no proposals and no "Compare with proposals" (mockup R3 at 390).
 
 At 390 a reviewer can: select objects (tap a tile or a box), accept or keep a proposal, change a class, mark uncertain, delete a box, confirm auto-accepted boxes, accept or skip the image. Drawing tools and handles are not rendered.
 
@@ -157,7 +157,7 @@ Single-key shortcuts work when no text field has focus, and can be turned off in
 
 ## 8. Copy
 
-Follow kit voice.md §7. Fixed strings:
+Follow [voice.md](../voice.md). Fixed strings:
 
 - Proposal heads: "LLM review proposes", "The detector proposes".
 - Model reason caption: "Model's reason · not checked by a person".
@@ -170,9 +170,9 @@ Follow kit voice.md §7. Fixed strings:
 - Landmarks: header, `main` (holds the tool row, stage and inspector), the inspector as `aside aria-label="Selected object"`. One `h1` (visually hidden: "Review IMG_0412.png").
 - The overlay is `aria-hidden`. The crop strip is the accessible list of objects: each tile is a button named "Object 4 Soy milk, Proposed"; J/K and Tab reach every object; selecting one moves focus to the inspector head.
 - The image has alt text from its metadata ("Shelf photo, store 14 aisle 3"); it describes the source, not the labels.
-- Drag has keyboard and typed alternatives (WCAG 2.5.7). Handles have 24 px hit areas (`size.target-handle`, the box-handle exception in kit accessibility.md §4). Corner handles show only when the selected box is at least 24 px on screen both ways and edge handles at 48 px; a smaller box shows none until the reviewer zooms in, and arrows, Alt+arrows and typed coordinates still work. "On screen" means at the canvas's current displayed scale: recompute which handles show whenever the canvas resizes or zooms, never from a fixed layout width (the canvas is narrower than 860 px just above 820).
+- Drag has keyboard and typed alternatives (WCAG 2.5.7). Handles have 24 px hit areas (`size.target-handle`, the box-handle exception in [accessibility.md](../accessibility.md)). Corner handles show only when the selected box is at least 24 px on screen both ways and edge handles at 48 px; a smaller box shows none until the reviewer zooms in, and arrows, Alt+arrows and typed coordinates still work. "On screen" means at the canvas's current displayed scale: recompute which handles show whenever the canvas resizes or zooms, never from a fixed layout width (the canvas is narrower than 860 px just above 820).
 - One polite status region announces decisions and their undo ("Object 4 is Almond milk 1 L now. Undo with Ctrl+Z."), filter results and tool changes. Never box counts ticking.
-- Reduced motion: zoom and pan jump; nothing animates. Forced colours: strokes become `CanvasText`, selection `Highlight` (kit J4).
+- Reduced motion: zoom and pan jump; nothing animates. Forced colours: strokes become `CanvasText`, selection `Highlight` (J4).
 - Greyscale: tiers differ by stroke pattern, corner marks, tab fill and glyph (verified in the mockups).
 
 ## 10. Data the screen needs (API contract notes)

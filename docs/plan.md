@@ -94,7 +94,7 @@ Neural training and hosted inference have statistical and implementation-depende
 | Object storage | S3-compatible API; MinIO locally | Content-addressed keys (`sha256/<aa>/<hash>`) |
 | Imaging | Pillow + OpenCV-headless, versions pinned | The decoder and encoder versions are recorded in every manifest |
 | ML worker | separate `worker-ml` package that imports `ultralytics`/PyTorch | The only package that imports `ultralytics` (§12.3) |
-| Web | TypeScript, React + Vite, `pnpm` | Built from `TogetherWeOwn/two-design-kit` tokens and components; screen designs are produced before implementation |
+| Web | TypeScript, React + Vite, `pnpm` | Built from labelloop's design in `docs/design/` (workbench components, patterns, voice and tokens, moved from two-design-kit v0.3.1; ADR 0004); screen designs are produced before implementation |
 | LLM access | OpenAI-compatible `/v1/chat/completions` plus Anthropic Messages adapters behind `LLMReviewer` | Each configured model is probed with a fixture before use (§5.3) |
 | Workers | `worker-core` (non-ML stages), `worker-ml` (ultralytics), `worker-llm` (LLM review calls), `worker-platform` (Platform mutations) | Separate processes and containers. Only `worker-llm` and `worker-platform` hold a decryption key, each for its own secret type (§12.2) |
 | Local runtime | `docker compose`: postgres, minio, api, worker-core, worker-ml (CPU), worker-llm, worker-platform, web | `make dev`, `make test` |
@@ -983,7 +983,7 @@ An unresolved target blocks the affected sample's eligibility. Other complete el
 | 0. Bootstrap | Monorepo skeleton (§2.3), docker compose dev stack, CI on Actions (lint, types, unit, `ci-ok`), gitleaks, pr-lint, pr-size, AGENTS.md, ADR log, two licence-clean fixture domains | `ci-ok` green on `main`; `make dev` brings up the stack; protect-main ruleset requires `ci-ok`, `gitleaks` and Devin Review | 24 (static secret scan via gitleaks), 25 (import-linter rule from the first package) |
 | 1. Canonical foundation + compiler | Schema and migrations (projects, ontology, assets, revisions, review events, split groups, releases), near-duplicate grouping, letterbox 640/320 compiler, manifests, validators | Two unrelated fixture domains represented without engine edits; property-based geometry tests; byte-identical recompilation | 1, 2, 3, 4, 5, 6, 7, 11, 20 (data part), 27 (compiler non-empty val) |
 | 2. Local training + evaluation | `local_ultralytics` backend, dataloader retention audit, fixed-shape validator, original-frame evaluator, model registry with per-recipe promotion/rollback | CPU CI trains a yolo26n run on both recipes, evaluates on the source frame and promotes/rolls back independently | 12, 13, 14, 15, 17, 19, 26 (local backend) |
-| 3. Review UI + LLM review | Review screens (designed on `two-design-kit` before implementation), proposal workers, discovery pass, LLM adapters with fixture probes, untrusted-patch validator, adjudication and audit sampling, budget ledger for LLM calls | Measured annotation quality on fixture domains with unresolved cases preserved; model workers cannot set human fields | 5, 10, 11, 16, 23 (LLM ledger), 24 (LLM keys) |
+| 3. Review UI + LLM review | Review screens (designed in `docs/design/` before implementation), proposal workers, discovery pass, LLM adapters with fixture probes, untrusted-patch validator, adjudication and audit sampling, budget ledger for LLM calls | Measured annotation quality on fixture domains with unresolved cases preserved; model workers cannot set human fields | 5, 10, 11, 16, 23 (LLM ledger), 24 (LLM keys) |
 | 4. Platform adapter | Encrypted connection, pinned SDK and contract snapshot, release upload and reconciliation, label replacement with conflict detection, cloud training behind the budget gate | Recorded-fixture contract tests in CI; opt-in live smoke on a test workspace round-trips a fixture release with explicit lineage | 1 (Platform), 8, 9, 18, 23 (training), 24 (Platform key), 26 (Platform resolved args), 27 (post-ingest reconciliation) |
 | 5. Qualification + operations | Per-class gates, locked final test handling, canary, drift pause, backup/restore drill, cost and audit screens | Candidate promotion and rollback demonstrated on both recipes; restore regenerates a variant | 16, 17, 19, 21 |
 | 6. Improvement loop | Active selection, bounded iterations, reference memory updates, warm-start vs base comparison, augmentation experiments | A documented iteration improves a declared metric without critical regression on a non-game domain | 20, 22 |
@@ -1101,7 +1101,7 @@ The linked vendor documentation is mutable. Pin tested package versions, checkpo
 - Credential: creating that Platform API key and placing it as a repository secret for the opt-in live smoke.
 - Spend/legal: any closed-source or commercial deployment, which needs an Ultralytics Enterprise licence.
 
-**Design work:** review, dataset-release, recipe-preview, training, evaluation, registry, connections and cost screens are designed on `two-design-kit` before M3 UI implementation.
+**Design work:** review, dataset-release, recipe-preview, training, evaluation, registry, connections and cost screens are designed in `docs/design/` before M3 UI implementation.
 
 **Prior art to study:** read first, then decide what to borrow; nothing to copy.
 
