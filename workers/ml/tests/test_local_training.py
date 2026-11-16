@@ -150,7 +150,7 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
 
     from labelloop_compiler.compiler import compile_dataset
     from labelloop_core.evaluation import EvaluationImage, GroundTruth
-    from labelloop_core.training import InferencePolicy, TrainingRequest
+    from labelloop_core.training import AugmentationProfile, InferencePolicy, TrainingRequest
     from labelloop_worker_ml.export import export_and_compare
     from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest
 
@@ -212,6 +212,19 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
         output=output,
         validation_images=validation_images,
     )
+    for safety in (
+        (("unlisted-class", True),),
+        tuple((class_id, True) for class_id in manifest["class_map"]) + (("unlisted-class", True),),
+    ):
+        with pytest.raises(ValueError, match="mirror safety must cover"):
+            backend.train(
+                replace(
+                    request,
+                    augmentation=AugmentationProfile("flip-v1", fliplr=0.5),
+                    class_mirror_safety=safety,
+                )
+            )
+        assert not output.exists()
     truth = next(image for image in validation_images if image.objects)
     assert truth.revision is not None
     obj = truth.objects[0]
