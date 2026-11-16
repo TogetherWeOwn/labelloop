@@ -16,6 +16,26 @@ from labelloop_core.domain import DatasetObject, Recipe
 from labelloop_core.geometry import Box, Crop, full_frame_transform, normalize_box
 
 
+def test_mirror_safety_is_frozen_with_ontology_metadata(tmp_path):
+    release, images = canonical_release()
+    first = compile_dataset(release, "full-letterbox-320-v1", tmp_path / "unsafe", images)
+    assert not any(first["class_mirror_safety"].values())
+    approved = replace(
+        release,
+        ontology=replace(
+            release.ontology,
+            classes=tuple(replace(item, mirror_safe=True) for item in release.ontology.classes),
+        ),
+    )
+    second = compile_dataset(approved, "full-letterbox-320-v1", tmp_path / "safe", images)
+    assert all(second["class_mirror_safety"].values())
+    assert set(second["class_mirror_safety"]) == set(second["class_map"])
+    assert first["ontology_hash"] != second["ontology_hash"]
+    for value in ("true", 1, None):
+        with pytest.raises(ValueError, match="explicit boolean"):
+            replace(release.ontology.classes[0], mirror_safe=value)
+
+
 @pytest.mark.parametrize("recipe", ["full-letterbox-640-v1", "full-letterbox-320-v1"])
 def test_byte_identical_both_fixture_domains(domain, recipe, tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"

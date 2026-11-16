@@ -13,7 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 from labelloop_core.budget import BudgetGate, BudgetPolicy, BudgetRefused
-from labelloop_core.training import InferencePolicy, TrainingBackend, TrainingRequest
+from labelloop_core.training import (
+    AugmentationProfile,
+    InferencePolicy,
+    TrainingBackend,
+    TrainingRequest,
+)
 from labelloop_platform.cloud_training import (
     CloudPlan,
     CloudRun,
@@ -60,6 +65,17 @@ def plan(side=320, nms="external"):
         900,
         "d" * 64,
     )
+
+
+def test_cloud_rejects_flips_without_verified_ontology_before_dispatch():
+    original = plan()
+    flipped = replace(
+        original.request,
+        augmentation=AugmentationProfile("flip-v1", fliplr=0.5),
+        class_mirror_safety=(("safe", True),),
+    )
+    with pytest.raises(CloudTrainingRefused, match="verified ontology"):
+        replace(original, request=flipped)
 
 
 class MemoryRuns:

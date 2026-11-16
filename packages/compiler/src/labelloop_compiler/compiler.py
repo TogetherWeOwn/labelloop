@@ -141,6 +141,9 @@ def compile_dataset(
             "ontology_version": release.ontology.version,
             "ontology_hash": release.ontology_hash(),
             "class_map": release.ontology.mapping(),
+            "class_mirror_safety": {
+                item.stable_id: item.mirror_safe for item in release.ontology.classes
+            },
             "split_assignment_version": release.assignment.assignment_version,
             "split_algorithm": release.assignment.algorithm,
             "split_seed": release.assignment.seed,
