@@ -1,98 +1,64 @@
 # Offline Platform composition seam
 
-`labelloop_platform.assembly.assemble_training` performs a read-only composition
-preflight, then returns the existing `PlatformTrainingBackend`. It is not an API
-route, worker, scheduler, connection validator, sync engine or new ledger. No
-training is performed by assembly itself. There is no production enable switch.
+`labelloop_platform.assembly.assemble_training` performs read-only preflight and
+returns the existing `PlatformTrainingBackend`: no route, worker, scheduler,
+connection validator, sync engine, ledger, training or production enable switch.
+All six capabilities come from trusted worker composition, never public/model data.
+Missing ports fail before lookup. `SecretPort` must authenticate the exact
+project/workspace/operation/configuration grant without exposing a key.
+`SynchronizedReleasePort` must read an authorized, persisted frozen mapping:
+missing/pending/incomplete/conflicted reconciliation fails, and every local and
+remote identity must match. Platform content hash and compiler digest are distinct.
+Connection/sync exceptions become fixed non-secret codes. A queued ingest or a
+constructed `ReleaseReadback` is not proof of verification: the sync producer owns
+byte/label/class/split/dimension/membership completeness, partial-output rejection,
+immutable persistence and fencing. Assembly cannot freeze a mutable remote dataset.
+The backend retains authority rechecks, single-use budget, write-intent persistence,
+reconciliation and checkpoint bounds; preflight is not cached spend authority.
+Retain it for recovery: sync reassembly/outages must not gate late billing or
+uncertain-job reconciliation. Assembly adds no recovery loop or persistence.
 
-The trusted application supplies all six producer capabilities. Missing any port
-fails before even connection lookup. `SecretPort` must authenticate the service
-and exact project/workspace/operation/configuration binding; its grant has no key.
-The new `SynchronizedReleasePort` reads an authorized, persisted frozen mapping.
-Missing, pending, incomplete or conflicted reconciliation is refused. Every
-project, workspace, remote dataset and local release/recipe/manifest/class/split
-identity must match the plan. The Platform content hash is compared separately
-from the compiler manifest digest. A queued ingest is never a verified mapping.
-Producer exceptions at these two seams become fixed non-secret error codes.
+## Offline evidence
 
-`ReleaseReadback` is trusted producer data, not evidence merely because somebody
-constructs the dataclass. Only the sync producer can establish byte identity,
-complete membership, labels, class order, geometry, split reconciliation and
-partial-output rejection. This module does not repeat those checks or accept its
-records from public requests/model output. The producer must keep the mapping
-immutable and fenced. Assembly cannot make a mutable remote dataset immutable.
-The returned backend retains all existing authorization, single-use budget,
-write-intent persistence, reconciliation and checkpoint bounds. It authenticates
-again on each advance; preflight is not a cached spend grant.
+`packages/platform/tests/test_assembly.py` reuses existing cloud fixture ports:
 
-Retain the backend for recovery. Do not make sync reassembly a prerequisite for
-late billing or uncertain-job reconciliation: a sync outage must not hide an
-existing liability. This module adds no recovery loop or persistence mechanism.
-
-## What the offline test actually composes
-
-`packages/platform/tests/test_assembly.py` uses the existing cloud producer's
-fixture ports rather than another accounting model or training implementation:
-
-| Component | Evidence in this change | Production claim |
+| Component | Evidence | Boundary |
 | --- | --- | --- |
-| Connection | Recorded exact `ConnectionGrant`; denial and scope mismatch | Fixture only; no principal lookup, validation or unwrap |
-| Frozen sync | Synthetic `ReleaseReadback`; each identity mismatch, missing record and incomplete state | Fixture only; no upload, byte identity, label replacement or remote persistence |
-| HTTP transport | Real merged `PlatformAdapter`, pinned SDK/schema, `httpx.MockTransport` replay of start response | Real adapter, no socket/account; only start wire composition covered here |
-| Cloud backend | Real merged `PlatformTrainingBackend`, both 320 and 640, captured content identity, hashed checkpoint, settlement | Synthetic provider run, not training |
-| Ledger | Real merged pure `BudgetGate` behind the existing cloud fixture `Ledger` | Not the PostgreSQL `BudgetStore`; no durable ledger integration claimed |
-| Run/artifact stores | Existing cloud fixture memory ports; injected failed save prevents dispatch | Fixture only; no durable fencing/object storage qualification |
-| Connections UI | Existing merged fixture-only module remains unchanged | No backend binding or UI integration claimed |
+| Connection | Exact grant, denial/scope mismatch | No real principal lookup, validation or unwrap |
+| Frozen sync | Synthetic readback, every identity mismatch, missing/incomplete records | No upload, byte/label replacement or remote persistence proof |
+| HTTP | Real pinned `PlatformAdapter` with `httpx.MockTransport` start replay | No socket/account; only start wire composition |
+| Cloud | Real backend, 320/640, content identity, hashed checkpoint, settlement | Synthetic provider run, never training |
+| Ledger | Real pure `BudgetGate` behind existing fixture `Ledger` | Not durable PostgreSQL `BudgetStore` integration |
+| Run/artifact stores | Existing memory ports; failed save prevents dispatch | No durable fencing/object-storage qualification |
+| Connections UI | Existing fixture-only module unchanged | No backend/UI binding |
 
-The new JSON recording is a licence-clean synthetic contract example derived
-from the accepted plan and pinned official SDK contract, not captured traffic.
-Test-only `WireFixtureTransport` normalizes that recording to `StartReceipt`; it
-is deliberately not a production HTTP-to-training adapter. It supplies no billing
-finality proof. Synthetic final billing reuses the cloud producer's recording.
+The JSON is a licence-clean synthetic SDK-contract example, not captured traffic.
+Test-only `WireFixtureTransport` maps it to `StartReceipt`, not a production adapter
+or billing-finality proof; synthetic final billing reuses the cloud recording.
 
-## Exact remaining producer bindings
+## Remaining bindings (final integration owner)
 
-1. Credential producer: worker-only unwrap, authenticated project/operation lookup,
-   workspace validation and persisted connection state must implement `SecretPort`.
-   The open credential implementation is not imported or reported delivered.
-2. Sync producer: translate its actual persisted, complete frozen-release record
-   to `ReleaseReadback`. Its open implementation remains sole owner of upload,
-   class/split/byte identity, conflict-safe labels and partial-output checks.
-3. Integration owner: normalize the real `PlatformPort`/`StoragePort` to
-   `TrainingTransport` (including exact model identity, bounded approved-host
-   downloads and conservative authoritative final billing). Current protocols
-   differ; structural injection of the raw transport is not integration.
-4. Integration owner with ledger producer: bridge durable `BudgetStore` to
-   `BudgetPort`. `BudgetStore.prepare/reserve/claim/outcome/reconcile` require a
-   real authenticated principal and trusted dispatch intent; they do not directly
-   implement cloud `reserve_and_authorize/authorize_start/dispatch/settled_charge`.
-   Preserve current-month/pause/approval rechecks, single-use claims, immutable
-   model/job-attributed final settlement, and fenced never-started cancellation.
-   Do not fake missing finality/attribution or replay a claim to make it fit.
-5. Integration owner: a durable `RunStore` fence effective through I/O and a
-   content-addressed `ArtifactPort`; persist original operation identity across
-   restart. Authenticated API/worker and UI reads remain separate integration.
-6. Live smoke stays on the final integration owner: actual authorized workspace,
-   credential/budget/placement prerequisites, and manual-dispatch-only
-   create/ingest/reconcile/delete workflow. Never training. None is granted here.
+1. Credential producer: implement worker-only unwrap, authenticated operation and
+   workspace lookup, persisted connection state through `SecretPort`; not bound here.
+2. Sync producer: translate actual persisted complete frozen evidence to readback.
+   Merged sync modules retain sole ownership of upload/class/split/byte identity,
+   conflict-safe labels and partial-output rejection; this bridge is not supplied.
+3. Normalize `PlatformPort`/`StoragePort` to `TrainingTransport`: exact model identity,
+   approved-host bounded downloads and authoritative conservative final billing.
+4. Bridge durable `BudgetStore.prepare/reserve/claim/outcome/reconcile` to cloud budget
+   methods with real principal/intent, month/pause/approval rechecks, single-use claims,
+   immutable model/job-attributed settlement and fenced never-started cancellation.
+   Missing finality/attribution cannot be fabricated or a claim replayed to fit.
+5. Supply durable `RunStore` fencing through I/O, content-addressed `ArtifactPort`,
+   restart-stable operation identity, and separate authenticated API/worker/UI reads.
+6. Authorized test workspace, credential/budget/placement and manual-dispatch-only
+   create/ingest/reconcile/delete live smoke remain prerequisites. Never training.
 
-## Acceptance boundaries
-
-Plan checks 1, 8, 9, 10 (Platform completeness), 18, 23, 24, 26 and 27 remain
-required for final integration. This change demonstrates **fixture-only** binding
-refusal, no dispatch without every capability, existing backend authority/budget
-rechecks, save-before-dispatch, pinned start arguments, captured dataset hash and
-single synthetic start/settlement. It does not establish post-ingest per-image
-membership, byte identity, conflict-safe label replacement, real encrypted-secret
-isolation, persistent principal/ledger integration, live recovery or smoke PASS.
-Existing producer tests and final integration must supply those exact checks.
-
-GitHub Actions is the full-suite record. Local pre-push format/lint run only on
-changed Python files; project typing and covering tests are skipped if their
-Python tools/dependencies are unavailable, without installing a virtualenv.
-Exact-head Actions run/job links and conclusions belong in the PR verification
-record; a draft or skipped job is not a passing gate.
-
-REA angle: reuse the merged official SDK transport, pinned contract, cloud
-backend and budget transitions. No new client, queue, ledger, sync algorithm,
-credential construction, facade or design is introduced.
+Plan checks 1, 8–10 (Platform completeness), 18, 23, 24, 26, 27 remain final gates.
+Fixtures prove refusal, authority/budget rechecks, save-before-dispatch, pinned start
+arguments, captured content hash and one synthetic start/settlement, not real ingest,
+byte/label completeness, secret isolation, persistent principal/ledger or live recovery.
+GitHub Actions is the full-suite record; PR verification holds exact-head evidence and
+bounded pre-push checks/skips, not claims from draft or skipped jobs.
+REA angle: reuse the pinned SDK transport, cloud backend and budget transitions;
+no replacement client, queue, ledger, sync, credentials, facade or design.
