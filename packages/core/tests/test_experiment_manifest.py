@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -48,7 +48,7 @@ def manifest(*, expanded: bool = False) -> ExperimentManifest:
 
 
 @pytest.mark.parametrize("expanded", [False, True])
-def test_manifest_cells_digest_and_requests_preserve_pins(expanded: bool) -> None:
+def test_manifest_cells_and_digest_preserve_pins(expanded: bool) -> None:
     frozen = manifest(expanded=expanded)
     cells = frozen.cells()
     assert len(cells) == len(set(cells)) == (32 if expanded else 16)
@@ -56,22 +56,10 @@ def test_manifest_cells_digest_and_requests_preserve_pins(expanded: bool) -> Non
     assert frozen.cohorts() == (("curated-only", "expanded") if expanded else ("curated-only",))
     assert frozen.digest() == replace(frozen).digest()
     assert frozen.digest() != replace(frozen, seeds=(2,)).digest()
-    for cell in cells:
-        request = frozen.request(cell, "run")
-        recipe = next(r for r in frozen.recipes if r.recipe_id == cell.recipe_id)
-        assert request.initialization_sha256 == (
-            frozen.approved_base_sha256
-            if cell.initialization == "base"
-            else recipe.warm_start_sha256
-        )
-        assert request.policy == recipe.policy
-        assert request.seed == cell.seed and request.project_id == frozen.project_id
-        assert request.class_map_sha256 == frozen.class_map_sha256
-        assert request.class_mirror_safety == frozen.class_mirror_safety
-        assert request.augmentation.profile_id == cell.augmentation_id
-        assert request.dataset_manifest_sha256 == "e" * 64
-    with pytest.raises(ValueError, match="outside"):
-        frozen.request(replace(cells[0], seed=99), "run")
+    assert {c.recipe_id for c in cells} == {"r320", "r640"}
+    assert {c.seed for c in cells} == {0, 1}
+    assert {c.initialization for c in cells} == {"base", "warm-start"}
+    assert {c.augmentation_id for c in cells} == {BASELINE.profile_id, "flip-v1"}
 
 
 @pytest.mark.parametrize("role", ["development", "calibration", "locked_final_test"])
@@ -108,40 +96,87 @@ def test_manifest_rejects_checkpoint_ancestry_and_membership_drift(kind: str) ->
 
 
 @pytest.mark.parametrize(
-    "kind",
+    "changes",
     [
-        "classes",
-        "baseline",
-        "alternative",
-        "datasets",
-        "recipes",
-        "seeds",
-        "threshold",
-        "identity",
-        "digest",
-        "metric",
+        {"class_mirror_safety": (("object", False),)},
+        {"augmentations": (AugmentationProfile("color-v1", hsv_s=0.1),)},
+        {"augmentations": (BASELINE, AugmentationProfile("same-v1"))},
+        {"datasets": ()},
+        {"recipes": ()},
+        {"seeds": (0, 0)},
+        {"minimum_gain": float("nan")},
+        {"experiment_id": ""},
+        {"class_map_sha256": "invalid"},
+        {"metric": "unapproved"},
     ],
 )
-def test_manifest_rejects_invalid_contracts(kind: str) -> None:
-    frozen = manifest()
+def test_manifest_rejects_invalid_contracts(changes: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
-        if kind == "classes":
-            replace(frozen, class_mirror_safety=(("object", False),))
-        elif kind == "baseline":
-            replace(frozen, augmentations=(AugmentationProfile("color-v1", hsv_s=0.1),))
-        elif kind == "alternative":
-            replace(frozen, augmentations=(BASELINE, AugmentationProfile("same-v1")))
-        elif kind == "datasets":
-            replace(frozen, datasets=frozen.datasets[:1])
-        elif kind == "recipes":
-            replace(frozen, recipes=(frozen.recipes[0], frozen.recipes[0]))
-        elif kind == "seeds":
-            replace(frozen, seeds=(0, 0))
-        elif kind == "threshold":
-            replace(frozen, minimum_gain=float("nan"))
-        elif kind == "identity":
-            replace(frozen, experiment_id="")
-        elif kind == "digest":
-            replace(frozen, class_map_sha256="invalid")
-        else:
-            replace(frozen, metric="unapproved")
+        replace(manifest(), **changes)
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_identical_pixels_cannot_claim_distinct_groups(expanded: bool) -> None:
+    frozen = manifest(expanded=expanded)
+    source = frozen.sources[-1] if expanded else frozen.sources[1]
+    duplicate = replace(source, asset_id="duplicate", group_id="different")
+    with pytest.raises(ValueError, match="identical pixels"):
+        replace(frozen, sources=frozen.sources + (duplicate,))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["epochs", "batch", "minimum_class_support", "minimum_slice_support", "uncertainty_seed"],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 1.5, True, -1, None])
+def test_manifest_integer_controls_are_strict(field: str, value: Any) -> None:
+    with pytest.raises(ValueError):
+        replace(manifest(), **{field: value})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "seeds",
+        "sources",
+        "recipes",
+        "datasets",
+        "augmentations",
+        "critical_slices",
+        "class_mirror_safety",
+        "ancestry",
+        "membership",
+        "class-pair",
+    ],
+)
+def test_manifest_rejects_mutable_collection_aliases(field: str) -> None:
+    frozen = manifest()
+    changes: dict[str, Any]
+    if field == "ancestry":
+        changes = {
+            "recipes": (
+                replace(frozen.recipes[0], warm_start_training_groups=cast(Any, ["train"])),
+            )
+            + frozen.recipes[1:]
+        }
+    elif field == "membership":
+        changes = {
+            "datasets": (replace(frozen.datasets[0], training_asset_ids=cast(Any, ["train"])),)
+            + frozen.datasets[1:]
+        }
+    elif field == "class-pair":
+        changes = {"class_mirror_safety": (["object", True],)}
+    else:
+        changes = {field: list(getattr(frozen, field))}
+    with pytest.raises(ValueError, match="immutable tuples"):
+        replace(frozen, **cast(Any, changes))
+
+
+def test_manifest_rejects_empty_recipe_identity() -> None:
+    frozen = manifest()
+    with pytest.raises(ValueError, match="recipe identit"):
+        replace(
+            frozen,
+            recipes=(replace(frozen.recipes[0], recipe_id=""), frozen.recipes[1]),
+            datasets=(replace(frozen.datasets[0], recipe_id=""), frozen.datasets[1]),
+        )
