@@ -1,0 +1,165 @@
+# Risk-tiered review map for labelloop (owner-approved risk-tiered review;
+# schema v1, canonical policy in the adopting parent card's "plan" document).
+#
+# Classification rules (identical in every repo):
+#   1. A PR's tier is the HIGHEST tier of any changed file
+#      (sensitive > ordinary > low). On overlap, sensitive wins.
+#      A file matching no glob below defaults to sensitive.
+#   2. Content triggers escalate to sensitive regardless of path:
+#      new/changed public endpoint or input parsing; auth/authz/session
+#      logic; crypto or key handling; secrets/credentials; permission
+#      checks; tenant-isolation or personal-data handling; SQL/schema/
+#      migrations; dependency or lockfile changes; CI/workflow changes;
+#      weakened test assertions, deleted tests/snapshots, or lowered
+#      gates in test files (so test paths are low only for additive tests).
+#   3. The author records the tier in the PR attestation (`risk_tier`);
+#      QA verifies it against this file and the diff. Any doubt
+#      escalates. QA may pull in Security on any PR.
+#   4. Review per tier: low -> QA; ordinary -> QA;
+#      sensitive/unclassified -> Security -> QA.
+#   5. This file itself, and any change to it, is always sensitive
+#      (review-policy enforcement). No glob in the sensitive floor
+#      below may be moved to low/ordinary without the Security
+#      Engineer's approval recorded on that PR.
+#
+# Sensitive floor (never downgraded): CI/workflows, this file, CODEOWNERS;
+# dependency manifests and lockfiles (incl. dev deps), build tools and
+# install scripts; auth/session/crypto/secrets, public endpoints and input
+# parsing, tenant isolation, personal data, DB schema/migrations;
+# runtime/network/IAM config, infra and deploy/release paths; agent
+# instructions/skills/tool permissions. Every new top-level path is
+# sensitive until explicitly classified here (default_tier below).
+#
+# Low is allowlist-only: docs copy, static non-sensitive fixtures,
+# additive unit tests (content triggers still apply).
+# Ordinary is audited modules only: bounded behaviour change with no
+# untrusted input, no sensitive output, no permissions, no persistence,
+# no trust-boundary effect. Anything unlisted is sensitive by default —
+# when in doubt, leave it unlisted.
+#
+# Layout inventory (actual top-level paths in this repo):
+#   apps/api          public HTTP API (auth, DB stores, endpoints)
+#   apps/web          React review/operations UI
+#   packages/core     canonical domain logic, geometry, review/budget gates
+#   packages/compiler deterministic YOLO dataset compiler + image ingest
+#   packages/platform Ultralytics Platform adapter (account creds, spend)
+#   packages/llm      LLM review codecs (untrusted model output boundary)
+#   workers/core      trusted Postgres job queue
+#   workers/ml        ML training worker (vendor ultralytics imports)
+#   docs, fixtures, scripts, dev (local minio/dev storage), .github, .claude
+
+version: 1
+default_tier: sensitive
+
+tiers:
+  low:
+    # Docs prose only. Build/install scripts and other code under
+    # docs/design/mockups/src/ (e.g. fetch-fonts.sh, build-pages.cjs,
+    # shot.cjs, axe.cjs) stay unlisted => sensitive (see sensitive floor:
+    # build tools and install scripts). **/AGENTS.md in sensitive wins on
+    # overlap with this glob.
+    - "docs/*.md"
+    - "docs/**/*.md"
+    - "README.md"
+    - "LICENSE"
+    # Static non-sensitive fixture data (licence-clean image/data dirs).
+    # Fixture build scripts (fixtures/*.py) stay unlisted => sensitive.
+    - "fixtures/README.md"
+    - "fixtures/golden/**"
+    - "fixtures/cc0-interface/**"
+    - "fixtures/commons-office-keyboards/**"
+    # Additive unit-test modules only (weakened/deleted tests escalate per
+    # rule 2). Shared harness (conftest.py, support.py, smoke modules) and
+    # recorded fixtures (tests/fixtures/**) stay unlisted => sensitive, so
+    # editing what every test proves requires Security review. Test-named
+    # harness modules imported by other tests are pinned explicitly in
+    # sensitive (sensitive wins on overlap).
+    - "apps/api/tests/test_*.py"
+    - "apps/api/tests/**/test_*.py"
+    - "packages/*/tests/test_*.py"
+    - "packages/*/tests/**/test_*.py"
+    - "workers/*/tests/test_*.py"
+    - "workers/*/tests/**/test_*.py"
+    - "apps/web/src/**/*.test.*"
+    - "apps/web/src/**/*.spec.*"
+
+  ordinary:
+    # Audited modules only (justified in the bootstrap PR body):
+    # - apps/web stylesheet files: pure presentation, no logic.
+    #   docs/design/mockups/src/tokens.css ships via @import in the web
+    #   app, so it is listed here as ordinary like the apps/web CSS.
+    #   The rest of docs/design/mockups/src/ (build/fetch scripts) stays
+    #   unlisted => sensitive.
+    # Note: packages/core/src/labelloop_core/geometry.py is NOT ordinary:
+    # Box.within gates model-patch validation and target_flags feeds
+    # dataset eligibility, i.e. a trust-boundary effect, so it stays
+    # unlisted => sensitive.
+    - "apps/web/src/*.css"
+    - "apps/web/src/**/*.css"
+    - "docs/design/mockups/src/tokens.css"
+
+  sensitive:
+    # Review-policy enforcement.
+    - ".github/workflows/**"
+    - ".github/review-tiers.yml"
+    - "CODEOWNERS"
+    - "**/CODEOWNERS"
+    # Dependency manifests and lockfiles, incl. dev deps.
+    - "pyproject.toml"
+    - "**/pyproject.toml"
+    - "uv.lock"
+    - "**/uv.lock"
+    - "package.json"
+    - "**/package.json"
+    - "pnpm-lock.yaml"
+    - "**/pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "**/requirements*.txt"
+    # Build tools and install scripts.
+    - "Makefile"
+    - "**/Makefile"
+    - "Dockerfile"
+    - "**/Dockerfile*"
+    - "compose.yaml"
+    - "importlinter.ini"
+    - "apps/web/vite*.config.*"
+    - "**/tsconfig*.json"
+    # Auth/session/crypto/secrets surfaces.
+    - "apps/api/src/labelloop_api/auth.py"
+    - "apps/api/src/labelloop_api/auth_schema.py"
+    - "apps/api/src/labelloop_api/auth_store.py"
+    - "apps/api/src/labelloop_api/database_url.py"
+    - ".env.example"
+    - ".gitleaks.toml"
+    - ".gitleaksignore"
+    # Public endpoints and input parsing (HTTP API entry + request models).
+    - "apps/api/src/**"
+    # DB schema and migrations.
+    - "apps/api/migrations/**"
+    # Trusted job queue and ML worker (vendor imports, spend, creds).
+    - "workers/core/src/**"
+    - "workers/ml/src/**"
+    # Platform adapter: account credentials, dataset sync, training spend.
+    - "packages/platform/src/**"
+    # LLM review codecs: untrusted model output / image-byte boundary.
+    - "packages/llm/src/**"
+    # Dataset compiler and image ingest (parsing, derivative persistence).
+    - "packages/compiler/src/**"
+    # Runtime/network/IAM config, infra, dev storage.
+    - "dev/**"
+    # Shared test harness living inside test-named modules: these files
+    # define fakes/helpers (Journal, Coordinator, Transport, intent,
+    # remote, reconcile, model, report, _decode_dimensions, _png) that
+    # other test modules import, so weakening a fake changes what the
+    # dependent tests prove without touching any assertion. Sensitive
+    # wins on overlap with the low test_*.py globs. Any future test
+    # module imported by another test module must be pinned here likewise.
+    - "packages/platform/tests/test_label_sync.py"
+    - "packages/platform/tests/test_sync_reconciliation.py"
+    - "packages/platform/tests/test_sync_transport.py"
+    - "packages/core/tests/test_registry.py"
+    # Agent instructions, skills and tool permissions (nested too).
+    - "AGENTS.md"
+    - "**/AGENTS.md"
+    - ".claude/**"
+    - "**/.claude/**"

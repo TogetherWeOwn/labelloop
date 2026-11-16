@@ -112,7 +112,9 @@ class _OwnedClient(httpx.Client):
         self.last_status: int | None = None
         self.retry_after: str | None = None
 
-    def request(self, method: str, url: Any, **kwargs: Any) -> httpx.Response:
+    def request(
+        self, method: str, url: Any, *, max_bytes: int | None = None, **kwargs: Any
+    ) -> httpx.Response:
         self.last_status = None
         self.retry_after = None
         request = httpx.Request(
@@ -130,10 +132,26 @@ class _OwnedClient(httpx.Client):
             response.request = request
             self.last_status = response.status_code
             self.retry_after = response.headers.get("retry-after")
-            try:
-                response.read()
-            finally:
-                response.close()
+            if max_bytes is not None:
+                # Bound the transfer itself: abort once the running total
+                # exceeds the limit instead of buffering the whole body.
+                # Capture explicitly: the consumed stream cannot be re-read.
+                try:
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in response.iter_bytes(65536):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError("response exceeds bounded transfer")
+                        chunks.append(chunk)
+                    response._content = b"".join(chunks)
+                finally:
+                    response.close()
+            else:
+                try:
+                    response.read()
+                finally:
+                    response.close()
             return response
         finally:
             _WIRE_ACTIVE.reset(token)

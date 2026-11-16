@@ -17,3 +17,18 @@ condition = "AND"
 paths = ['''(^|/)packages/platform/src/labelloop_platform/contract/openapi\.json$''']
 regexTarget = "secret"
 regexes = ['''^-----BEGIN[ ]PRIVATE[ ]KEY-----\\{1,2}nYOUR_GCP_PRIVATE_KEY\\{1,2}n-----END PRIVATE KEY-----$''']
+
+# Anchor this allowlist to generic-api-key only; the default rule regex stays
+# in force (useDefault), so other matches, including any other key assigned in
+# this file, still flag.
+[[rules]]
+id = "generic-api-key"
+
+# An inert test idempotency key (key="..." assignment shape, not a credential)
+# on a sibling branch; the exact test path and complete literal must both
+# match. No path-only, secret-only, or rule-wide ignore; real keys still fail.
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''(^|/)apps/api/tests/test_management_canonical_db\.py$''']
+regexTarget = "secret"
+regexes = ['''^compile-evaluation-640$''']
