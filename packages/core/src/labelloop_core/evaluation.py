@@ -111,7 +111,6 @@ class EvaluationReport:
     overall: Metrics
     slices: dict[str, Metrics]
     coverage: tuple[Coverage, ...]
-    source_truth_sha256: tuple[tuple[str, str], ...] = ()
 
 
 def iou(left: Box, right: Box) -> float:
@@ -386,9 +385,4 @@ class EvaluationRunner:
             score_predictions(images, predictions, self.class_ids, self.policy),
             slices,
             tuple(coverage),
-            tuple(sorted((image.asset_id, image.truth_digest()) for image in images))
-            if all(
-                image.revision is not None and image.source_sha256 is not None for image in images
-            )
-            else (),
         )
