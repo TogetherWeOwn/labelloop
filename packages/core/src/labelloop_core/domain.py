@@ -26,8 +26,11 @@ class ClassDefinition:
     definition: str
     aliases: tuple[str, ...] = ()
     parent_id: str | None = None
+    mirror_safe: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.mirror_safe) is not bool:
+            raise ValueError("mirror safety must be an explicit boolean")
         if not self.stable_id or not self.name or not self.definition:
             raise ValueError("class identity, name and definition are required")
 

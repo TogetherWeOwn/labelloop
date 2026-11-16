@@ -139,6 +139,13 @@ class TrainingRequest:
                 "checkpoint selection requires development validation, never final test"
             )
 
+    def require_mirror_safety(self, classes: Mapping[str, bool]) -> None:
+        if self.augmentation.fliplr and (
+            dict(self.class_mirror_safety) != classes
+            or not all(safe is True for safe in classes.values())
+        ):
+            raise ValueError("mirror safety differs from frozen ontology")
+
     def arguments(self) -> dict[str, int | float | bool | str]:
         """Pin the baseline; worker-owned paths cannot be selected by model output."""
         return {

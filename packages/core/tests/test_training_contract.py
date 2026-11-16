@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from labelloop_core.training import (
+    AugmentationProfile,
     Checkpoint,
     InferencePolicy,
     TrainingRequest,
@@ -24,6 +25,19 @@ def request(side: int = 320) -> TrainingRequest:
         initialization_sha256="c" * 64,
         policy=InferencePolicy(side),
     )
+
+
+def test_flip_requires_the_frozen_authoritative_safety_catalog() -> None:
+    flipped = replace(
+        request(),
+        augmentation=AugmentationProfile("flip-v1", fliplr=0.5),
+        class_mirror_safety=(("object", True),),
+    )
+    flipped.require_mirror_safety({"object": True})
+    for classes in ({}, {"object": False}, {"object": True, "handed": False}):
+        with pytest.raises(ValueError, match="frozen ontology"):
+            flipped.require_mirror_safety(classes)
+    request().require_mirror_safety({})
 
 
 @pytest.mark.parametrize("side", [320, 640])

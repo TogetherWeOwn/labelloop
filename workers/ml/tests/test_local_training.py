@@ -225,6 +225,15 @@ def test_cpu_training_audits_real_batches_and_selects_source_frame_checkpoint(
                 )
             )
         assert not output.exists()
+    with pytest.raises(ValueError, match="differs from frozen ontology"):
+        backend.train(
+            replace(
+                request,
+                augmentation=AugmentationProfile("flip-v1", fliplr=0.5),
+                class_mirror_safety=tuple((class_id, True) for class_id in manifest["class_map"]),
+            )
+        )
+    assert not output.exists()
     truth = next(image for image in validation_images if image.objects)
     assert truth.revision is not None
     obj = truth.objects[0]

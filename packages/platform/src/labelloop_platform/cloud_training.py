@@ -82,6 +82,8 @@ class CloudPlan:
     parent_run_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.request.augmentation.fliplr:
+            raise CloudTrainingRefused("cloud flips require verified ontology metadata")
         for value in (self.owner, self.project_slug, self.dataset_slug, self.gpu_type):
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}", value):
                 raise ValueError("invalid Platform resource identity")
