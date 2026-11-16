@@ -1,9 +1,10 @@
-"""Immutable experiment input records; validation and dispatch belong to consumers."""
+"""Immutable experiment input and evidence records; consumers own validation and gates."""
 
 from dataclasses import dataclass
 from typing import Literal
 
-from .training import AugmentationProfile, InferencePolicy
+from .evaluation import EvaluationReport
+from .training import AugmentationProfile, InferencePolicy, TrainingResult
 
 SourceRole = Literal["curated", "expansion", "development", "calibration", "locked_final_test"]
 Cohort = Literal["curated-only", "expanded"]
@@ -47,3 +48,51 @@ class Cell:
     initialization: Initialization
     augmentation_id: str
     seed: int
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionObservation:
+    asset_id: str
+    before: int
+    after: int
+    before_small: int
+    after_small: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArmEvidence:
+    manifest_sha256: str
+    cell: Cell
+    training: TrainingResult
+    # Complete-source and per-source-group reports from the same predictions.
+    evaluation: EvaluationReport
+    group_reports: tuple[tuple[str, EvaluationReport], ...]
+    retention: tuple[RetentionObservation, ...]
+    tensor_shapes: tuple[tuple[str, tuple[tuple[int, ...], ...]], ...]
+    export_sha256: str
+    export_weights_sha256: str
+    export_signature: tuple[int, ...]
+    export_policy: InferencePolicy
+    export_samples: int
+    export_detections: int
+
+
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
