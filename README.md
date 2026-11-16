@@ -2,7 +2,11 @@
 
 Multi-domain image annotation with vision-LLM review, reproducible YOLO dataset compilation and separate per-recipe model training (for example 640 x 640 and 320 x 320). Training runs locally or through the user's Ultralytics Platform account.
 
-This repository is at **M0: development bootstrap**. It supplies the monorepo, placeholder services, licensed fixture inputs and CI. Domain features are implemented in later milestones. Read [`docs/plan.md`](docs/plan.md) before feature work.
+This is a development project, not a claim of a complete annotation-to-training product. Read [`docs/plan.md`](docs/plan.md) before feature work.
+
+## Roadmap
+
+The [authoritative roadmap and milestone exit criteria](docs/plan.md#15-implementation-milestones) describe the intended direction: M3 review UI and LLM review, followed by M4 Platform integration, M5 qualification and operations, and M6 the measured improvement loop. These are intentions, not delivery commitments or completion claims; the plan keeps the scope, non-goals and source boundaries in one place.
 
 ## Requirements
 

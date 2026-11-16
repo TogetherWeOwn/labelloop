@@ -21,8 +21,29 @@ from labelloop_core.training import (
     AugmentationProfile,
     Checkpoint,
     InferencePolicy,
+    TrainingRequest,
     TrainingResult,
 )
+
+
+def test_training_flip_requires_unique_mirror_safe_classes() -> None:
+    request = TrainingRequest(
+        "run",
+        "project",
+        "recipe",
+        "release",
+        "a" * 64,
+        "b" * 64,
+        "splits",
+        "c" * 64,
+        InferencePolicy(320),
+    )
+    profile = AugmentationProfile("flip-v1", fliplr=0.5)
+    for safety in ((), (("object", False),), (("object", True), ("object", True))):
+        with pytest.raises(ValueError, match="mirror_safe"):
+            replace(request, augmentation=profile, class_mirror_safety=safety)
+    flipped = replace(request, augmentation=profile, class_mirror_safety=(("object", True),))
+    assert flipped.arguments()["fliplr"] == 0.5
 
 
 def digest(value: str) -> str:
