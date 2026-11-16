@@ -976,6 +976,24 @@ An unresolved target blocks the affected sample's eligibility. Other complete el
 
 ## 15. Implementation milestones
 
+**Roadmap maintainer:** Product Lead · **Last reviewed:** 2026-11-09
+
+**Public feedback:** [repository Issues](https://github.com/TogetherWeOwn/labelloop/issues)
+
+This section is the authoritative public roadmap, with exit criteria below and acceptance checks in §16. The intended direction is **M3 review UI and LLM review**, followed by the accepted **M4 Platform adapter → M5 qualification and operations → M6 improvement loop** sequence. This is a direction statement, not a report of live progress: the table does not certify milestone completion, commit delivery dates, or authorize new work or paid operations. Priorities, live status and forecast dates are maintained in the internal work tracker, not copied here.
+
+M3 focuses on the shared shell, sign-in and roles, image review, the LLM cost ledger, proposals and discovery, validated review proposals, adjudication and independent audits. Designs for the wider management UI do not make those screens part of M3; [design readiness and shipping gates](design/README.md#design-readiness-and-shipping-gates) retain that distinction. Earlier implementation of a later milestone's primitives does not establish its end-to-end exit condition.
+
+**Non-goals and boundaries.** The initial task remains axis-aligned detection on still images (§1). Masks, pose, OCR and video need separate contracts; universal error-free models are not promised. Live provider use, spending and hosted deployment are not authorized by this roadmap (§12 and §18). CI remains offline and fixture-backed (§9.7).
+
+**Planning sources.** Keep one authority per fact:
+
+- This plan, especially §15–16, owns product direction, milestone scope and acceptance criteria; [`AGENTS.md`](../AGENTS.md) remains the contributor entry to it. The [README](../README.md#roadmap) is navigation, not a second plan.
+- M0–M2 rows remain as historical sequencing and acceptance context, not live status. The former README description of the entire repository as an M0 bootstrap is replaced by the roadmap entry; development-stack instructions remain in the README.
+- [`plan-review.md`](plan-review.md) is retained as the historical v0.2 review resolved into v0.3, not a competing roadmap. Version notes, research and decisions in this document remain intact.
+- [`design/`](design/README.md) retains screen contracts and design-readiness boundaries. Milestone implementation notes (`m1-*` through `m6-*`), [cloud training](cloud-training.md), [qualification](qualification-contract.md), [evidence policy](evidence-policy.md), [operations UI](operations-ui.md), [Platform UI](platform-ui.md) and [web tooling](web-tooling-contract.md) retain their integration limits and evidence; none replaces these milestone exit criteria or certifies the whole product complete.
+- [`adr/`](adr/) retains recorded technical decisions under the existing contributor contract. Internal slice maps remain implementation decomposition and tracking, not a second public roadmap; no live task list is reproduced here.
+
 **[v0.3]** The milestones are reordered so the offline core (geometry, compiler, local training, evaluation) is proven and CI-tested before any paid or external dependency. Platform work moves after the local loop, and the review UI and LLM review can proceed in parallel once M1 lands.
 
 | Milestone | Deliverable | Exit condition | Acceptance checks (§16) |
