@@ -91,14 +91,16 @@ def test_scan_classification_has_no_commit_or_path_only_exemption() -> None:
     config = tomllib.loads((repo / ".gitleaks.toml").read_text())
     assert config["extend"] == {"useDefault": True}
     assert "allowlist" not in config and "allowlists" not in config
-    assert len(config["rules"]) == 1
-    rule = config["rules"][0]
-    assert rule["id"] == "private-key"
-    assert len(rule["allowlists"]) == 1
-    allowlist = rule["allowlists"][0]
-    assert allowlist["condition"] == "AND"
-    assert allowlist["regexTarget"] == "secret"
-    assert len(allowlist["paths"]) == len(allowlist["regexes"]) == 1
+    assert [rule["id"] for rule in config["rules"]] == ["private-key", "generic-api-key"]
+    for rule in config["rules"]:
+        assert len(rule["allowlists"]) == 1
+        allowlist = rule["allowlists"][0]
+        assert allowlist["condition"] == "AND"
+        assert allowlist["regexTarget"] == "secret"
+        assert len(allowlist["paths"]) == len(allowlist["regexes"]) == 1
+    generic = config["rules"][1]["allowlists"][0]
+    assert "test_management_canonical_db" in generic["paths"][0]
+    assert generic["regexes"] == ["^compile-evaluation-640$"]
     lines = ROOT.joinpath("openapi.json").read_text().splitlines()
     for line_number in (22480, 22704):
         example = json.loads("{" + lines[line_number - 1].strip() + "}")["example"]
