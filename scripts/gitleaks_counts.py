@@ -43,7 +43,7 @@ def counts(raw):
             if not isinstance(record.get(field), str) or not record[field]:
                 raise ValueError
         line = record.get("StartLine")
-        if type(line) is not int or line < 1:
+        if type(line) is not int or line < 0:
             raise ValueError
         identity = f"{record['Commit']}:{record['File']}:{record['RuleID']}:{line}"
         if record["Fingerprint"] != identity:

@@ -18,9 +18,9 @@ COUNTS = MODULE["counts"]
 MARKER = "SENSITIVE_MARKER_$(false)\n::error::never-output"
 
 
-def record(file="synthetic.py"):
-    item = {"Commit": "a" * 40, "File": file, "RuleID": "synthetic", "StartLine": 7}
-    item["Fingerprint"] = f"{item['Commit']}:{file}:synthetic:7"
+def record(file="synthetic.py", line=7):
+    item = {"Commit": "a" * 40, "File": file, "RuleID": "synthetic", "StartLine": line}
+    item["Fingerprint"] = f"{item['Commit']}:{file}:synthetic:{line}"
     item["Secret"] = MARKER
     return item
 
@@ -47,6 +47,31 @@ class CountsTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     COUNTS(json.dumps([{**candidate, field: value}]).encode())
 
+    def test_zero_line_unknown_mixed_duplicates(self):
+        candidate, path_only = record(), record("synthetic.p12", line=0)
+        digest = hashlib.sha256(candidate["Fingerprint"].encode()).hexdigest()
+        with patch.dict(COUNTS.__globals__, REVIEWED_DIGEST=digest):
+            for records, expected in [
+                ([path_only], (1, 0, 1)),
+                ([path_only, path_only], (2, 0, 2)),
+                ([candidate, path_only, candidate, path_only], (4, 2, 2)),
+            ]:
+                self.assertEqual(tuple(COUNTS(json.dumps(records).encode()).values()), expected)
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            report.write_text(json.dumps([path_only, path_only]))
+            result = self.cli(report)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stderr, b"")
+            self.assertEqual(
+                json.loads(result.stdout),
+                {
+                    "finding_count": 2,
+                    "reviewed_inert_candidate_count": 0,
+                    "unmatched_finding_count": 2,
+                },
+            )
+
     def test_invalid_reports_have_no_output(self):
         valid = record()
         cases = [
@@ -68,6 +93,10 @@ class CountsTests(unittest.TestCase):
                 cases.append(json.dumps([{**valid, field: value}]).encode())
         cases += [
             json.dumps([valid, {**valid, "Fingerprint": MARKER}]).encode(),
+            json.dumps([valid, record(line=-1)]).encode(),
+            json.dumps([valid, {**record(line=0), "StartLine": -1}]).encode(),
+            json.dumps([valid, {**valid, "StartLine": 0}]).encode(),
+            json.dumps([valid, {**record(line=0), "StartLine": 1}]).encode(),
             json.dumps([{**valid, "Fingerprint": "\ud800"}]).encode(),
             json.dumps([valid] * (MODULE["MAX_RECORDS"] + 1)).encode(),
         ]
