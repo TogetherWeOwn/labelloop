@@ -88,22 +88,17 @@ def test_compiled_file_verifier_normalizes_root(
 @pytest.mark.parametrize(
     "change",
     (
-        "none",
-        "manifest",
-        "bytes",
-        "recipe",
-        "train",
-        "val",
-        "source",
-        "truth",
-        "group",
-        "role",
-        "evaluation",
-        "classes",
+        *("none", "manifest", "bytes", "recipe", "train", "val"),
+        *("source", "truth", "group", "role", "evaluation", "classes"),
         "loader-train",
         "loader-val",
         "loader-extra",
         "loader-location",
+        "loader-extra-class",
+        "loader-sparse-classes",
+        "loader-nc",
+        "loader-nc-bool",
+        "loader-list-names",
         "negative",
         *(
             f"{kind}-{split}"
@@ -114,6 +109,10 @@ def test_compiled_file_verifier_normalizes_root(
                 "duplicate-source",
                 "duplicate-record",
                 "shared-image",
+                "pair-swap",
+                "image-extension",
+                "image-digest",
+                "label-digest",
             )
             for split in ("train", "val")
         ),
@@ -264,10 +263,23 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     elif change == "classes":
         manifest = replace(manifest, class_map_sha256=digest("other classes"))
     else:
-        if change.startswith(("label-", "duplicate-", "shared-")):
+        if change.startswith(("label-", "duplicate-", "shared-", "pair-", "image-")):
             kind, split = change.rsplit("-", 1)
             sample = next(s for s in compiled["samples"] if s["split"] == split)
-            if kind == "label-missing":
+            if kind == "pair-swap":
+                other = next(
+                    s for s in compiled["samples"] if s["split"] == split and s is not sample
+                )
+                for key in ("image_path", "label_path"):
+                    sample[key], other[key] = other[key], sample[key]
+            elif kind == "image-extension":
+                old = sample["image_path"]
+                sample["image_path"] = str(Path(old).with_suffix(".bin"))
+                (dataset / old).rename(dataset / sample["image_path"])
+                compiled["file_hashes"][sample["image_path"]] = compiled["file_hashes"].pop(old)
+            elif kind in {"image-digest", "label-digest"}:
+                sample[kind.replace("-digest", "_sha256")] = digest("wrong derived digest")
+            elif kind == "label-missing":
                 label = dataset / sample["label_path"]
                 assert label.read_bytes()
                 label.unlink()
@@ -300,12 +312,31 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
                 del compiled["file_hashes"][old]
                 other["image_path"] = sample["image_path"]
             errors[change] = "compiled membership" if kind.startswith("duplicate-") else "loader"
-        elif change in {"loader-train", "loader-val"}:
+        elif change in {
+            "loader-train",
+            "loader-val",
+            "loader-extra-class",
+            "loader-sparse-classes",
+            "loader-nc",
+            "loader-nc-bool",
+            "loader-list-names",
+        }:
             from ultralytics.utils import YAML
 
             data = YAML.load(dataset / "data.yaml")
-            split = change.removeprefix("loader-")
-            data[split] = "images/val" if split == "train" else "images/train"
+            count = len(data["names"])
+            if change in {"loader-train", "loader-val"}:
+                data[change.removeprefix("loader-")] = (
+                    "images/val" if change == "loader-train" else "images/train"
+                )
+            elif change == "loader-extra-class":
+                data["names"][count] = "extra display name"
+            elif change == "loader-sparse-classes":
+                data["names"][count] = data["names"].pop(0)
+            elif change in {"loader-nc", "loader-nc-bool"}:
+                data["nc"] = count + 1 if change == "loader-nc" else True
+            else:
+                data["names"], data["nc"] = [f"display {n}" for n in range(count)], count
             YAML.save(dataset / "data.yaml", data)
             compiled["file_hashes"]["data.yaml"] = file_digest(dataset / "data.yaml")
         elif change == "loader-extra":
@@ -340,10 +371,13 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
                 for pin in manifest.datasets
             ),
         )
-    with pytest.raises(
-        ValueError, match="loader" if change.startswith("loader-") else errors[change]
-    ):
-        validate_inputs(manifest, cell, backend)
+    if change == "loader-list-names":
+        assert validate_inputs(manifest, cell, backend) == compiled
+    else:
+        with pytest.raises(
+            ValueError, match="loader" if change.startswith("loader-") else errors[change]
+        ):
+            validate_inputs(manifest, cell, backend)
     assert not backend.output.exists()
 
 
