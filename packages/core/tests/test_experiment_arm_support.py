@@ -41,7 +41,13 @@ def test_arm_rechecks_aggregate_and_group_report_binding(
 
 def test_group_report_must_cover_its_own_sources_and_declared_metric() -> None:
     frozen, arm = arm_case()
-    second = replace(frozen.sources[1], asset_id="dev-second", group_id="second")
+    second = replace(
+        frozen.sources[1],
+        asset_id="dev-second",
+        group_id="second",
+        source_sha256="8" * 64,
+        truth_sha256="9" * 64,
+    )
     frozen = replace(frozen, sources=(*frozen.sources, second))
     report = arm.evaluation
     aggregate = replace(
@@ -107,6 +113,27 @@ def test_arm_requires_each_critical_slice_and_metric(missing: bool) -> None:
     )
     with pytest.raises(ValueError, match="unsupported critical slice"):
         validate_arm(frozen, replace(arm, manifest_sha256=frozen.digest(), evaluation=report))
+
+
+@pytest.mark.parametrize("where", ["group", "slice", "aggregate"])
+@pytest.mark.parametrize("total", [0, 1, 2])
+def test_arm_rejects_inconsistent_metric_support(where: str, total: int) -> None:
+    frozen, arm = arm_case()
+    frozen = replace(frozen, critical_slices=("small",))
+    unsupported = replace(
+        arm.evaluation.overall.per_class["object"], supported=False, support=0, map50_95=None
+    )
+    metrics = replace(arm.evaluation.overall, support=total, per_class={"object": unsupported})
+    report = replace(arm.evaluation, overall=metrics)
+    arm = (
+        replace(arm, group_reports=(("dev", report),))
+        if where == "group"
+        else replace(arm, evaluation=report)
+        if where == "aggregate"
+        else replace(arm, evaluation=replace(arm.evaluation, slices={"small": metrics}))
+    )
+    with pytest.raises(ValueError, match="support|unsupported"):
+        validate_arm(frozen, replace(arm, manifest_sha256=frozen.digest()))
 
 
 def test_arm_keeps_training_evidence_gate() -> None:
