@@ -86,9 +86,9 @@ def metrics(score: float, count: int) -> Metrics:
         count,
         score,
         score,
-        score,
-        score,
-        {"object": ClassMetrics(True, count, count, count, 0, score, score, score, score)},
+        1.0,
+        1.0,
+        {"object": ClassMetrics(True, count, count, count, 0, score, score, 1.0, 1.0)},
     )
 
 
@@ -168,6 +168,11 @@ def test_paired_results_are_per_recipe_seed_group_and_never_establish_m6_exit() 
     arms = evidence(manifest)
     results = compare_experiment(manifest, arms)
     assert results == compare_experiment(manifest, tuple(reversed(arms)))
+    for arm in arms:
+        observed = arm.evaluation.overall.per_class["object"]
+        assert observed.precision == observed.true_positives / observed.predictions
+        assert observed.recall == observed.true_positives / observed.support
+        assert arm.evaluation.overall.precision == arm.evaluation.overall.recall == 1.0
     assert {r.axis for r in results} == {"initialization", "augmentation", "training-cohort"}
     assert {r.recipe_id for r in results} == {"r320", "r640"}
     assert all(r.source_groups == 2 and r.images == 2 and r.support == 2 for r in results)
