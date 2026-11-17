@@ -23,9 +23,10 @@ Construct an `ExperimentManifest` before dispatch. Its SHA-256 covers:
 - all seeds, epochs, batch, augmentation profiles, declared metric, class/slice
   support minima, regression tolerance and minimum gain.
 
-The current ontology record predates mirror-safety metadata. Supply the approved
-catalog's full safety declarations explicitly; absence is not approval. The worker
-checks that flipping covers the entire compiled class map. CI's fixture has no
+Approve mirror safety in the canonical ontology, compile that approved metadata,
+then supply experiment declarations matching the full frozen compiled catalog
+before pinning and dispatch. Absence is not approval: horizontal flipping requires
+matching declarations with every class approved safe. CI's fixture has no
 mirror-safety approval and uses a color-only alternative.
 
 `manifest.cells()` enumerates the finite factorial configuration; it does not
@@ -75,7 +76,8 @@ not pooled COCO AP. Repeated seeds are not extra independent images/groups.
 The deterministic percentile paired cluster bootstrap uses 2,000 resamples of
 source groups (all seeds within a group travel together), a recorded RNG seed,
 and a nominal 95% interval. A single group gives no interval and reports
-insufficient evidence. Few groups, nonrepresentative sampling, label uncertainty,
+insufficient evidence unless an observed supported class/critical-slice or mean-delta
+regression takes precedence. Few groups, nonrepresentative sampling, label uncertainty,
 and adaptive development reuse limit interpretation; the interval is conditional
 on these pinned seeds/data and does not establish universal quality or cover
 unknown training-environment variation. Every group needs positive target support
