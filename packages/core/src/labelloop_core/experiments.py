@@ -374,6 +374,11 @@ def validate_training_evidence(manifest: ExperimentManifest, arm: ArmEvidence) -
         raise ValueError("training request differs from frozen experiment")
     if argument_diff(expected.arguments(), arm.training.resolved_arguments):
         raise ValueError("args_mismatch")
+    epochs = tuple(checkpoint.epoch for checkpoint in arm.training.checkpoints)
+    if any(type(epoch) is not int for epoch in epochs) or tuple(sorted(epochs)) != tuple(
+        range(expected.epochs)
+    ):
+        raise ValueError("checkpoint epoch domain differs from frozen experiment")
     training_ids = set(
         next(
             d.training_asset_ids
@@ -429,6 +434,11 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
     validate_training_evidence(manifest, arm)
     development = {s.asset_id for s in manifest.sources if s.role == "development"}
     validate_report(manifest, arm.training, arm.evaluation, development)
+    if (
+        arm.evaluation.run_id != arm.training.selected.evaluation_run_id
+        or arm.evaluation.overall.map50_95 != arm.training.selected.validation_map
+    ):
+        raise ValueError("selected checkpoint evaluation drift")
     groups = dict(arm.group_reports)
     if len(groups) != len(arm.group_reports) or set(groups) != set(manifest.development_groups()):
         raise ValueError("unpaired source groups")

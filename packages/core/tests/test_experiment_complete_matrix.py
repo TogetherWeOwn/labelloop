@@ -103,7 +103,13 @@ def evidence(manifest: ExperimentManifest) -> tuple[ArmEvidence, ...]:
         )
         checkpoint = Checkpoint(0, digest(f"checkpoint-{index}"), score, f"eval-{index}")
         training = TrainingResult(
-            request, (checkpoint,), checkpoint, request.arguments(), "8.4.204", "2.9.1+cpu", False
+            request,
+            tuple(replace(checkpoint, epoch=epoch) for epoch in range(request.epochs)),
+            checkpoint,
+            request.arguments(),
+            "8.4.204",
+            "2.9.1+cpu",
+            False,
         )
         reports = []
         dev = [s for s in manifest.sources if s.role == "development"]
@@ -147,7 +153,8 @@ def evidence(manifest: ExperimentManifest) -> tuple[ArmEvidence, ...]:
                 training,
                 full,
                 tuple(reports),
-                tuple(RetentionObservation(asset_id, 1, 1, 0, 0) for asset_id in ids),
+                tuple(RetentionObservation(asset_id, 1, 1, 0, 0) for asset_id in ids)
+                * request.epochs,
                 tuple(
                     (stage, ((1, 3, request.policy.imgsz, request.policy.imgsz),))
                     for stage in ("training", "validation", "inference")

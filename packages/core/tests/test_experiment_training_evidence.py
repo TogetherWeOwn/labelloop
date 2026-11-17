@@ -47,7 +47,12 @@ def test_training_evidence_requires_every_multi_epoch_visit(side: int, visits: i
     frozen, arm = arm_case(side)
     frozen = replace(frozen, epochs=2)
     request = frozen.request(arm.cell, arm.training.request.run_id)
-    training = replace(arm.training, request=request, resolved_arguments=request.arguments())
+    training = replace(
+        arm.training,
+        request=request,
+        resolved_arguments=request.arguments(),
+        checkpoints=tuple(replace(arm.training.selected, epoch=i) for i in range(request.epochs)),
+    )
     arm = replace(
         arm, manifest_sha256=frozen.digest(), training=training, retention=arm.retention * visits
     )
@@ -70,7 +75,12 @@ def test_training_evidence_cannot_substitute_another_assets_visits() -> None:
     )
     frozen = replace(frozen, sources=(*frozen.sources, source), datasets=datasets, epochs=2)
     request = frozen.request(arm.cell, arm.training.request.run_id)
-    training = replace(arm.training, request=request, resolved_arguments=request.arguments())
+    training = replace(
+        arm.training,
+        request=request,
+        resolved_arguments=request.arguments(),
+        checkpoints=tuple(replace(arm.training.selected, epoch=i) for i in range(request.epochs)),
+    )
     first = arm.retention[0]
     second = replace(first, asset_id=source.asset_id)
     arm = replace(
@@ -145,7 +155,12 @@ def test_training_evidence_requires_actual_shapes(stage: str, values: Any) -> No
 def test_training_evidence_rechecks_request_and_mutable_resolved_arguments() -> None:
     frozen, arm = arm_case()
     request = replace(arm.training.request, epochs=arm.training.request.epochs + 1)
-    training = replace(arm.training, request=request, resolved_arguments=request.arguments())
+    training = replace(
+        arm.training,
+        request=request,
+        resolved_arguments=request.arguments(),
+        checkpoints=tuple(replace(arm.training.selected, epoch=i) for i in range(request.epochs)),
+    )
     with pytest.raises(ValueError, match="training request"):
         validate_training_evidence(frozen, replace(arm, training=training))
     resolved = dict(arm.training.resolved_arguments)

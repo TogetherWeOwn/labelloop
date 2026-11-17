@@ -23,8 +23,15 @@ def pair_case(
     arms: dict[Cell, ArmEvidence] = {}
     for cell in (replace(c, seed=s) for c in (baseline, candidate) for s in frozen.seeds):
         request = frozen.request(cell, f"{cell.initialization}-{cell.seed}")
-        training = replace(arm.training, request=request, resolved_arguments=request.arguments())
         score = 0.5 + gain * (cell.initialization == "warm-start")
+        checkpoint = replace(arm.training.selected, validation_map=score)
+        training = replace(
+            arm.training,
+            request=request,
+            resolved_arguments=request.arguments(),
+            checkpoints=(checkpoint,),
+            selected=checkpoint,
+        )
         per_class = {"object": replace(arm.evaluation.overall.per_class["object"], map50_95=score)}
         single = replace(arm.evaluation.overall, map50_95=score, per_class=per_class)
         reports = tuple(
