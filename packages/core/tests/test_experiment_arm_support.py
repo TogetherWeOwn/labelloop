@@ -137,12 +137,18 @@ def test_arm_rejects_inconsistent_metric_support(where: str, total: int) -> None
 
 
 @pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("scope", ["overall", "small"])
 @pytest.mark.parametrize("aggregate_support,group_support", [(2, 1), (1, 2)])
 def test_arm_reconciles_aggregate_and_group_class_support(
-    side: int, aggregate_support: int, group_support: int
+    side: int, scope: str, aggregate_support: int, group_support: int
 ) -> None:
     frozen, arm = arm_case(side)
-    frozen = replace(frozen, minimum_class_support=aggregate_support)
+    frozen = replace(
+        frozen,
+        critical_slices=("small",) if scope == "small" else (),
+        minimum_class_support=aggregate_support if scope == "overall" else 1,
+        minimum_slice_support=aggregate_support,
+    )
     report = arm.evaluation
     aggregate = replace(
         report.overall,
@@ -156,20 +162,35 @@ def test_arm_reconciles_aggregate_and_group_class_support(
         support=group_support,
         per_class={"object": replace(report.overall.per_class["object"], support=group_support)},
     )
+    complete = aggregate if aggregate_support == 2 else group
     arm = replace(
         arm,
         manifest_sha256=frozen.digest(),
-        evaluation=replace(report, overall=aggregate),
-        group_reports=(("dev", replace(report, overall=group)),),
+        evaluation=replace(
+            report,
+            overall=aggregate if scope == "overall" else complete,
+            slices={"small": aggregate},
+        ),
+        group_reports=(
+            (
+                "dev",
+                replace(
+                    report,
+                    overall=group if scope == "overall" else complete,
+                    slices={"small": group},
+                ),
+            ),
+        ),
     )
-    with pytest.raises(ValueError, match="aggregate class support differs"):
+    with pytest.raises(ValueError, match="aggregate .*support differs"):
         validate_arm(frozen, arm)
 
 
 @pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("scope", ["overall", "small", "empty-small", "missing-small"])
 @pytest.mark.parametrize("contradictory", [False, True])
 def test_arm_preserves_mixed_group_support_and_checks_each_class(
-    side: int, contradictory: bool
+    side: int, scope: str, contradictory: bool
 ) -> None:
     frozen, arm = arm_case(side)
     second = replace(
@@ -183,6 +204,8 @@ def test_arm_preserves_mixed_group_support_and_checks_each_class(
         frozen,
         sources=(*frozen.sources, second),
         class_mirror_safety=(*frozen.class_mirror_safety, ("other", True)),
+        critical_slices=() if scope == "overall" else ("small",),
+        minimum_slice_support=2,
     )
     request = frozen.request(arm.cell, arm.training.request.run_id)
     arm = replace(
@@ -205,18 +228,39 @@ def test_arm_preserves_mixed_group_support_and_checks_each_class(
     left = replace(report.overall, support=2, per_class={"object": supported, "other": absent})
     right = replace(left, per_class={"object": absent, "other": supported})
     aggregate = replace(
-        left,
-        images=2,
-        support=4,
-        per_class={
-            "object": replace(supported, support=3) if contradictory else supported,
-            "other": replace(supported, support=1) if contradictory else supported,
-        },
+        left, images=2, support=4, per_class={"object": supported, "other": supported}
     )
+    right_slice = (
+        replace(right, support=0, map50_95=None, per_class={"object": absent, "other": absent})
+        if scope == "empty-small"
+        else replace(
+            right, support=1, per_class={"object": absent, "other": replace(supported, support=1)}
+        )
+    )
+    slice_scores = (
+        left
+        if scope == "empty-small"
+        else replace(
+            aggregate,
+            support=3,
+            per_class={"object": supported, "other": replace(supported, support=1)},
+        )
+    )
+    drift = {"object": replace(supported, support=3), "other": replace(supported, support=1)}
+    if scope == "overall" and contradictory:
+        aggregate = replace(aggregate, per_class=drift)
+    elif contradictory:
+        slice_scores = replace(
+            slice_scores,
+            per_class={
+                "object": replace(supported, support=1),
+                "other": replace(supported, support=slice_scores.support - 1),
+            },
+        )
     second_report = replace(
         report,
         overall=right,
-        slices={"small": right},
+        slices={} if scope == "missing-small" else {"small": right_slice},
         coverage=(replace(report.coverage[0], asset_id=second.asset_id),),
         source_truth_sha256=((second.asset_id, second.truth_sha256),),
     )
@@ -226,7 +270,7 @@ def test_arm_preserves_mixed_group_support_and_checks_each_class(
         evaluation=replace(
             report,
             overall=aggregate,
-            slices={},
+            slices={} if scope == "overall" else {"small": slice_scores},
             coverage=(*report.coverage, *second_report.coverage),
             source_truth_sha256=(*report.source_truth_sha256, *second_report.source_truth_sha256),
         ),
@@ -235,8 +279,10 @@ def test_arm_preserves_mixed_group_support_and_checks_each_class(
             ("second", second_report),
         ),
     )
-    if contradictory:
-        with pytest.raises(ValueError, match="aggregate class support differs"):
+    if contradictory or scope == "missing-small":
+        with pytest.raises(
+            ValueError, match="aggregate .*support differs|missing source-group critical slice"
+        ):
             validate_arm(frozen, arm)
     else:
         validate_arm(frozen, arm)

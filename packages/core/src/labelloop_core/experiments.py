@@ -1,12 +1,10 @@
-"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
+"""Validated experiment manifests and evidence records; consumers own execution and gates."""
 
 import hashlib
 import json
-import random
 from collections import Counter
 from dataclasses import asdict, dataclass
 from itertools import product
-from statistics import mean
 from typing import Literal
 
 from .evaluation import ClassMetrics, EvaluationReport, Metrics
@@ -308,6 +306,27 @@ class ArmEvidence:
     export_detections: int
 
 
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
+
+
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -472,6 +491,16 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
             report.overall.per_class[class_id].support for report in groups.values()
         ):
             raise ValueError("aggregate class support differs from source groups")
+    for name in manifest.critical_slices:
+        if any(name not in report.slices for report in groups.values()):
+            raise ValueError(f"missing source-group critical slice: {name}")
+        for class_id, metrics in arm.evaluation.slices[name].per_class.items():
+            if metrics.support != sum(
+                report.slices[name].per_class[class_id].support for report in groups.values()
+            ):
+                raise ValueError(
+                    f"aggregate critical-slice support differs from source groups: {name}"
+                )
 
 
 def _validate_metric_support(metrics: Metrics) -> None:
@@ -489,155 +518,3 @@ def _validate_metric_support(metrics: Metrics) -> None:
         or (metrics.map50_95 is None) != (metrics.support == 0)
     ):
         raise ValueError("evaluation support drift or inconsistent metric support")
-
-
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
-
-
-def _support(metrics: Metrics) -> tuple[object, ...]:
-    return (
-        metrics.images,
-        metrics.support,
-        tuple(sorted((key, item.support) for key, item in metrics.per_class.items())),
-    )
-
-
-def _compare(
-    manifest: ExperimentManifest,
-    baseline: Cell,
-    candidate: Cell,
-    arms: dict[Cell, ArmEvidence],
-    axis: str,
-) -> PairedComparison:
-    from dataclasses import replace
-
-    deltas: dict[str, list[float]] = {group: [] for group in manifest.development_groups()}
-    regressions: set[str] = set()
-    for seed in manifest.seeds:
-        left = arms[replace(baseline, seed=seed)]
-        right = arms[replace(candidate, seed=seed)]
-        for a, b in (
-            (left.evaluation, right.evaluation),
-            *((dict(left.group_reports)[g], dict(right.group_reports)[g]) for g in deltas),
-        ):
-            if _support(a.overall) != _support(b.overall):
-                raise ValueError("paired ground-truth support drift")
-        for group in deltas:
-            a_score = dict(left.group_reports)[group].overall.map50_95
-            b_score = dict(right.group_reports)[group].overall.map50_95
-            assert a_score is not None and b_score is not None
-            deltas[group].append(b_score - a_score)
-        for class_id, a_class in left.evaluation.overall.per_class.items():
-            b_class = right.evaluation.overall.per_class[class_id]
-            assert a_class.map50_95 is not None and b_class.map50_95 is not None
-            if b_class.map50_95 < a_class.map50_95 - manifest.regression_tolerance:
-                regressions.add(f"class:{class_id}:seed:{seed}")
-        for name in manifest.critical_slices:
-            a_slice, b_slice = left.evaluation.slices[name], right.evaluation.slices[name]
-            if _support(a_slice) != _support(b_slice):
-                raise ValueError("paired critical-slice support drift")
-            assert a_slice.map50_95 is not None and b_slice.map50_95 is not None
-            if b_slice.map50_95 < a_slice.map50_95 - manifest.regression_tolerance:
-                regressions.add(f"slice:{name}:seed:{seed}")
-        if (left.training.ultralytics_version, left.training.torch_version) != (
-            right.training.ultralytics_version,
-            right.training.torch_version,
-        ):
-            raise ValueError("paired training environment drift")
-    group_deltas = tuple((group, mean(values)) for group, values in sorted(deltas.items()))
-    values = [value for _, value in group_deltas]
-    delta = mean(values)
-    interval = None
-    if len(values) > 1:
-        rng = random.Random(manifest.uncertainty_seed)
-        samples = sorted(mean(rng.choices(values, k=len(values))) for _ in range(2000))
-        interval = (samples[49], samples[1949])
-    if regressions or delta < -manifest.regression_tolerance:
-        outcome = "regression"
-    elif interval is None:
-        outcome = "insufficient-evidence"
-    elif interval[0] > manifest.minimum_gain:
-        outcome = "observed-gain-unqualified"
-    else:
-        outcome = "plateau-or-inconclusive"
-    if manifest.fixture_only and outcome == "observed-gain-unqualified":
-        outcome = "fixture-wiring-only"
-    overall = arms[baseline].evaluation.overall
-    return PairedComparison(
-        baseline.recipe_id,
-        axis,
-        baseline,
-        candidate,
-        manifest.metric,
-        manifest.seeds,
-        len(values),
-        overall.images,
-        overall.support,
-        tuple(sorted((k, v.support) for k, v in overall.per_class.items())),
-        group_deltas,
-        delta,
-        interval,
-        tuple(sorted(regressions)),
-        outcome,
-        manifest.fixture_only,
-    )
-
-
-def compare_experiment(
-    manifest: ExperimentManifest, evidence: tuple[ArmEvidence, ...]
-) -> tuple[PairedComparison, ...]:
-    """Compare only development evidence; final assessments never select an experiment."""
-    from dataclasses import replace
-
-    arms = {arm.cell: arm for arm in evidence}
-    if len(arms) != len(evidence) or set(arms) != set(manifest.cells()):
-        raise ValueError("experiment requires every paired cell exactly once")
-    if len({arm.training.request.run_id for arm in evidence}) != len(evidence):
-        raise ValueError("training run identities must be unique")
-    for arm in evidence:
-        validate_arm(manifest, arm)
-    comparisons = []
-    for cell in manifest.cells():
-        if cell.seed != manifest.seeds[0]:
-            continue
-        if cell.initialization == "warm-start":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, initialization="base"), cell, arms, "initialization"
-                )
-            )
-        if cell.augmentation_id != BASELINE.profile_id:
-            comparisons.append(
-                _compare(
-                    manifest,
-                    replace(cell, augmentation_id=BASELINE.profile_id),
-                    cell,
-                    arms,
-                    "augmentation",
-                )
-            )
-        if cell.cohort == "expanded":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, cohort="curated-only"), cell, arms, "training-cohort"
-                )
-            )
-    return tuple(comparisons)
