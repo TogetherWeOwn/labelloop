@@ -13,6 +13,247 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("side", (320, 640))
+@pytest.mark.parametrize(
+    "change",
+    (
+        "none",
+        "reuse-export",
+        "history-truncated",
+        "history-missing-first",
+        "history-extra",
+        "history-domain",
+        "history-tie",
+        "request",
+        "inputs",
+        "weights",
+        "copy",
+        "selection",
+        "retention",
+        "shape",
+        "observed-shape",
+        "original-inference-shape",
+        "original-inference-empty",
+        "original-inference-missing",
+        "observed-empty",
+        "export-bytes",
+        "export-policy",
+        "existing-snapshot",
+        "execute",
+        "execute-inputs",
+    ),
+)
+def test_experiment_collection_binds_delivered_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, side: int, change: str
+) -> None:
+    from unittest.mock import Mock
+
+    from labelloop_core.evaluation import EvaluationImage
+    from labelloop_worker_ml import experiments
+    from labelloop_worker_ml.export import ExportResult
+    from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest, write_record
+
+    # Reuse validated records; prediction/export are mocked, never model-quality evidence.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "packages/core/tests"))
+    from test_experiment_training_evidence import arm_case
+
+    frozen, reference = arm_case(side)
+    frozen = replace(frozen, epochs=2)
+    cell = reference.cell
+    backend = LocalUltralyticsBackend(
+        dataset=tmp_path / "compiled",
+        initialization=tmp_path / "base.pt",
+        output=tmp_path / "output",
+        validation_images=(EvaluationImage("dev", 32, 32, ()),),
+    )
+    image = backend.dataset / "images/val/dev.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"pinned image bytes")
+    samples = [
+        {"asset_id": "dev", "split": "val", "image_path": "images/val/dev.jpg"},
+        {"asset_id": "train", "split": "train", "image_path": "images/train/train.jpg"},
+    ]
+    dataset = {
+        "samples": samples,
+        "class_map": {"object": 0},
+        "file_hashes": {"images/val/dev.jpg": file_digest(image)},
+    }
+    epoch = 0 if change in ("history-truncated", "history-tie") else 1
+    weights = backend.output / f"trainer/weights/epoch{epoch}.pt"
+    weights.parent.mkdir(parents=True)
+    weights.write_bytes(b"selected weights")
+    weights.with_suffix(".onnx").write_bytes(b"static export")
+    checkpoint = replace(reference.training.selected, epoch=epoch, sha256=file_digest(weights))
+    earlier = replace(checkpoint, epoch=0, validation_map=0.25)
+    history = {
+        "history-truncated": (earlier,),
+        "history-missing-first": (checkpoint,),
+        "history-extra": (earlier, checkpoint, replace(earlier, epoch=2)),
+        "history-domain": (checkpoint, replace(earlier, epoch=2)),
+        "history-tie": (replace(checkpoint, epoch=1), checkpoint),
+    }.get(change, (earlier, checkpoint))
+    checkpoint = earlier if change == "history-truncated" else checkpoint
+    request = frozen.request(cell, reference.training.request.run_id)
+    training = replace(
+        reference.training,
+        request=request,
+        resolved_arguments=request.arguments(),
+        checkpoints=history,
+        selected=checkpoint,
+    )
+    report = replace(
+        reference.evaluation,
+        weights_sha256=checkpoint.sha256,
+        overall=replace(reference.evaluation.overall, map50_95=checkpoint.validation_map),
+    )
+    exported = ExportResult(
+        checkpoint.sha256,
+        file_digest(weights.with_suffix(".onnx")),
+        (1, 3, side, side),
+        training.request.policy,
+        1,
+        (1,),
+        0.01,
+        1e-5,
+        "fixture",
+        "fixture",
+    )
+    shapes = {stage: [[1, 3, side, side]] for stage in ("training", "validation", "inference")}
+    retention = [
+        {
+            "sample": "train.jpg",
+            "before": 1,
+            "after": 1,
+            "before_at_or_below_6px": 1,
+            "after_at_or_below_6px": 1,
+        }
+    ] * frozen.epochs
+    inputs = Mock(return_value=dataset)
+    predict = Mock(
+        side_effect=lambda *args: (
+            args[-1].append(
+                (1, 3, 640 if side == 320 else 320, side)
+                if change == "observed-shape"
+                else (1, 3, side, side)
+            )
+            or ()
+        )
+    )
+    if change == "observed-empty":
+        predict.side_effect = None
+        predict.return_value = ()
+    evaluate = Mock(return_value=report)
+    export = Mock(return_value=exported)
+    train = Mock(return_value=training)
+    monkeypatch.setattr(experiments, "validate_inputs", inputs)
+    monkeypatch.setattr(experiments, "predict_samples", predict)
+    monkeypatch.setattr(experiments, "EvaluationRunner", Mock(return_value=Mock(evaluate=evaluate)))
+    monkeypatch.setattr(experiments, "export_and_compare", export)
+    monkeypatch.setattr(backend, "train", train)
+    error = None
+    if change.startswith("history-") and change != "history-tie":
+        error = "checkpoint epoch domain"
+    elif change == "request":
+        request = replace(training.request, epochs=3)
+        training = replace(training, request=request, resolved_arguments=request.arguments())
+        error = "training request"
+    elif change in ("inputs", "execute-inputs"):
+        inputs.side_effect = ValueError("frozen inputs rejected")
+        error = "frozen inputs"
+    elif change == "weights":
+        weights.write_bytes(b"changed weights")
+        error = "checkpoint digest"
+    elif change == "copy":
+        image.write_bytes(b"changed image bytes")
+        error = "changed while copying"
+    elif change == "selection":
+        evaluate.return_value = replace(report, overall=replace(report.overall, map50_95=0.25))
+        error = "evaluation drift"
+    elif change == "retention":
+        retention[0]["after"] = 0
+        error = "lost targets"
+    elif change == "shape":
+        shapes["training"] = [[1, 3, 640 if side == 320 else 320, side]]
+        error = "shape"
+    elif change == "observed-shape":
+        error = "shape"
+    elif change == "original-inference-shape":
+        shapes["inference"] = [[1, 3, 640 if side == 320 else 320, side]]
+        error = "shape"
+    elif change in ("original-inference-empty", "original-inference-missing", "observed-empty"):
+        if change == "original-inference-empty":
+            shapes["inference"] = []
+        elif change == "original-inference-missing":
+            del shapes["inference"]
+        error = "inference tensor evidence"
+    elif change == "reuse-export":
+        error = "unbound export evidence"
+    elif change == "export-bytes":
+        weights.with_suffix(".onnx").write_bytes(b"changed export bytes")
+        error = "export artifact digest"
+    elif change == "export-policy":
+        exported = replace(exported, policy=replace(exported.policy, conf=0.2))
+        export.return_value = exported
+        error = "export"
+    elif change == "existing-snapshot":
+        (backend.output / "experiment-inputs").mkdir()
+        error = "exists"
+    write_record(backend.output / "tensor-shapes.json", shapes)
+    write_record(backend.output / "target-retention.json", retention)
+
+    def collect():
+        if change.startswith("execute"):
+            return experiments.execute_cell(frozen, cell, backend, run_id=training.request.run_id)
+        return experiments.collect_arm(
+            frozen,
+            cell,
+            backend,
+            training,
+            exported=exported if change == "reuse-export" else None,
+        )
+
+    if error:
+        with pytest.raises((ValueError, FileExistsError), match=error):
+            collect()
+        assert not (backend.output / "experiment-arm.json").exists()
+        train.assert_not_called()
+        if change.startswith("history-") or change in (
+            "request",
+            "inputs",
+            "execute-inputs",
+            "weights",
+            "reuse-export",
+        ):
+            assert not (backend.output / "experiment-inputs").exists()
+            predict.assert_not_called()
+            export.assert_not_called()
+        return
+    arm = collect()
+    assert arm.evaluation == report and arm.group_reports == (("dev", report),)
+    assert arm.training.selected == checkpoint and checkpoint.epoch == epoch
+    assert arm.retention == reference.retention * frozen.epochs
+    assert dict(arm.tensor_shapes)["inference"] == ((1, 3, side, side),) * 2
+    assert arm.export_sha256 == exported.export_sha256
+    assert (
+        json.loads((backend.output / "experiment-arm.json").read_text())["manifest_sha256"]
+        == frozen.digest()
+    )
+    snapshot = backend.output / "experiment-inputs"
+    assert (snapshot / "images/val/dev.jpg").read_bytes() == image.read_bytes()
+    assert predict.call_args.args[1] == snapshot
+    assert evaluate.call_count == 2
+    if change == "execute":
+        train.assert_called_once_with(training.request)
+        assert inputs.call_count == 2
+        assert (
+            json.loads((backend.output / "experiment-manifest.json").read_text())["sha256"]
+            == frozen.digest()
+        )
+    else:
+        train.assert_not_called()
+    assert export.call_args.kwargs["images"] == (snapshot / "images/val/dev.jpg",)
+
+
 @pytest.mark.parametrize(
     "change", ("none", "bytes", "missing", "extra", "file-link", "directory-link", "dangling-link")
 )
