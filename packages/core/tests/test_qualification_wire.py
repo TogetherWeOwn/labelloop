@@ -100,7 +100,7 @@ def test_historical_final_assessment_preserves_independence_and_qualification(
     release = model(side)
     final = report(release)
     if stored_pins:
-        final = replace(final, source_truth_sha256=tuple(tuple(row) for row in stored_pins))
+        final = replace(final, source_truth_sha256=tuple((row[0], row[1]) for row in stored_pins))
     context = qualification_context(release, final, PromotionPolicy(1, 0.9))
     payload = json.loads(dumps(context))
     historical_report = json.loads(context.current_final_test.assessments[0].report_json)

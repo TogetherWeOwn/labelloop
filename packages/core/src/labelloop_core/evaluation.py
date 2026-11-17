@@ -31,11 +31,19 @@ class EvaluationImage:
     revision: int | None = None
     source_sha256: str | None = None
 
+    def require_truth_metadata(self) -> None:
+        if self.revision is not None and (type(self.revision) is not int or self.revision < 1):
+            raise ValueError("frozen validation truth requires a positive integer revision")
+        if self.source_sha256 is not None:
+            if not isinstance(self.source_sha256, str):
+                raise ValueError("frozen validation truth requires a string source digest")
+            require_digest(self.source_sha256)
+
     def truth_digest(self) -> str:
         """Bind complete pre-crop truth to canonical pixels and annotation revision."""
-        if self.revision is None or self.revision < 1 or self.source_sha256 is None:
+        self.require_truth_metadata()
+        if self.revision is None or self.source_sha256 is None:
             raise ValueError("frozen validation truth requires revision and source digest")
-        require_digest(self.source_sha256)
         ordered = replace(self, objects=tuple(sorted(self.objects, key=lambda obj: obj.object_id)))
         payload = json.dumps(asdict(ordered), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -298,12 +306,7 @@ class EvaluationRunner:
         grouped: dict[str, list[Detection]] = {identifier: [] for identifier in sources}
         transforms: dict[str, list[AffineTransform]] = {identifier: [] for identifier in sources}
         for image in images:
-            if image.revision is not None and (
-                type(image.revision) is not int or image.revision < 1
-            ):
-                raise ValueError("frozen validation truth requires a positive integer revision")
-            if image.source_sha256 is not None:
-                require_digest(image.source_sha256)
+            image.require_truth_metadata()
             if any(obj.class_id not in self.class_ids for obj in image.objects):
                 raise ValueError("ground truth class outside the frozen catalog")
         for sample in derived:

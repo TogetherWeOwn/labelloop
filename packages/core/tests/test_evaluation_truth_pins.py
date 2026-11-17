@@ -91,6 +91,8 @@ def test_truth_pins_bind_complete_original_truth_even_outside_crop() -> None:
         {"revision": True},
         {"revision": 1.5},
         {"source_sha256": "bad"},
+        {"source_sha256": ["c"] * 64},
+        {"source_sha256": 123},
         {"revision": 0, "source_sha256": None},
         {"revision": None, "source_sha256": "bad"},
     ],
@@ -111,3 +113,5 @@ def test_present_but_invalid_truth_metadata_is_not_silently_unpinned(
     }[membership]
     with pytest.raises(ValueError):
         evaluate(images, side)
+    with pytest.raises(ValueError):
+        invalid.truth_digest()
