@@ -41,17 +41,44 @@ def test_training_evidence_accepts_frozen_recipes_and_negative_samples(side: int
     )
 
 
-def test_training_evidence_preserves_repeated_multi_epoch_observations() -> None:
-    frozen, arm = arm_case()
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("visits", [1, 2, 3])
+def test_training_evidence_requires_every_multi_epoch_visit(side: int, visits: int) -> None:
+    frozen, arm = arm_case(side)
     frozen = replace(frozen, epochs=2)
     request = frozen.request(arm.cell, arm.training.request.run_id)
     training = replace(arm.training, request=request, resolved_arguments=request.arguments())
-    validate_training_evidence(
-        frozen,
-        replace(
-            arm, manifest_sha256=frozen.digest(), training=training, retention=arm.retention * 2
-        ),
+    arm = replace(
+        arm, manifest_sha256=frozen.digest(), training=training, retention=arm.retention * visits
     )
+    if visits == frozen.epochs:
+        validate_training_evidence(frozen, arm)
+        lost = replace(arm.retention[-1], after=0)
+        with pytest.raises(ValueError, match="lost targets"):
+            validate_training_evidence(frozen, replace(arm, retention=(*arm.retention[:-1], lost)))
+    else:
+        with pytest.raises(ValueError, match="incomplete dataloader"):
+            validate_training_evidence(frozen, arm)
+
+
+def test_training_evidence_cannot_substitute_another_assets_visits() -> None:
+    frozen, arm = arm_case()
+    source = replace(frozen.sources[0], asset_id="second-train")
+    datasets = tuple(
+        replace(d, training_asset_ids=(*d.training_asset_ids, source.asset_id))
+        for d in frozen.datasets
+    )
+    frozen = replace(frozen, sources=(*frozen.sources, source), datasets=datasets, epochs=2)
+    request = frozen.request(arm.cell, arm.training.request.run_id)
+    training = replace(arm.training, request=request, resolved_arguments=request.arguments())
+    first = arm.retention[0]
+    second = replace(first, asset_id=source.asset_id)
+    arm = replace(
+        arm, manifest_sha256=frozen.digest(), training=training, retention=(first, second) * 2
+    )
+    validate_training_evidence(frozen, arm)
+    with pytest.raises(ValueError, match="incomplete dataloader"):
+        validate_training_evidence(frozen, replace(arm, retention=(first, second, first, first)))
 
 
 @pytest.mark.parametrize(
