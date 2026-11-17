@@ -1,4 +1,5 @@
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -56,6 +57,8 @@ def test_manifest_cells_and_digest_preserve_pins(expanded: bool) -> None:
     assert frozen.cohorts() == (("curated-only", "expanded") if expanded else ("curated-only",))
     assert frozen.digest() == replace(frozen).digest()
     assert frozen.digest() != replace(frozen, seeds=(2,)).digest()
+    assert frozen.critical_slices == ()
+    assert frozen.digest() != replace(frozen, critical_slices=("small",)).digest()
     assert {c.recipe_id for c in cells} == {"r320", "r640"}
     assert {c.seed for c in cells} == {0, 1}
     assert {c.initialization for c in cells} == {"base", "warm-start"}
@@ -105,6 +108,9 @@ def test_manifest_rejects_checkpoint_ancestry_and_membership_drift(kind: str) ->
         {"recipes": ()},
         {"seeds": (0, 0)},
         {"minimum_gain": float("nan")},
+        {"minimum_gain": Decimal("0.1")},
+        {"regression_tolerance": Decimal("0.1")},
+        {"critical_slices": (["small"],)},
         {"experiment_id": ""},
         {"class_map_sha256": "invalid"},
         {"metric": "unapproved"},
