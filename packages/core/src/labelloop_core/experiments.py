@@ -1,4 +1,4 @@
-"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
+"""Validated experiment manifests and evidence records; consumers own execution and gates."""
 
 import hashlib
 import json
@@ -308,6 +308,27 @@ class ArmEvidence:
     export_detections: int
 
 
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
+
+
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -499,27 +520,6 @@ def _validate_metric_support(metrics: Metrics) -> None:
         or (metrics.map50_95 is None) != (metrics.support == 0)
     ):
         raise ValueError("evaluation support drift or inconsistent metric support")
-
-
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
 
 
 def _support(metrics: Metrics) -> tuple[object, ...]:
