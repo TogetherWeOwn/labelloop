@@ -85,8 +85,9 @@ in scoring. Likewise, an arm without a non-vacuous export check (at least one
 operating-threshold detection) remains incomplete rather than being scored as
 qualified. A future negative-scene metric/export policy requires its own explicit
 contract; this harness does not weaken the existing M2 export guard to fill a
-comparison. Aggregate gains cannot conceal a class/critical-slice regression. Other outcomes distinguish observed unqualified
-gain, plateau/inconclusive evidence, regression and fixture-only wiring.
+comparison. Aggregate gains cannot conceal a class/critical-slice regression.
+Other outcomes distinguish observed unqualified gain, plateau/inconclusive
+evidence, regression and fixture-only wiring.
 
 Calibration and locked-final sets are never accepted as comparison evidence.
 Thresholds must be calibrated separately then pinned in the recipe policies.
@@ -102,14 +103,20 @@ experiment result promotes a model or satisfies that external gate.
 
 ## Verification
 
-- `packages/core/tests/test_experiments.py`: deterministic paired statistics,
-  curated/expanded cohorts, mirror safety, leakage, baseline drift, ancestry,
-  malformed/missing evidence, unsupported coverage, honest gains and regressions.
+- `packages/core/tests/test_experiment_manifest.py`: frozen inputs, source leakage,
+  ancestry, baseline constraints and request pins.
+- `packages/core/tests/test_experiment_reports.py`,
+  `test_experiment_training_evidence.py` and `test_experiment_arm_support.py`:
+  report identity, training audits, complete group support and critical slices.
+- `packages/core/tests/test_experiment_pairs.py` and `test_experiment_matrix.py`:
+  deterministic paired statistics, curated/expanded cohorts, complete matrix
+  validation, unsupported evidence, honest gains and regressions.
 - `workers/ml/tests/test_experiment_cpu.py`: eight one-epoch CPU cells (two sizes,
   base/warm and baseline/color alternative), no downloaded weights. It reuses the
   delivered M2 trainer, retention audit, evaluator and ONNX comparison.
 - The existing Actions `ml-smoke` job runs both M2 and this experiment test and
-  uploads JSON evidence. All full suites and real training run only on Actions.
+  uploads JSON evidence. Full-suite and CPU-fixture qualification runs on Actions;
+  the fixture makes no paid provider calls and does not qualify a real model.
 
 REA angle: reuse the delivered M2 records and the already-researched pinned
 Ultralytics transform behavior; no third-party code copied, trainer replaced,
