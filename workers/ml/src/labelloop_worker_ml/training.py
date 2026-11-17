@@ -47,6 +47,7 @@ def write_record(path: Path, value: Any) -> None:
 
 def verify_dataset_files(dataset: Path, manifest: dict) -> None:
     """Validate bytes and exact membership at every consumer of compiled artifacts."""
+    dataset = dataset.resolve()
     entries = tuple(dataset.rglob("*"))
     if any(path.is_symlink() for path in entries) or {
         path.relative_to(dataset).as_posix() for path in entries if path.is_file()

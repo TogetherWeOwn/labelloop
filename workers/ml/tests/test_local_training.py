@@ -61,6 +61,29 @@ def test_compiled_file_verifier_preserves_frozen_membership(tmp_path: Path, chan
         verify_dataset_files(dataset, manifest)
 
 
+@pytest.mark.parametrize("root_form", ("relative", "parent-components"))
+def test_compiled_file_verifier_normalizes_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_form: str
+) -> None:
+    from labelloop_worker_ml.training import file_digest, verify_dataset_files
+
+    dataset = tmp_path / "compiled"
+    dataset.mkdir()
+    sample = dataset / "sample.txt"
+    sample.write_text("frozen bytes")
+    manifest = {"file_hashes": {"sample.txt": file_digest(sample)}}
+    (dataset / "manifest.json").write_text(json.dumps(manifest))
+    if root_form == "relative":
+        monkeypatch.chdir(tmp_path)
+        root = Path("compiled")
+    else:
+        root = dataset / ".." / "compiled"
+    verify_dataset_files(root, manifest)
+    sample.write_text("changed bytes")
+    with pytest.raises(ValueError, match="file digest mismatch"):
+        verify_dataset_files(root, manifest)
+
+
 def test_ml_runtime_uses_paired_cpu_dependency_pins() -> None:
     import onnx
     import onnxruntime
