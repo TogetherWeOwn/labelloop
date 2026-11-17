@@ -1,4 +1,4 @@
-"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
+"""Validated experiment manifests and evidence records; consumers own execution and gates."""
 
 import hashlib
 import json
@@ -308,6 +308,27 @@ class ArmEvidence:
     export_detections: int
 
 
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
+
+
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -501,27 +522,6 @@ def _validate_metric_support(metrics: Metrics) -> None:
         raise ValueError("evaluation support drift or inconsistent metric support")
 
 
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
-
-
 def _support(metrics: Metrics) -> tuple[object, ...]:
     return (
         metrics.images,
@@ -542,15 +542,30 @@ def _compare(
 
     deltas: dict[str, list[float]] = {group: [] for group in manifest.development_groups()}
     regressions: set[str] = set()
+    reference = arms[baseline]
     for seed in manifest.seeds:
         left = arms[replace(baseline, seed=seed)]
         right = arms[replace(candidate, seed=seed)]
-        for a, b in (
-            (left.evaluation, right.evaluation),
-            *((dict(left.group_reports)[g], dict(right.group_reports)[g]) for g in deltas),
+        for anchor, a, b in (
+            (reference.evaluation, left.evaluation, right.evaluation),
+            *(
+                (
+                    dict(reference.group_reports)[g],
+                    dict(left.group_reports)[g],
+                    dict(right.group_reports)[g],
+                )
+                for g in deltas
+            ),
         ):
-            if _support(a.overall) != _support(b.overall):
+            if not _support(anchor.overall) == _support(a.overall) == _support(b.overall):
                 raise ValueError("paired ground-truth support drift")
+            for name in manifest.critical_slices:
+                if (
+                    not _support(anchor.slices[name])
+                    == _support(a.slices[name])
+                    == _support(b.slices[name])
+                ):
+                    raise ValueError("paired critical-slice support drift")
         for group in deltas:
             a_score = dict(left.group_reports)[group].overall.map50_95
             b_score = dict(right.group_reports)[group].overall.map50_95
@@ -568,9 +583,10 @@ def _compare(
             assert a_slice.map50_95 is not None and b_slice.map50_95 is not None
             if b_slice.map50_95 < a_slice.map50_95 - manifest.regression_tolerance:
                 regressions.add(f"slice:{name}:seed:{seed}")
-        if (left.training.ultralytics_version, left.training.torch_version) != (
-            right.training.ultralytics_version,
-            right.training.torch_version,
+        environment = (reference.training.ultralytics_version, reference.training.torch_version)
+        if any(
+            (arm.training.ultralytics_version, arm.training.torch_version) != environment
+            for arm in (left, right)
         ):
             raise ValueError("paired training environment drift")
     group_deltas = tuple((group, mean(values)) for group, values in sorted(deltas.items()))
@@ -610,45 +626,3 @@ def _compare(
         outcome,
         manifest.fixture_only,
     )
-
-
-def compare_experiment(
-    manifest: ExperimentManifest, evidence: tuple[ArmEvidence, ...]
-) -> tuple[PairedComparison, ...]:
-    """Compare only development evidence; final assessments never select an experiment."""
-    from dataclasses import replace
-
-    arms = {arm.cell: arm for arm in evidence}
-    if len(arms) != len(evidence) or set(arms) != set(manifest.cells()):
-        raise ValueError("experiment requires every paired cell exactly once")
-    if len({arm.training.request.run_id for arm in evidence}) != len(evidence):
-        raise ValueError("training run identities must be unique")
-    for arm in evidence:
-        validate_arm(manifest, arm)
-    comparisons = []
-    for cell in manifest.cells():
-        if cell.seed != manifest.seeds[0]:
-            continue
-        if cell.initialization == "warm-start":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, initialization="base"), cell, arms, "initialization"
-                )
-            )
-        if cell.augmentation_id != BASELINE.profile_id:
-            comparisons.append(
-                _compare(
-                    manifest,
-                    replace(cell, augmentation_id=BASELINE.profile_id),
-                    cell,
-                    arms,
-                    "augmentation",
-                )
-            )
-        if cell.cohort == "expanded":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, cohort="curated-only"), cell, arms, "training-cohort"
-                )
-            )
-    return tuple(comparisons)
