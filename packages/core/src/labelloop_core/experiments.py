@@ -8,7 +8,13 @@ from typing import Literal
 
 from .evaluation import EvaluationReport
 from .qualification_data import require_names, require_probability
-from .training import AugmentationProfile, InferencePolicy, TrainingResult, require_digest
+from .training import (
+    AugmentationProfile,
+    InferencePolicy,
+    TrainingRequest,
+    TrainingResult,
+    require_digest,
+)
 
 SourceRole = Literal["curated", "expansion", "development", "calibration", "locked_final_test"]
 Cohort = Literal["curated-only", "expanded"]
@@ -242,6 +248,33 @@ class ExperimentManifest:
     def digest(self) -> str:
         payload = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), allow_nan=False)
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    def request(self, cell: Cell, run_id: str) -> TrainingRequest:
+        if type(cell.seed) is not int or cell not in self.cells():
+            raise ValueError("cell is outside the frozen experiment")
+        recipe = next(r for r in self.recipes if r.recipe_id == cell.recipe_id)
+        dataset = next(
+            d for d in self.datasets if (d.recipe_id, d.cohort) == (cell.recipe_id, cell.cohort)
+        )
+        profile = next(p for p in self.augmentations if p.profile_id == cell.augmentation_id)
+        return TrainingRequest(
+            run_id,
+            self.project_id,
+            recipe.recipe_id,
+            dataset.release_id,
+            dataset.manifest_sha256,
+            self.class_map_sha256,
+            self.split_assignment_version,
+            self.approved_base_sha256
+            if cell.initialization == "base"
+            else recipe.warm_start_sha256,
+            recipe.policy,
+            self.epochs,
+            self.batch,
+            cell.seed,
+            augmentation=profile,
+            class_mirror_safety=self.class_mirror_safety,
+        )
 
 
 @dataclass(frozen=True, slots=True)
