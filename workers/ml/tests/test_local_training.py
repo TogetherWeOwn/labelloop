@@ -100,6 +100,10 @@ def test_compiled_file_verifier_normalizes_root(
         "role",
         "evaluation",
         "classes",
+        "loader-train",
+        "loader-val",
+        "loader-extra",
+        "loader-location",
     ),
 )
 def test_experiment_inputs_bind_compiler_and_canonical_truth(
@@ -116,7 +120,7 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
         RecipePin,
         SourcePin,
     )
-    from labelloop_core.training import InferencePolicy
+    from labelloop_core.training import AugmentationProfile, InferencePolicy
     from labelloop_worker_ml.experiments import validate_inputs
     from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest
 
@@ -124,10 +128,16 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     from load_canonical import FixtureDomain
 
     fixture = FixtureDomain("cc0-interface")
-    dataset = tmp_path / "compiled"
+    variants = {
+        n: compile_dataset(
+            fixture.release, f"full-letterbox-{n}-v1", tmp_path / f"compiled-{n}", fixture.images
+        )
+        for n in (320, 640)
+    }
+    dataset = tmp_path / f"compiled-{side}"
     recipe_id = f"full-letterbox-{side}-v1"
-    compiled = compile_dataset(fixture.release, recipe_id, dataset, fixture.images)
-    images = tuple(
+    compiled = variants[side]
+    truth = tuple(
         EvaluationImage(
             s.asset.asset_id,
             s.asset.width,
@@ -140,29 +150,33 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
             source_sha256=s.asset.sha256,
         )
         for s in fixture.release.samples
-        if s.split == "val"
     )
+    truths = {image.asset_id: image for image in truth}
+    images = tuple(truths[s.asset.asset_id] for s in fixture.release.samples if s.split == "val")
 
     def digest(value: str) -> str:
         return hashlib.sha256(value.encode()).hexdigest()
 
     sources = tuple(
         SourcePin(
-            s["asset_id"],
-            s["group_id"],
-            s["source_sha256"],
-            s["source_truth_sha256"],
-            {"train": "curated", "val": "development", "test": "locked_final_test"}[s["split"]],
+            s.asset.asset_id,
+            s.group_id,
+            s.asset.sha256,
+            truths[s.asset.asset_id].truth_digest(),
+            {"train": "curated", "val": "development", "test": "locked_final_test"}[s.split],
         )
-        for s in compiled["samples"]
+        for s in fixture.release.samples
     )
-    recipe = RecipePin(
-        recipe_id,
-        digest(json.dumps(compiled["recipe"], sort_keys=True, separators=(",", ":"))),
-        InferencePolicy(side),
-        digest("warm"),
-        digest("base"),
-        tuple(sorted({s.group_id for s in sources if s.role == "curated"})),
+    recipes = tuple(
+        RecipePin(
+            f"full-letterbox-{n}-v1",
+            digest(json.dumps(value["recipe"], sort_keys=True, separators=(",", ":"))),
+            InferencePolicy(n),
+            digest("warm"),
+            digest("base"),
+            tuple(sorted({s.group_id for s in sources if s.role == "curated"})),
+        )
+        for n, value in variants.items()
     )
     manifest = ExperimentManifest(
         "input-controls",
@@ -172,17 +186,18 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
         fixture.release.assignment.assignment_version,
         digest("base"),
         sources,
-        (recipe,),
-        (
+        recipes,
+        tuple(
             DatasetPin(
-                recipe_id,
+                recipe.recipe_id,
                 "curated-only",
                 fixture.release.release_id,
-                file_digest(dataset / "manifest.json"),
+                file_digest(tmp_path / f"compiled-{recipe.policy.imgsz}" / "manifest.json"),
                 tuple(s.asset_id for s in sources if s.role == "curated"),
-            ),
+            )
+            for recipe in recipes
         ),
-        (BASELINE,),
+        (BASELINE, AugmentationProfile("color-v1", hsv_v=0.2)),
         (0,),
         fixture_only=True,
     )
@@ -192,7 +207,7 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
         output=tmp_path / "unused-output",
         validation_images=images,
     )
-    cell = manifest.cells()[0]
+    cell = next(cell for cell in manifest.cells() if cell.recipe_id == recipe_id)
     assert validate_inputs(manifest, cell, backend) == compiled
     assert not backend.output.exists()
     if change == "none":
@@ -223,7 +238,25 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     elif change == "classes":
         manifest = replace(manifest, class_map_sha256=digest("other classes"))
     else:
-        if change == "recipe":
+        if change in {"loader-train", "loader-val"}:
+            from ultralytics.utils import YAML
+
+            data = YAML.load(dataset / "data.yaml")
+            split = change.removeprefix("loader-")
+            data[split] = "images/val" if split == "train" else "images/train"
+            YAML.save(dataset / "data.yaml", data)
+            compiled["file_hashes"]["data.yaml"] = file_digest(dataset / "data.yaml")
+        elif change == "loader-extra":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            extra = dataset / "images/train/unlisted.png"
+            extra.write_bytes((dataset / sample["image_path"]).read_bytes())
+            compiled["file_hashes"]["images/train/unlisted.png"] = file_digest(extra)
+        elif change == "loader-location":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            sample["image_path"] = next(
+                s["image_path"] for s in compiled["samples"] if s["split"] == "val"
+            )
+        elif change == "recipe":
             compiled["recipe"]["min_target_px"] = 99
         elif change in {"train", "val"}:
             compiled["samples"] = [s for s in compiled["samples"] if s["split"] != change]
@@ -238,14 +271,16 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
         (dataset / "manifest.json").write_text(json.dumps(compiled))
         manifest = replace(
             manifest,
-            datasets=(
-                replace(
-                    manifest.datasets[0],
-                    dataset_manifest_sha256=file_digest(dataset / "manifest.json"),
-                ),
+            datasets=tuple(
+                replace(pin, manifest_sha256=file_digest(dataset / "manifest.json"))
+                if pin.recipe_id == recipe_id
+                else pin
+                for pin in manifest.datasets
             ),
         )
-    with pytest.raises(ValueError, match=errors[change]):
+    with pytest.raises(
+        ValueError, match="loader" if change.startswith("loader-") else errors[change]
+    ):
         validate_inputs(manifest, cell, backend)
     assert not backend.output.exists()
 

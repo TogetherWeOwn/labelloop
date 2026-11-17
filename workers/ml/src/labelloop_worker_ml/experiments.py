@@ -1,28 +1,13 @@
-"""Execute one caller-selected frozen cell through the existing controlled backend."""
+"""Validate frozen experiment inputs before a caller dispatches controlled training."""
 
 import hashlib
 import json
-import shutil
-from dataclasses import asdict
 from pathlib import Path
 
-from labelloop_core.evaluation import EvaluationRunner
-from labelloop_core.experiments import (
-    ArmEvidence,
-    Cell,
-    ExperimentManifest,
-    RetentionObservation,
-    validate_arm,
-)
-from labelloop_core.training import TrainingResult
-from labelloop_worker_ml.export import ExportResult, export_and_compare
-from labelloop_worker_ml.training import (
-    LocalUltralyticsBackend,
-    file_digest,
-    predict_samples,
-    verify_dataset_files,
-    write_record,
-)
+from ultralytics.utils import YAML
+
+from labelloop_core.experiments import Cell, ExperimentManifest
+from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest, verify_dataset_files
 
 
 def validate_inputs(
@@ -53,6 +38,18 @@ def validate_inputs(
         s["asset_id"] for s in dataset["samples"] if s["split"] == "val"
     } != dev_ids:
         raise ValueError("compiled membership differs from experiment cohort")
+    loader = YAML.load(backend.dataset / "data.yaml")
+    for split in ("train", "val"):
+        paths = {s["image_path"] for s in dataset["samples"] if s["split"] == split}
+        loaded = {
+            name for name in dataset["file_hashes"] if Path(name).parts[:2] == ("images", split)
+        }
+        if (
+            loader.get(split) != f"images/{split}"
+            or paths != loaded
+            or any(Path(path).parent != Path("images") / split for path in paths)
+        ):
+            raise ValueError("compiled loader membership differs from experiment")
     for sample in dataset["samples"]:
         pin = pins.get(sample["asset_id"])
         if pin is None or (
@@ -72,127 +69,3 @@ def validate_inputs(
     ) != set(dict(manifest.class_mirror_safety)):
         raise ValueError("experiment class map mismatch")
     return dataset
-
-
-def collect_arm(
-    manifest: ExperimentManifest,
-    cell: Cell,
-    backend: LocalUltralyticsBackend,
-    result: TrainingResult,
-    *,
-    exported: ExportResult | None = None,
-) -> ArmEvidence:
-    """Also accepts already-delivered records; never retrains a completed cell."""
-    expected = manifest.request(cell, result.request.run_id)
-    if result.request != expected:
-        raise ValueError("training request differs from frozen experiment")
-    dataset = validate_inputs(manifest, cell, backend)
-    weights = backend.output / "trainer" / "weights" / f"epoch{result.selected.epoch}.pt"
-    if file_digest(weights) != result.selected.sha256:
-        raise ValueError("selected checkpoint digest mismatch")
-    samples = [s for s in dataset["samples"] if s["split"] == "val"]
-    # Inference/export read a private snapshot, never the mutable compiled directory.
-    snapshot = backend.output / "experiment-inputs"
-    snapshot.mkdir(exist_ok=False)
-    for sample in samples:
-        relative = sample["image_path"]
-        if relative not in dataset["file_hashes"]:
-            raise ValueError("experiment image is outside frozen file membership")
-        target = snapshot / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(backend.dataset / relative, target)
-        if file_digest(target) != dataset["file_hashes"][relative]:
-            raise ValueError("compiled dataset changed while copying experiment inputs")
-    shapes = json.loads((backend.output / "tensor-shapes.json").read_text())
-    observed: list[tuple[int, ...]] = []
-    classes = tuple(sorted(dataset["class_map"], key=dataset["class_map"].__getitem__))
-    derived = predict_samples(weights, snapshot, samples, classes, expected.policy, observed)
-    runner = EvaluationRunner(classes, expected.policy)
-    arguments = {
-        "dataset_release_id": expected.dataset_release_id,
-        "recipe_id": expected.recipe_id,
-        "weights_sha256": result.selected.sha256,
-        "class_map_sha256": expected.class_map_sha256,
-        "role": "development",
-    }
-    report = runner.evaluate(
-        images=backend.validation_images,
-        derived=derived,
-        run_id=result.selected.evaluation_run_id,
-        **arguments,
-    )
-    if report.overall.map50_95 != result.selected.validation_map:
-        raise ValueError("selected checkpoint evaluation drift")
-    group_reports = []
-    for group in manifest.development_groups():
-        ids = {
-            s.asset_id for s in manifest.sources if s.role == "development" and s.group_id == group
-        }
-        group_reports.append(
-            (
-                group,
-                runner.evaluate(
-                    images=tuple(i for i in backend.validation_images if i.asset_id in ids),
-                    derived=tuple(d for d in derived if d.asset_id in ids),
-                    run_id=f"{result.selected.evaluation_run_id}-group-{group}",
-                    **arguments,
-                ),
-            )
-        )
-    if exported is None:
-        exported = export_and_compare(
-            weights=weights,
-            expected_weights_sha256=result.selected.sha256,
-            images=tuple(snapshot / s["image_path"] for s in samples),
-            policy=expected.policy,
-            evidence=backend.output / "experiment-export.json",
-        )
-    if file_digest(weights.with_suffix(".onnx")) != exported.export_sha256:
-        raise ValueError("export artifact digest mismatch")
-    sample_ids = {
-        Path(s["image_path"]).name: s["asset_id"]
-        for s in dataset["samples"]
-        if s["split"] == "train"
-    }
-    retention = tuple(
-        RetentionObservation(
-            sample_ids[r["sample"]],
-            r["before"],
-            r["after"],
-            r["before_at_or_below_6px"],
-            r["after_at_or_below_6px"],
-        )
-        for r in json.loads((backend.output / "target-retention.json").read_text())
-    )
-    arm = ArmEvidence(
-        manifest.digest(),
-        cell,
-        result,
-        report,
-        tuple(group_reports),
-        retention,
-        tuple((stage, tuple(tuple(shape) for shape in values)) for stage, values in shapes.items()),
-        exported.export_sha256,
-        exported.weights_sha256,
-        exported.static_input_signature,
-        exported.policy,
-        exported.sample_count,
-        sum(exported.detection_counts),
-    )
-    validate_arm(manifest, arm)
-    write_record(backend.output / "experiment-arm.json", asdict(arm))
-    return arm
-
-
-def execute_cell(
-    manifest: ExperimentManifest, cell: Cell, backend: LocalUltralyticsBackend, *, run_id: str
-) -> ArmEvidence:
-    """No scheduling, paid dispatch, checkpoint download or controller state changes."""
-    request = manifest.request(cell, run_id)
-    validate_inputs(manifest, cell, backend)
-    result = backend.train(request)
-    write_record(
-        backend.output / "experiment-manifest.json",
-        {"sha256": manifest.digest(), "manifest": asdict(manifest)},
-    )
-    return collect_arm(manifest, cell, backend, result)
