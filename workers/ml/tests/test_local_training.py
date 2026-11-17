@@ -104,6 +104,19 @@ def test_compiled_file_verifier_normalizes_root(
         "loader-val",
         "loader-extra",
         "loader-location",
+        "negative",
+        *(
+            f"{kind}-{split}"
+            for kind in (
+                "label-missing",
+                "label-mismatch",
+                "label-extra",
+                "duplicate-source",
+                "duplicate-record",
+                "shared-image",
+            )
+            for split in ("train", "val")
+        ),
     ),
 )
 def test_experiment_inputs_bind_compiler_and_canonical_truth(
@@ -128,6 +141,14 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     from load_canonical import FixtureDomain
 
     fixture = FixtureDomain("cc0-interface")
+    if change == "negative":
+        fixture.release = replace(
+            fixture.release,
+            samples=tuple(
+                replace(s, revision=replace(s.revision, objects=())) if s.split == "train" else s
+                for s in fixture.release.samples
+            ),
+        )
     variants = {
         n: compile_dataset(
             fixture.release, f"full-letterbox-{n}-v1", tmp_path / f"compiled-{n}", fixture.images
@@ -210,7 +231,12 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     cell = next(cell for cell in manifest.cells() if cell.recipe_id == recipe_id)
     assert validate_inputs(manifest, cell, backend) == compiled
     assert not backend.output.exists()
-    if change == "none":
+    if change == "negative":
+        negatives = [s for s in compiled["samples"] if s["split"] == "train"]
+        assert negatives and all(s["verified_negative"] for s in negatives)
+        assert all((dataset / s["label_path"]).read_bytes() == b"" for s in negatives)
+        assert all(s["label_path"] in compiled["file_hashes"] for s in negatives)
+    if change in {"none", "negative"}:
         return
     errors = {
         "manifest": "manifest digest",
@@ -238,7 +264,43 @@ def test_experiment_inputs_bind_compiler_and_canonical_truth(
     elif change == "classes":
         manifest = replace(manifest, class_map_sha256=digest("other classes"))
     else:
-        if change in {"loader-train", "loader-val"}:
+        if change.startswith(("label-", "duplicate-", "shared-")):
+            kind, split = change.rsplit("-", 1)
+            sample = next(s for s in compiled["samples"] if s["split"] == split)
+            if kind == "label-missing":
+                label = dataset / sample["label_path"]
+                assert label.read_bytes()
+                label.unlink()
+                del compiled["file_hashes"][sample["label_path"]]
+            elif kind == "label-mismatch":
+                sample["label_path"] = "labels/other.txt"
+            elif kind == "label-extra":
+                extra = f"labels/{split}/extra.txt"
+                (dataset / extra).write_text("")
+                compiled["file_hashes"][extra] = file_digest(dataset / extra)
+            elif kind == "duplicate-source":
+                duplicate = dict(sample)
+                for key, folder, suffix in (
+                    ("image_path", "images", ".jpg"),
+                    ("label_path", "labels", ".txt"),
+                ):
+                    relative = f"{folder}/{split}/duplicate{suffix}"
+                    (dataset / relative).write_bytes((dataset / sample[key]).read_bytes())
+                    compiled["file_hashes"][relative] = file_digest(dataset / relative)
+                    duplicate[key] = relative
+                compiled["samples"].append(duplicate)
+            elif kind == "duplicate-record":
+                compiled["samples"].append(dict(sample))
+            else:
+                other = next(
+                    s for s in compiled["samples"] if s["split"] == split and s is not sample
+                )
+                old = other["image_path"]
+                (dataset / old).unlink()
+                del compiled["file_hashes"][old]
+                other["image_path"] = sample["image_path"]
+            errors[change] = "compiled membership" if kind.startswith("duplicate-") else "loader"
+        elif change in {"loader-train", "loader-val"}:
             from ultralytics.utils import YAML
 
             data = YAML.load(dataset / "data.yaml")
