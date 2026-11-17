@@ -5,7 +5,7 @@ including aggregate scores or a pass/fail bit. A failed request is not permissio
 not to record a real exposure: record it, then account for adaptation separately.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from .evaluation import EvaluationReport
@@ -240,9 +240,15 @@ class FinalTestState:
             or report.dataset_release_id != self.dataset.release_id
         ):
             raise ValueError("qualification requires the declared locked final test")
+        report_records = {canonical_record(report)}
+        if report.source_truth_sha256 == ():
+            # Only the absent legacy field is equivalent to empty pins; all other bytes match.
+            legacy = asdict(report)
+            del legacy["source_truth_sha256"]
+            report_records.add(canonical_record(legacy))
         if not any(
             item.selection.release_sha256 == record_sha256(release)
-            and item.report_json == canonical_record(report)
+            and item.report_json in report_records
             for item in self.assessments
         ):
             raise ValueError("missing recorded final-test exposure for the selected release")

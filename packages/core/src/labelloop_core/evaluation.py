@@ -298,6 +298,12 @@ class EvaluationRunner:
         grouped: dict[str, list[Detection]] = {identifier: [] for identifier in sources}
         transforms: dict[str, list[AffineTransform]] = {identifier: [] for identifier in sources}
         for image in images:
+            if image.revision is not None and (
+                type(image.revision) is not int or image.revision < 1
+            ):
+                raise ValueError("frozen validation truth requires a positive integer revision")
+            if image.source_sha256 is not None:
+                require_digest(image.source_sha256)
             if any(obj.class_id not in self.class_ids for obj in image.objects):
                 raise ValueError("ground truth class outside the frozen catalog")
         for sample in derived:

@@ -83,12 +83,31 @@ def test_truth_pins_bind_complete_original_truth_even_outside_crop() -> None:
         )
 
 
-@pytest.mark.parametrize("change", [{"revision": 0}, {"source_sha256": "bad"}])
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"revision": 0},
+        {"revision": True},
+        {"revision": 1.5},
+        {"source_sha256": "bad"},
+        {"revision": 0, "source_sha256": None},
+        {"revision": None, "source_sha256": "bad"},
+    ],
+)
+@pytest.mark.parametrize("membership", ["single", "invalid-first", "invalid-last"])
 def test_present_but_invalid_truth_metadata_is_not_silently_unpinned(
-    change: dict[str, object],
+    side: int, change: dict[str, object], membership: str
 ) -> None:
     from typing import Any, cast
 
     image = EvaluationImage("source", 100, 100, (), revision=1, source_sha256="c" * 64)
+    invalid = replace(image, **cast(Any, change))
+    legacy = EvaluationImage("legacy", 100, 100, ())
+    images = {
+        "single": (invalid,),
+        "invalid-first": (invalid, legacy),
+        "invalid-last": (legacy, invalid),
+    }[membership]
     with pytest.raises(ValueError):
-        evaluate((replace(image, **cast(Any, change)),), 320)
+        evaluate(images, side)
