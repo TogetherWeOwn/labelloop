@@ -1,4 +1,4 @@
-"""Validated experiment manifests and evidence records; consumers own execution and gates."""
+"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
 
 import hashlib
 import json
@@ -308,27 +308,6 @@ class ArmEvidence:
     export_detections: int
 
 
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
-
-
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -522,6 +501,27 @@ def _validate_metric_support(metrics: Metrics) -> None:
         raise ValueError("evaluation support drift or inconsistent metric support")
 
 
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
+
+
 def _support(metrics: Metrics) -> tuple[object, ...]:
     return (
         metrics.images,
@@ -626,3 +626,45 @@ def _compare(
         outcome,
         manifest.fixture_only,
     )
+
+
+def compare_experiment(
+    manifest: ExperimentManifest, evidence: tuple[ArmEvidence, ...]
+) -> tuple[PairedComparison, ...]:
+    """Compare only development evidence; final assessments never select an experiment."""
+    from dataclasses import replace
+
+    arms = {arm.cell: arm for arm in evidence}
+    if len(arms) != len(evidence) or set(arms) != set(manifest.cells()):
+        raise ValueError("experiment requires every paired cell exactly once")
+    if len({arm.training.request.run_id for arm in evidence}) != len(evidence):
+        raise ValueError("training run identities must be unique")
+    for arm in evidence:
+        validate_arm(manifest, arm)
+    comparisons = []
+    for cell in manifest.cells():
+        if cell.seed != manifest.seeds[0]:
+            continue
+        if cell.initialization == "warm-start":
+            comparisons.append(
+                _compare(
+                    manifest, replace(cell, initialization="base"), cell, arms, "initialization"
+                )
+            )
+        if cell.augmentation_id != BASELINE.profile_id:
+            comparisons.append(
+                _compare(
+                    manifest,
+                    replace(cell, augmentation_id=BASELINE.profile_id),
+                    cell,
+                    arms,
+                    "augmentation",
+                )
+            )
+        if cell.cohort == "expanded":
+            comparisons.append(
+                _compare(
+                    manifest, replace(cell, cohort="curated-only"), cell, arms, "training-cohort"
+                )
+            )
+    return tuple(comparisons)
