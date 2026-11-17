@@ -187,9 +187,10 @@ def test_paired_results_are_per_recipe_seed_group_and_never_establish_m6_exit() 
     assert replace(manifest, uncertainty_seed=2).digest() != manifest.digest()
 
 
-def test_observed_gain_still_requires_external_adjudicated_quality_and_declared_metric() -> None:
+def test_observed_gain_remains_unqualified_and_never_establishes_m6_exit() -> None:
     manifest = experiment(fixture=False)
     results = compare_experiment(manifest, evidence(manifest))
+    assert len(results) == 8
     assert all(
         r.outcome == "observed-gain-unqualified" and not r.m6_exit_established for r in results
     )
