@@ -159,6 +159,7 @@ tiers:
     - "packages/platform/tests/test_sync_transport.py"
     - "packages/core/tests/test_registry.py"
     - "packages/core/tests/test_experiment_manifest.py"
+    - "packages/core/tests/test_experiment_reports.py"
     # Agent instructions, skills and tool permissions (nested too).
     - "AGENTS.md"
     - "**/AGENTS.md"

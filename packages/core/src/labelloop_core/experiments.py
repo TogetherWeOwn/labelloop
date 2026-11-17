@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass
 from itertools import product
 from typing import Literal
@@ -13,6 +14,7 @@ from .training import (
     InferencePolicy,
     TrainingRequest,
     TrainingResult,
+    argument_diff,
     require_digest,
 )
 
@@ -380,3 +382,63 @@ def validate_report(
                         require_probability(value)
                     except ValueError as error:
                         raise ValueError("nonfinite or invalid evaluation metric") from error
+
+
+def validate_training_evidence(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
+    """Validate frozen training, dataloader and export evidence, not evaluation quality."""
+    if arm.manifest_sha256 != manifest.digest():
+        raise ValueError("experiment manifest digest mismatch")
+    expected = manifest.request(arm.cell, arm.training.request.run_id)
+    if arm.training.request != expected:
+        raise ValueError("training request differs from frozen experiment")
+    if argument_diff(expected.arguments(), arm.training.resolved_arguments):
+        raise ValueError("args_mismatch")
+    training_ids = set(
+        next(
+            d.training_asset_ids
+            for d in manifest.datasets
+            if (d.recipe_id, d.cohort) == (arm.cell.recipe_id, arm.cell.cohort)
+        )
+    )
+    # The compiler emits one derivative per asset/recipe; the controlled CPU loader
+    # visits each once per epoch (workers=0, no native tiling or scene composition).
+    visits = Counter(r.asset_id for r in arm.retention)
+    if visits != {asset_id: expected.epochs for asset_id in training_ids}:
+        raise ValueError("incomplete dataloader retention audit")
+    for observation in arm.retention:
+        counts = (
+            observation.before,
+            observation.after,
+            observation.before_small,
+            observation.after_small,
+        )
+        if any(type(count) is not int or count < 0 for count in counts) or (
+            observation.before != observation.after
+            or observation.before_small > observation.before
+            or observation.after_small > observation.after
+        ):
+            raise ValueError("dataloader lost targets or invalid retention counts")
+    shapes = dict(arm.tensor_shapes)
+    if (
+        len(shapes) != len(arm.tensor_shapes)
+        or set(shapes) != {"training", "validation", "inference"}
+        or not all(shapes.values())
+    ):
+        raise ValueError("incomplete actual tensor evidence")
+    for values in shapes.values():
+        for shape in values:
+            if any(type(dimension) is not int for dimension in shape):
+                raise ValueError("actual tensor dimensions must be integers")
+            expected.policy.assert_shape(shape, stride=32)
+    require_digest(arm.export_sha256)
+    if (
+        arm.export_weights_sha256 != arm.training.selected.sha256
+        or arm.export_policy != expected.policy
+        or arm.export_signature != (1, 3, expected.policy.imgsz, expected.policy.imgsz)
+        or any(type(dimension) is not int for dimension in arm.export_signature)
+        or any(
+            type(count) is not int or count < 1
+            for count in (arm.export_samples, arm.export_detections)
+        )
+    ):
+        raise ValueError("export contract or checkpoint mismatch")
