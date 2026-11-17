@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 import psycopg
+from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -68,10 +69,34 @@ class JobStore:
         *,
         max_attempts: int = 3,
     ) -> str:
+        with self.connect() as conn, conn.transaction():
+            return self.enqueue_in_transaction(
+                conn, project_key, operation_key, kind, payload, max_attempts=max_attempts
+            )
+
+    @staticmethod
+    def enqueue_in_transaction(
+        connection: psycopg.Connection,
+        project_key: str,
+        operation_key: str,
+        kind: str,
+        payload: dict,
+        *,
+        max_attempts: int = 3,
+    ) -> str:
+        """Append queue intent inside the caller's active transaction, without committing.
+
+        The caller owns resource authorization, aggregate/retry locks and audit writes.
+        No connection is opened, closed or committed here. An idle connection is refused
+        even with autocommit off: accidentally starting a new transaction would not prove
+        that the caller's state and audit changes share this transaction.
+        """
+        if connection.info.transaction_status != TransactionStatus.INTRANS:
+            raise ValueError("enqueue requires an active caller transaction")
         if not all((project_key, operation_key, kind)) or not 1 <= max_attempts <= 10:
             raise ValueError("jobs need scoped identity and 1..10 attempts")
         payload = json.loads(canonical(payload))
-        with self.connect() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+        with connection.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "INSERT INTO worker_job(job_id,project_key,operation_key,kind,input,max_attempts) "
                 "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (project_key,operation_key) DO NOTHING",

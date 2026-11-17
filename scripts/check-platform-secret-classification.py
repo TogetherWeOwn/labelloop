@@ -49,9 +49,55 @@ def check(image: str) -> None:
         ("other-path", {Path("other.json"): placeholder}, config, True),
         ("other-key", {Path("other.json"): payload}, config, True),
     ]
+    cases = [(*case, "private-key") for case in cases]
+    retry_path = Path("apps/api/tests/test_management_canonical_db.py")
+    retry_literal = "compile-evaluation-640"
+    retry = f'compile_request(compilation, release_id, key="{retry_literal}")\n'
+    # Stay inside the unchanged default detector's token-length bound.
+    retry_canary = base64.b64encode(b"public generic scanner canary, never a credential").decode()
+    changed = retry.replace(retry_literal, retry_canary)
+    cases += [
+        (
+            "retry-upstream-default",
+            {retry_path: retry},
+            'title = "baseline"\n[extend]\nuseDefault = true\n',
+            True,
+            "generic-api-key",
+        ),
+        ("retry-fixture", {retry_path: retry}, config, False, "generic-api-key"),
+        ("retry-changed", {retry_path: changed}, config, True, "generic-api-key"),
+        (
+            "retry-prefix",
+            {retry_path: retry.replace(retry_literal, "x" + retry_literal)},
+            config,
+            True,
+            "generic-api-key",
+        ),
+        (
+            "retry-suffix",
+            {retry_path: retry.replace(retry_literal, retry_literal + retry_canary)},
+            config,
+            True,
+            "generic-api-key",
+        ),
+        (
+            "retry-adjacent",
+            {retry_path: retry + changed},
+            config,
+            True,
+            "generic-api-key",
+        ),
+        (
+            "retry-other-path",
+            {Path("other.py"): retry},
+            config,
+            True,
+            "generic-api-key",
+        ),
+    ]
     identities = []
     with tempfile.TemporaryDirectory(prefix="platform-scanner-regression-") as temporary:
-        for name, files, policy, expected_finding in cases:
+        for name, files, policy, expected_finding, rule_id in cases:
             repo = Path(temporary) / name
             repo.mkdir()
             for path, content in files.items():
@@ -112,11 +158,11 @@ def check(image: str) -> None:
             if result.returncode not in (0, 1):
                 raise RuntimeError(f"Scanner unavailable for {name}: exit {result.returncode}")
             findings = json.loads((repo / "report.json").read_text())
-            detected = any(finding["RuleID"] == "private-key" for finding in findings)
+            detected = any(finding["RuleID"] == rule_id for finding in findings)
             if result.returncode != int(expected_finding) or detected != expected_finding:
                 raise AssertionError(f"Scanner classification failed for {name}")
             print(
-                f"PASS {name}: exit={result.returncode}, private-key finding={detected}", flush=True
+                f"PASS {name}: exit={result.returncode}, {rule_id} finding={detected}", flush=True
             )
     assert len(set(identities)) == 2, "Fixture commit identities must differ"
 

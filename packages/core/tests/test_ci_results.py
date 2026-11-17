@@ -27,7 +27,7 @@ def test_ci_results_requires_every_job() -> None:
 @pytest.mark.parametrize(
     ("areas", "skipped"),
     [
-        ({"python": True, "web": False, "docs": False}, {"web-build"}),
+        ({"python": True, "web": False, "docs": False}, set()),
         (
             {"python": False, "web": True, "docs": False},
             {"types", "unit", "import-contract", "ml-smoke", "queue-postgres"},
@@ -65,6 +65,13 @@ def test_ci_results_rejects_unexpected_skips() -> None:
     results["web-build"] = {"result": "skipped"}
     with pytest.raises(ValueError, match="web-build.*skipped"):
         validate(results, AREAS, True)
+
+
+def test_ci_results_requires_web_client_checks_for_python_changes() -> None:
+    results = successful_results()
+    results["web-build"] = {"result": "skipped"}
+    with pytest.raises(ValueError, match="web-build.*skipped"):
+        validate(results, {"python": True, "web": False}, False)
 
 
 def test_ci_results_rejects_failure() -> None:

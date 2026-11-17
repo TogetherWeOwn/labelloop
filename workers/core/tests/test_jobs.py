@@ -2,7 +2,9 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import replace
+from threading import Barrier
 from uuid import uuid4
 
 import psycopg
@@ -108,6 +110,155 @@ def test_queue_rejects_colliding_json_keys_without_persisting_data(store, revers
         store.enqueue(project, "operation", "proposals", payload)
     assert store.save_stage(lease, "stage", {"accepted": True}) == {"accepted": True}
     store.cancel(project, job_id)
+
+
+def bundle_counts(store, project_key):
+    with store.connect() as conn:
+        return tuple(
+            conn.execute(query, (project_key,)).fetchone()[0]
+            for query in (
+                "SELECT count(*) FROM project WHERE project_key=%s",
+                "SELECT count(*) FROM canonical_event WHERE aggregate_id=%s",
+                "SELECT count(*) FROM worker_job WHERE project_key=%s",
+            )
+        )
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+@pytest.mark.parametrize("failure", [None, "caller", "audit"])
+def test_transactional_enqueue_commits_or_rolls_back_state_audit_and_job(
+    store, autocommit, failure
+):
+    project_key = str(uuid4())
+    payload = {"nested": [(True, {2: "two"})]}
+    outcome = (
+        nullcontext()
+        if failure is None
+        else pytest.raises(RuntimeError if failure == "caller" else psycopg.errors.NotNullViolation)
+    )
+    with store.connect() as conn:
+        conn.autocommit = autocommit
+        with outcome, conn.transaction():
+            conn.execute(
+                "INSERT INTO project(project_key,workspace_id,task,scope,domain) "
+                "VALUES (%s,%s,'detection','fixture scope','fixture domain')",
+                (project_key, uuid4()),
+            )
+            job_id = store.enqueue_in_transaction(conn, project_key, "compile", "compile", payload)
+            assert (
+                store.enqueue_in_transaction(
+                    conn, project_key, "compile", "compile", {"nested": [[True, {"2": "two"}]]}
+                )
+                == job_id
+            )
+            assert not conn.closed
+            conn.execute(
+                "INSERT INTO canonical_event(event_type,aggregate_id,expected_revision,"
+                "payload,actor_kind,actor_id) VALUES ('management.fixture_enqueue',%s,%s,"
+                "'{}','human','fixture-admin')",
+                (project_key, None if failure == "audit" else 0),
+            )
+            assert bundle_counts(store, project_key) == (0, 0, 0)
+            if failure == "caller":
+                raise RuntimeError("caller rejected the transaction")
+        assert not conn.closed
+    expected = 1 if failure is None else 0
+    assert bundle_counts(store, project_key) == (expected,) * 3
+    if failure is None:
+        lease = store.claim("compile", "fixture-worker", job_id=job_id)
+        assert lease.job_id == job_id and lease.input == {"nested": [[True, {"2": "two"}]]}
+        store.cancel(project_key, job_id)
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_transactional_enqueue_refuses_idle_connections(store, autocommit):
+    project_key = str(uuid4())
+    with store.connect() as conn:
+        conn.autocommit = autocommit
+        with pytest.raises(ValueError, match="active caller transaction"):
+            store.enqueue_in_transaction(conn, project_key, "compile", "compile", {})
+        assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    assert bundle_counts(store, project_key) == (0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"kind": "train"},
+        {"payload": {"enabled": 1}},
+        {"max_attempts": 4},
+    ],
+)
+def test_transactional_enqueue_conflict_rolls_back_caller_state(store, changes):
+    project_key = str(uuid4())
+    original = {"kind": "compile", "payload": {"enabled": True}, "max_attempts": 3}
+    job_id = store.enqueue(project_key, "compile", **original)
+    with pytest.raises(ReplayConflict), store.connect() as conn, conn.transaction():
+        conn.execute(
+            "INSERT INTO project(project_key,workspace_id,task,scope,domain) "
+            "VALUES (%s,%s,'detection','fixture scope','fixture domain')",
+            (project_key, uuid4()),
+        )
+        store.enqueue_in_transaction(conn, project_key, "compile", **(original | changes))
+    assert bundle_counts(store, project_key) == (0, 0, 1)
+    assert store.enqueue(project_key, "compile", **original) == job_id
+    store.cancel(project_key, job_id)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_concurrent_transactional_enqueue_reuses_unique_job_or_refuses_conflict(store, changed):
+    project_key, barrier = str(uuid4()), Barrier(2)
+
+    def submit(index):
+        with store.connect() as conn, conn.transaction():
+            conn.execute("SET LOCAL lock_timeout='5s'")
+            barrier.wait(timeout=5)
+            try:
+                return store.enqueue_in_transaction(
+                    conn, project_key, "compile", "compile", {"pin": index if changed else 0}
+                )
+            except ReplayConflict:
+                return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, range(2)))
+    assert results.count("conflict") == int(changed)
+    assert len(set(result for result in results if result != "conflict")) == 1
+    assert bundle_counts(store, project_key) == (0, 0, 1)
+    for job_id in set(results) - {"conflict"}:
+        store.cancel(project_key, job_id)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"project_key": ""},
+        {"operation_key": ""},
+        {"kind": ""},
+        {"max_attempts": 0},
+        {"max_attempts": 11},
+        {"payload": {"nested": {1: "one", "1": "collision"}}},
+    ],
+)
+def test_transactional_enqueue_preserves_input_validation_without_writing(store, changes):
+    project_key = str(uuid4())
+    arguments = {
+        "project_key": project_key,
+        "operation_key": "compile",
+        "kind": "compile",
+        "payload": {},
+    }
+    with store.connect() as conn, conn.transaction():
+        conn.execute("SELECT 1")
+        with pytest.raises(ValueError):
+            store.enqueue_in_transaction(conn, **(arguments | changes))
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM worker_job WHERE project_key=%s", (project_key,)
+            ).fetchone()[0]
+            == 0
+        )
+    assert bundle_counts(store, project_key) == (0, 0, 0)
 
 
 def test_stage_hash_matches_normalized_readback_and_rejects_changes(store):

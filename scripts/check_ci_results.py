@@ -23,7 +23,7 @@ AREA_JOBS = PYTHON_JOBS | {"web-build"}
 def validate(results: dict[str, dict[str, str]], areas: dict[str, bool], full_run: bool) -> None:
     """Accept skips only when this exact event's changed-area map disables the job."""
     failures = {name: "missing" for name in REQUIRED - results.keys()}
-    web_selected = full_run or areas["web"]
+    web_selected = full_run or areas["web"] or areas["python"]
     python_selected = full_run or areas["python"]
     can_skip = (
         AREA_JOBS | {"dev-stack"}

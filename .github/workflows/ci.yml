@@ -109,6 +109,16 @@ jobs:
           version: "0.13.6"
           enable-cache: false
       - run: uv sync --frozen
+      - name: Check published management contract drift
+        run: uv run python -m labelloop_api.management_codegen --check
+      - name: Generate management contract artifacts
+        run: uv run python -m labelloop_api.management_codegen --output-dir "$RUNNER_TEMP/management-contract"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: management-contract
+          path: ${{ runner.temp }}/management-contract/
+          if-no-files-found: error
+          retention-days: 7
       - run: uv run pytest
       - run: uv run python scripts/check-fixtures.py
 
@@ -151,7 +161,7 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
       - name: Check upgrades from each delivered merge parent
         run: |
-          for parent in auth_budget_0001 0006_proposal_jobs; do
+          for parent in auth_budget_0001 0006_proposal_jobs auth_jobs_0001 auth_proposal_0001; do
             uv run alembic -c apps/api/alembic.ini downgrade base
             uv run alembic -c apps/api/alembic.ini upgrade "$parent"
             uv run alembic -c apps/api/alembic.ini upgrade head
@@ -191,7 +201,7 @@ jobs:
 
   web-build:
     needs: [changes, full-run]
-    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web
+    if: needs.full-run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || fromJSON(needs.changes.outputs.areas).web || fromJSON(needs.changes.outputs.areas).python
     # The pinned Playwright release supports Ubuntu 24.04, not rolling latest.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -229,6 +239,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Check published management contract before web checks
+        run: uv run python -m labelloop_api.management_codegen --check
       - name: Candidate lint consumer contract
         run: node apps/web/scripts/lint-consumer-contract.mjs
         env:
@@ -335,13 +355,24 @@ jobs:
           uv run alembic -c apps/api/alembic.ini upgrade head
           uv run alembic -c apps/api/alembic.ini downgrade base
           uv run alembic -c apps/api/alembic.ini upgrade head
+      - name: Canonical management transactions and runtime-role refusals
+        run: uv run pytest apps/api/tests/test_management_canonical_db.py -v
+        env:
+          LABELLOOP_MANAGEMENT_DB_TESTS: "1"
       - name: Budget ledger PostgreSQL races, restart and atomic rollback
         run: uv run pytest apps/api/tests/test_budget_store.py -v
         env:
           LABELLOOP_BUDGET_POSTGRES: "1"
-      - run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py -v --basetemp=ml-smoke-evidence
+      - name: Start disposable object storage and await readiness
+        run: docker compose up --build --detach --wait --wait-timeout 120 minio
+      - name: Real CPU training, inference and durable management pipeline
+        run: uv run --group ml pytest workers/ml/tests/test_local_training.py workers/ml/tests/test_proposal_inference.py workers/ml/tests/test_management_pipeline.py -v --basetemp=ml-smoke-evidence
         env:
           YOLO_CONFIG_DIR: ${{ runner.temp }}/yolo-config
+          LABELLOOP_MANAGEMENT_MINIO_TESTS: "1"
+      - name: Stop disposable object storage and remove volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
