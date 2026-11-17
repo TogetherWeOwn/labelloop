@@ -84,6 +84,172 @@ def test_compiled_file_verifier_normalizes_root(
         verify_dataset_files(root, manifest)
 
 
+@pytest.mark.parametrize("side", (320, 640))
+@pytest.mark.parametrize(
+    "change",
+    (
+        "none",
+        "manifest",
+        "bytes",
+        "recipe",
+        "train",
+        "val",
+        "source",
+        "truth",
+        "group",
+        "role",
+        "evaluation",
+        "classes",
+    ),
+)
+def test_experiment_inputs_bind_compiler_and_canonical_truth(
+    tmp_path: Path, side: int, change: str
+) -> None:
+    import hashlib
+
+    from labelloop_compiler.compiler import compile_dataset
+    from labelloop_core.evaluation import EvaluationImage, GroundTruth
+    from labelloop_core.experiments import (
+        BASELINE,
+        DatasetPin,
+        ExperimentManifest,
+        RecipePin,
+        SourcePin,
+    )
+    from labelloop_core.training import InferencePolicy
+    from labelloop_worker_ml.experiments import validate_inputs
+    from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "fixtures"))
+    from load_canonical import FixtureDomain
+
+    fixture = FixtureDomain("cc0-interface")
+    dataset = tmp_path / "compiled"
+    recipe_id = f"full-letterbox-{side}-v1"
+    compiled = compile_dataset(fixture.release, recipe_id, dataset, fixture.images)
+    images = tuple(
+        EvaluationImage(
+            s.asset.asset_id,
+            s.asset.width,
+            s.asset.height,
+            tuple(
+                GroundTruth(o.object_id, o.class_id, o.box, o.occluded, o.truncated_at_image_edge)
+                for o in s.revision.objects
+            ),
+            revision=s.revision.revision,
+            source_sha256=s.asset.sha256,
+        )
+        for s in fixture.release.samples
+        if s.split == "val"
+    )
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(value.encode()).hexdigest()
+
+    sources = tuple(
+        SourcePin(
+            s["asset_id"],
+            s["group_id"],
+            s["source_sha256"],
+            s["source_truth_sha256"],
+            {"train": "curated", "val": "development", "test": "locked_final_test"}[s["split"]],
+        )
+        for s in compiled["samples"]
+    )
+    recipe = RecipePin(
+        recipe_id,
+        digest(json.dumps(compiled["recipe"], sort_keys=True, separators=(",", ":"))),
+        InferencePolicy(side),
+        digest("warm"),
+        digest("base"),
+        tuple(sorted({s.group_id for s in sources if s.role == "curated"})),
+    )
+    manifest = ExperimentManifest(
+        "input-controls",
+        fixture.release.project_id,
+        file_digest(dataset / "class-map.json"),
+        tuple((c.stable_id, False) for c in fixture.release.ontology.classes),
+        fixture.release.assignment.assignment_version,
+        digest("base"),
+        sources,
+        (recipe,),
+        (
+            DatasetPin(
+                recipe_id,
+                "curated-only",
+                fixture.release.release_id,
+                file_digest(dataset / "manifest.json"),
+                tuple(s.asset_id for s in sources if s.role == "curated"),
+            ),
+        ),
+        (BASELINE,),
+        (0,),
+        fixture_only=True,
+    )
+    backend = LocalUltralyticsBackend(
+        dataset=dataset,
+        initialization=tmp_path / "absent.pt",
+        output=tmp_path / "unused-output",
+        validation_images=images,
+    )
+    cell = manifest.cells()[0]
+    assert validate_inputs(manifest, cell, backend) == compiled
+    assert not backend.output.exists()
+    if change == "none":
+        return
+    errors = {
+        "manifest": "manifest digest",
+        "bytes": "file digest",
+        "recipe": "recipe configuration",
+        "train": "compiled membership",
+        "val": "compiled membership",
+        "source": "source lineage",
+        "truth": "source lineage",
+        "group": "source lineage",
+        "role": "final-test role",
+        "evaluation": "evaluation truth",
+        "classes": "class map",
+    }
+    if change == "manifest":
+        (dataset / "manifest.json").write_text(json.dumps(compiled) + " ")
+    elif change == "bytes":
+        image = dataset / compiled["samples"][0]["image_path"]
+        image.write_bytes(image.read_bytes() + b"changed")
+    elif change == "evaluation":
+        backend.validation_images = (
+            replace(images[0], revision=images[0].revision + 1),
+            *images[1:],
+        )
+    elif change == "classes":
+        manifest = replace(manifest, class_map_sha256=digest("other classes"))
+    else:
+        if change == "recipe":
+            compiled["recipe"]["min_target_px"] = 99
+        elif change in {"train", "val"}:
+            compiled["samples"] = [s for s in compiled["samples"] if s["split"] != change]
+        elif change == "role":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            compiled["samples"].append({**sample, "split": "test"})
+        else:
+            key = {"source": "source_sha256", "truth": "source_truth_sha256", "group": "group_id"}[
+                change
+            ]
+            compiled["samples"][0][key] = digest("different")
+        (dataset / "manifest.json").write_text(json.dumps(compiled))
+        manifest = replace(
+            manifest,
+            datasets=(
+                replace(
+                    manifest.datasets[0],
+                    dataset_manifest_sha256=file_digest(dataset / "manifest.json"),
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match=errors[change]):
+        validate_inputs(manifest, cell, backend)
+    assert not backend.output.exists()
+
+
 def test_ml_runtime_uses_paired_cpu_dependency_pins() -> None:
     import onnx
     import onnxruntime
