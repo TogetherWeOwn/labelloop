@@ -13,6 +13,54 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize(
+    "change", ("none", "bytes", "missing", "extra", "file-link", "directory-link", "dangling-link")
+)
+def test_compiled_file_verifier_preserves_frozen_membership(tmp_path: Path, change: str) -> None:
+    from labelloop_worker_ml.training import file_digest, verify_dataset_files
+
+    dataset = tmp_path / "compiled"
+    images = dataset / "images"
+    images.mkdir(parents=True)
+    sample = images / "sample.png"
+    sample.write_bytes(b"frozen sample bytes")
+    manifest = {"file_hashes": {"images/sample.png": file_digest(sample)}}
+    (dataset / "manifest.json").write_text(json.dumps(manifest))
+    before = {
+        path.relative_to(dataset): path.read_bytes()
+        for path in dataset.rglob("*")
+        if path.is_file()
+    }
+    verify_dataset_files(dataset, manifest)
+    assert before == {
+        path.relative_to(dataset): path.read_bytes()
+        for path in dataset.rglob("*")
+        if path.is_file()
+    }
+    if change == "none":
+        return
+    if change == "bytes":
+        sample.write_bytes(b"changed sample bytes")
+    elif change == "missing":
+        sample.unlink()
+    elif change == "extra":
+        (images / "unlisted.png").write_bytes(sample.read_bytes())
+    elif change == "file-link":
+        target = tmp_path / "sample.png"
+        target.write_bytes(sample.read_bytes())
+        sample.unlink()
+        sample.symlink_to(target)
+    elif change == "directory-link":
+        target = tmp_path / "linked-images"
+        images.rename(target)
+        images.symlink_to(target, target_is_directory=True)
+    else:
+        (images / "dangling.png").symlink_to(tmp_path / "absent.png")
+    error = "file digest mismatch" if change == "bytes" else "membership differs"
+    with pytest.raises(ValueError, match=error):
+        verify_dataset_files(dataset, manifest)
+
+
 def test_ml_runtime_uses_paired_cpu_dependency_pins() -> None:
     import onnx
     import onnxruntime
