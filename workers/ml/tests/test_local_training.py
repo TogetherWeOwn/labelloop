@@ -19,6 +19,11 @@ pytestmark = pytest.mark.skipif(
     (
         "none",
         "reuse-export",
+        "history-truncated",
+        "history-missing-first",
+        "history-extra",
+        "history-domain",
+        "history-tie",
         "request",
         "inputs",
         "weights",
@@ -53,6 +58,7 @@ def test_experiment_collection_binds_delivered_records(
     from test_experiment_training_evidence import arm_case
 
     frozen, reference = arm_case(side)
+    frozen = replace(frozen, epochs=2)
     cell = reference.cell
     backend = LocalUltralyticsBackend(
         dataset=tmp_path / "compiled",
@@ -72,13 +78,34 @@ def test_experiment_collection_binds_delivered_records(
         "class_map": {"object": 0},
         "file_hashes": {"images/val/dev.jpg": file_digest(image)},
     }
-    weights = backend.output / "trainer/weights/epoch0.pt"
+    epoch = 0 if change in ("history-truncated", "history-tie") else 1
+    weights = backend.output / f"trainer/weights/epoch{epoch}.pt"
     weights.parent.mkdir(parents=True)
     weights.write_bytes(b"selected weights")
     weights.with_suffix(".onnx").write_bytes(b"static export")
-    checkpoint = replace(reference.training.selected, sha256=file_digest(weights))
-    training = replace(reference.training, checkpoints=(checkpoint,), selected=checkpoint)
-    report = replace(reference.evaluation, weights_sha256=checkpoint.sha256)
+    checkpoint = replace(reference.training.selected, epoch=epoch, sha256=file_digest(weights))
+    earlier = replace(checkpoint, epoch=0, validation_map=0.25)
+    history = {
+        "history-truncated": (earlier,),
+        "history-missing-first": (checkpoint,),
+        "history-extra": (earlier, checkpoint, replace(earlier, epoch=2)),
+        "history-domain": (checkpoint, replace(earlier, epoch=2)),
+        "history-tie": (replace(checkpoint, epoch=1), checkpoint),
+    }.get(change, (earlier, checkpoint))
+    checkpoint = earlier if change == "history-truncated" else checkpoint
+    request = frozen.request(cell, reference.training.request.run_id)
+    training = replace(
+        reference.training,
+        request=request,
+        resolved_arguments=request.arguments(),
+        checkpoints=history,
+        selected=checkpoint,
+    )
+    report = replace(
+        reference.evaluation,
+        weights_sha256=checkpoint.sha256,
+        overall=replace(reference.evaluation.overall, map50_95=checkpoint.validation_map),
+    )
     exported = ExportResult(
         checkpoint.sha256,
         file_digest(weights.with_suffix(".onnx")),
@@ -100,7 +127,7 @@ def test_experiment_collection_binds_delivered_records(
             "before_at_or_below_6px": 1,
             "after_at_or_below_6px": 1,
         }
-    ]
+    ] * frozen.epochs
     inputs = Mock(return_value=dataset)
     predict = Mock(
         side_effect=lambda *args: (
@@ -124,8 +151,10 @@ def test_experiment_collection_binds_delivered_records(
     monkeypatch.setattr(experiments, "export_and_compare", export)
     monkeypatch.setattr(backend, "train", train)
     error = None
-    if change == "request":
-        request = replace(training.request, epochs=2)
+    if change.startswith("history-") and change != "history-tie":
+        error = "checkpoint epoch domain"
+    elif change == "request":
+        request = replace(training.request, epochs=3)
         training = replace(training, request=request, resolved_arguments=request.arguments())
         error = "training request"
     elif change in ("inputs", "execute-inputs"):
@@ -188,13 +217,21 @@ def test_experiment_collection_binds_delivered_records(
             collect()
         assert not (backend.output / "experiment-arm.json").exists()
         train.assert_not_called()
-        if change in ("request", "inputs", "execute-inputs", "weights", "reuse-export"):
+        if change.startswith("history-") or change in (
+            "request",
+            "inputs",
+            "execute-inputs",
+            "weights",
+            "reuse-export",
+        ):
             assert not (backend.output / "experiment-inputs").exists()
             predict.assert_not_called()
+            export.assert_not_called()
         return
     arm = collect()
     assert arm.evaluation == report and arm.group_reports == (("dev", report),)
-    assert arm.retention == reference.retention
+    assert arm.training.selected == checkpoint and checkpoint.epoch == epoch
+    assert arm.retention == reference.retention * frozen.epochs
     assert dict(arm.tensor_shapes)["inference"] == ((1, 3, side, side),) * 2
     assert arm.export_sha256 == exported.export_sha256
     assert (
@@ -214,10 +251,7 @@ def test_experiment_collection_binds_delivered_records(
         )
     else:
         train.assert_not_called()
-    if change == "reuse-export":
-        export.assert_not_called()
-    else:
-        assert export.call_args.kwargs["images"] == (snapshot / "images/val/dev.jpg",)
+    assert export.call_args.kwargs["images"] == (snapshot / "images/val/dev.jpg",)
 
 
 @pytest.mark.parametrize(

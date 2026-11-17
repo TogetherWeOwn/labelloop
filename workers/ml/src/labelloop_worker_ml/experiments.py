@@ -125,6 +125,11 @@ def collect_arm(
     expected = manifest.request(cell, result.request.run_id)
     if result.request != expected:
         raise ValueError("training request differs from frozen experiment")
+    epochs = tuple(checkpoint.epoch for checkpoint in result.checkpoints)
+    if any(type(epoch) is not int for epoch in epochs) or tuple(sorted(epochs)) != tuple(
+        range(expected.epochs)
+    ):
+        raise ValueError("checkpoint epoch domain differs from frozen experiment")
     dataset = validate_inputs(manifest, cell, backend)
     weights = backend.output / "trainer" / "weights" / f"epoch{result.selected.epoch}.pt"
     if file_digest(weights) != result.selected.sha256:
