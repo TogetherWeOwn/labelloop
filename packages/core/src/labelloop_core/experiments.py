@@ -442,3 +442,79 @@ def validate_training_evidence(manifest: ExperimentManifest, arm: ArmEvidence) -
         )
     ):
         raise ValueError("export contract or checkpoint mismatch")
+
+
+def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
+    validate_training_evidence(manifest, arm)
+    development = {s.asset_id for s in manifest.sources if s.role == "development"}
+    validate_report(manifest, arm.training, arm.evaluation, development)
+    groups = dict(arm.group_reports)
+    if len(groups) != len(arm.group_reports) or set(groups) != set(manifest.development_groups()):
+        raise ValueError("unpaired source groups")
+    for group, report in groups.items():
+        ids = {
+            s.asset_id for s in manifest.sources if s.role == "development" and s.group_id == group
+        }
+        validate_report(manifest, arm.training, report, ids)
+        if report.overall.map50_95 is None:
+            raise ValueError("source group lacks support for the declared metric")
+    for class_id, metrics in arm.evaluation.overall.per_class.items():
+        if (
+            metrics.supported is not True
+            or type(metrics.support) is not int
+            or metrics.support < manifest.minimum_class_support
+            or metrics.map50_95 is None
+        ):
+            raise ValueError(f"unsupported class: {class_id}")
+    for name in manifest.critical_slices:
+        slice_metrics = arm.evaluation.slices.get(name)
+        if (
+            slice_metrics is None
+            or type(slice_metrics.support) is not int
+            or slice_metrics.support < manifest.minimum_slice_support
+            or slice_metrics.map50_95 is None
+        ):
+            raise ValueError(f"unsupported critical slice: {name}")
+    for report in (arm.evaluation, *groups.values()):
+        for scores in (report.overall, *report.slices.values()):
+            _validate_metric_support(scores)
+        for scores in report.slices.values():
+            if any(
+                item.support > report.overall.per_class[class_id].support
+                for class_id, item in scores.per_class.items()
+            ):
+                raise ValueError("slice class support exceeds overall class support")
+    if any(report.overall.support == 0 for report in groups.values()):
+        raise ValueError("source group lacks support for the declared metric")
+    for class_id, metrics in arm.evaluation.overall.per_class.items():
+        if metrics.support != sum(
+            report.overall.per_class[class_id].support for report in groups.values()
+        ):
+            raise ValueError("aggregate class support differs from source groups")
+    for name in manifest.critical_slices:
+        if any(name not in report.slices for report in groups.values()):
+            raise ValueError(f"missing source-group critical slice: {name}")
+        for class_id, metrics in arm.evaluation.slices[name].per_class.items():
+            if metrics.support != sum(
+                report.slices[name].per_class[class_id].support for report in groups.values()
+            ):
+                raise ValueError(
+                    f"aggregate critical-slice support differs from source groups: {name}"
+                )
+
+
+def _validate_metric_support(metrics: Metrics) -> None:
+    for item in metrics.per_class.values():
+        if (
+            type(item.support) is not int
+            or item.support < 0
+            or item.supported is not (item.support > 0)
+            or (item.map50_95 is None) != (item.support == 0)
+        ):
+            raise ValueError("inconsistent class support")
+    if (
+        type(metrics.support) is not int
+        or metrics.support != sum(item.support for item in metrics.per_class.values())
+        or (metrics.map50_95 is None) != (metrics.support == 0)
+    ):
+        raise ValueError("evaluation support drift or inconsistent metric support")
