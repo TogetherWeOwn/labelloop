@@ -2,9 +2,11 @@
 
 import hashlib
 import json
+import random
 from collections import Counter
 from dataclasses import asdict, dataclass
 from itertools import product
+from statistics import mean
 from typing import Literal
 
 from .evaluation import ClassMetrics, EvaluationReport, Metrics
@@ -518,3 +520,109 @@ def _validate_metric_support(metrics: Metrics) -> None:
         or (metrics.map50_95 is None) != (metrics.support == 0)
     ):
         raise ValueError("evaluation support drift or inconsistent metric support")
+
+
+def _support(metrics: Metrics) -> tuple[object, ...]:
+    return (
+        metrics.images,
+        metrics.support,
+        tuple(sorted((key, item.support) for key, item in metrics.per_class.items())),
+    )
+
+
+def _compare(
+    manifest: ExperimentManifest,
+    baseline: Cell,
+    candidate: Cell,
+    arms: dict[Cell, ArmEvidence],
+    axis: str,
+) -> PairedComparison:
+    """Compare one pair across seeds; the caller must validate every arm first."""
+    from dataclasses import replace
+
+    deltas: dict[str, list[float]] = {group: [] for group in manifest.development_groups()}
+    regressions: set[str] = set()
+    reference = arms[baseline]
+    for seed in manifest.seeds:
+        left = arms[replace(baseline, seed=seed)]
+        right = arms[replace(candidate, seed=seed)]
+        for anchor, a, b in (
+            (reference.evaluation, left.evaluation, right.evaluation),
+            *(
+                (
+                    dict(reference.group_reports)[g],
+                    dict(left.group_reports)[g],
+                    dict(right.group_reports)[g],
+                )
+                for g in deltas
+            ),
+        ):
+            if not _support(anchor.overall) == _support(a.overall) == _support(b.overall):
+                raise ValueError("paired ground-truth support drift")
+            for name in manifest.critical_slices:
+                if (
+                    not _support(anchor.slices[name])
+                    == _support(a.slices[name])
+                    == _support(b.slices[name])
+                ):
+                    raise ValueError("paired critical-slice support drift")
+        for group in deltas:
+            a_score = dict(left.group_reports)[group].overall.map50_95
+            b_score = dict(right.group_reports)[group].overall.map50_95
+            assert a_score is not None and b_score is not None
+            deltas[group].append(b_score - a_score)
+        for class_id, a_class in left.evaluation.overall.per_class.items():
+            b_class = right.evaluation.overall.per_class[class_id]
+            assert a_class.map50_95 is not None and b_class.map50_95 is not None
+            if b_class.map50_95 < a_class.map50_95 - manifest.regression_tolerance:
+                regressions.add(f"class:{class_id}:seed:{seed}")
+        for name in manifest.critical_slices:
+            a_slice, b_slice = left.evaluation.slices[name], right.evaluation.slices[name]
+            if _support(a_slice) != _support(b_slice):
+                raise ValueError("paired critical-slice support drift")
+            assert a_slice.map50_95 is not None and b_slice.map50_95 is not None
+            if b_slice.map50_95 < a_slice.map50_95 - manifest.regression_tolerance:
+                regressions.add(f"slice:{name}:seed:{seed}")
+        environment = (reference.training.ultralytics_version, reference.training.torch_version)
+        if any(
+            (arm.training.ultralytics_version, arm.training.torch_version) != environment
+            for arm in (left, right)
+        ):
+            raise ValueError("paired training environment drift")
+    group_deltas = tuple((group, mean(values)) for group, values in sorted(deltas.items()))
+    values = [value for _, value in group_deltas]
+    delta = mean(values)
+    interval = None
+    if len(values) > 1:
+        rng = random.Random(manifest.uncertainty_seed)
+        samples = sorted(mean(rng.choices(values, k=len(values))) for _ in range(2000))
+        interval = (samples[49], samples[1949])
+    if regressions or delta < -manifest.regression_tolerance:
+        outcome = "regression"
+    elif interval is None:
+        outcome = "insufficient-evidence"
+    elif interval[0] > manifest.minimum_gain:
+        outcome = "observed-gain-unqualified"
+    else:
+        outcome = "plateau-or-inconclusive"
+    if manifest.fixture_only and outcome == "observed-gain-unqualified":
+        outcome = "fixture-wiring-only"
+    overall = arms[baseline].evaluation.overall
+    return PairedComparison(
+        baseline.recipe_id,
+        axis,
+        baseline,
+        candidate,
+        manifest.metric,
+        manifest.seeds,
+        len(values),
+        overall.images,
+        overall.support,
+        tuple(sorted((k, v.support) for k, v in overall.per_class.items())),
+        group_deltas,
+        delta,
+        interval,
+        tuple(sorted(regressions)),
+        outcome,
+        manifest.fixture_only,
+    )
