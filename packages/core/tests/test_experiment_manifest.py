@@ -6,6 +6,7 @@ import pytest
 
 from labelloop_core.experiments import (
     BASELINE,
+    Cell,
     Cohort,
     DatasetPin,
     ExperimentManifest,
@@ -63,6 +64,70 @@ def test_manifest_cells_and_digest_preserve_pins(expanded: bool) -> None:
     assert {c.seed for c in cells} == {0, 1}
     assert {c.initialization for c in cells} == {"base", "warm-start"}
     assert {c.augmentation_id for c in cells} == {BASELINE.profile_id, "flip-v1"}
+
+
+def test_requests_preserve_every_frozen_matrix_pin() -> None:
+    frozen = manifest(expanded=True)
+    frozen = replace(
+        frozen,
+        epochs=3,
+        batch=4,
+        recipes=tuple(
+            replace(recipe, warm_start_sha256=str(i + 5) * 64)
+            for i, recipe in enumerate(frozen.recipes)
+        ),
+        datasets=tuple(
+            replace(dataset, release_id=f"release-{i}", manifest_sha256=str(i + 5) * 64)
+            for i, dataset in enumerate(frozen.datasets)
+        ),
+    )
+    before = frozen.digest()
+    for i, cell in enumerate(frozen.cells()):
+        request = frozen.request(cell, f"run-{i}")
+        recipe = next(r for r in frozen.recipes if r.recipe_id == cell.recipe_id)
+        dataset = next(
+            d for d in frozen.datasets if (d.recipe_id, d.cohort) == (cell.recipe_id, cell.cohort)
+        )
+        profile = next(p for p in frozen.augmentations if p.profile_id == cell.augmentation_id)
+        assert request.run_id == f"run-{i}"
+        assert request.project_id == frozen.project_id
+        assert request.recipe_id == recipe.recipe_id
+        assert request.dataset_release_id == dataset.release_id
+        assert request.dataset_manifest_sha256 == dataset.manifest_sha256
+        assert request.class_map_sha256 == frozen.class_map_sha256
+        assert request.split_assignment_version == frozen.split_assignment_version
+        assert request.initialization_sha256 == (
+            frozen.approved_base_sha256
+            if cell.initialization == "base"
+            else recipe.warm_start_sha256
+        )
+        assert request.policy == recipe.policy
+        assert (request.epochs, request.batch, request.seed) == (3, 4, cell.seed)
+        assert request.augmentation == profile
+        assert request.class_mirror_safety == frozen.class_mirror_safety
+        assert request.arguments()["fliplr"] == profile.fliplr
+    assert frozen.digest() == before
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"recipe_id": "unknown"},
+        {"cohort": "unknown"},
+        {"initialization": "unknown"},
+        {"augmentation_id": "unknown"},
+        {"seed": 99},
+        {"seed": True},
+        {"seed": 1.0},
+    ],
+)
+def test_requests_reject_cells_outside_the_frozen_matrix(changes: dict[str, Any]) -> None:
+    frozen = manifest()
+    cell = next(c for c in frozen.cells() if c.seed == 1)
+    with pytest.raises(ValueError, match="outside the frozen experiment"):
+        frozen.request(replace(cell, **changes), "run")
+    with pytest.raises(ValueError, match="outside the frozen experiment"):
+        frozen.request(Cell(cell.recipe_id, "expanded", "base", BASELINE.profile_id, 1), "run")
 
 
 @pytest.mark.parametrize("role", ["development", "calibration", "locked_final_test"])
