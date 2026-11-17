@@ -144,6 +144,7 @@ def collect_arm(
     observed: list[tuple[int, ...]] = []
     classes = tuple(sorted(dataset["class_map"], key=dataset["class_map"].__getitem__))
     derived = predict_samples(weights, snapshot, samples, classes, expected.policy, observed)
+    shapes["inference"] = observed
     runner = EvaluationRunner(classes, expected.policy)
     arguments = {
         "dataset_release_id": expected.dataset_release_id,
