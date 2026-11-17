@@ -39,7 +39,7 @@ def report_case(side: int = 320) -> tuple[ExperimentManifest, TrainingResult, Ev
 @pytest.mark.parametrize("side", [320, 640])
 def test_report_binding_accepts_both_frozen_recipes(side: int) -> None:
     frozen, training, report = report_case(side)
-    assert validate_report(frozen, training, report, {"dev"}) is None
+    validate_report(frozen, training, report, {"dev"})
 
 
 @pytest.mark.parametrize(
@@ -101,23 +101,33 @@ def test_report_cannot_hide_targets(coverage: Coverage) -> None:
 
 def test_report_image_count_and_catalog_must_match() -> None:
     frozen, training, report = report_case()
-    for metrics in (replace(report.overall, images=2), replace(report.overall, per_class={})):
-        with pytest.raises(ValueError, match="membership|catalog"):
-            validate_report(frozen, training, replace(report, overall=metrics), {"dev"})
+    with pytest.raises(ValueError, match="membership"):
+        validate_report(
+            frozen, training, replace(report, overall=replace(report.overall, images=2)), {"dev"}
+        )
+    for catalog in ({}, {"other": report.overall.per_class["object"]}):
+        metrics = replace(report.overall, per_class=catalog)
+        for changed in (
+            replace(report, overall=metrics),
+            replace(report, slices={"small": metrics}),
+        ):
+            with pytest.raises(ValueError, match="catalog"):
+                validate_report(frozen, training, changed, {"dev"})
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.1, 1.1])
+@pytest.mark.parametrize("value", [True, False, float("nan"), float("inf"), -0.1, 1.1])
 @pytest.mark.parametrize("field", ["map50", "map50_95", "precision", "recall"])
 @pytest.mark.parametrize("where", ["overall", "class", "slice", "slice-class"])
 def test_report_scores_must_be_finite_probabilities(value: float, field: str, where: str) -> None:
     frozen, training, report = report_case()
     metrics = report.overall
+    changes: dict[str, Any] = {field: value}
     if where.endswith("class"):
         metrics = replace(
-            metrics, per_class={"object": replace(metrics.per_class["object"], **{field: value})}
+            metrics, per_class={"object": replace(metrics.per_class["object"], **changes)}
         )
     else:
-        metrics = replace(metrics, **{field: value})
+        metrics = replace(metrics, **changes)
     report = (
         replace(report, slices={"small": metrics})
         if where.startswith("slice")
