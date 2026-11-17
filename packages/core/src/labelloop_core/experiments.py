@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from itertools import product
 from typing import Literal
 
-from .evaluation import EvaluationReport
+from .evaluation import ClassMetrics, EvaluationReport, Metrics
 from .qualification_data import require_names, require_probability
 from .training import (
     AugmentationProfile,
@@ -323,3 +323,60 @@ class PairedComparison:
     outcome: str
     fixture_only: bool
     m6_exit_established: bool = False
+
+
+def validate_report(
+    manifest: ExperimentManifest,
+    training: TrainingResult,
+    report: EvaluationReport,
+    source_ids: set[str],
+) -> None:
+    """Validate development report bindings; support and paired-arm gates are separate."""
+    development = {s.asset_id for s in manifest.sources if s.role == "development"}
+    if not source_ids or not source_ids <= development:
+        raise ValueError("report sources must be frozen development members")
+    request = training.request
+    if (
+        report.recipe_id,
+        report.dataset_release_id,
+        report.class_map_sha256,
+        report.weights_sha256,
+        report.role,
+        report.policy,
+    ) != (
+        request.recipe_id,
+        request.dataset_release_id,
+        request.class_map_sha256,
+        training.selected.sha256,
+        "development",
+        request.policy,
+    ):
+        raise ValueError("evaluation checkpoint, role or pipeline mismatch")
+    ids = [c.asset_id for c in report.coverage]
+    if (
+        set(ids) != source_ids
+        or len(ids) != len(source_ids)
+        or report.overall.images != len(source_ids)
+    ):
+        raise ValueError("evaluation membership differs from frozen sources")
+    truth_pins = {s.asset_id: s.truth_sha256 for s in manifest.sources if s.asset_id in source_ids}
+    if dict(report.source_truth_sha256) != truth_pins or len(report.source_truth_sha256) != len(
+        truth_pins
+    ):
+        raise ValueError("evaluation truth binding differs from frozen sources")
+    if any(
+        c.covered_fraction != 1 or c.uncovered_targets or c.partially_covered_targets
+        for c in report.coverage
+    ):
+        raise ValueError("comparison cannot hide targets through reduced coverage")
+    for metrics in (report.overall, *report.slices.values()):
+        if set(metrics.per_class) != dict(manifest.class_mirror_safety).keys():
+            raise ValueError("evaluation class catalog mismatch")
+        score_sets: tuple[Metrics | ClassMetrics, ...] = (metrics, *metrics.per_class.values())
+        for scores in score_sets:
+            for value in (scores.map50, scores.map50_95, scores.precision, scores.recall):
+                if value is not None:
+                    try:
+                        require_probability(value)
+                    except ValueError as error:
+                        raise ValueError("nonfinite or invalid evaluation metric") from error
