@@ -16,10 +16,11 @@ from starlette.responses import JSONResponse
 
 from labelloop_api.auth_store import SESSION_LIFETIME, AuthStore, Principal, digest
 from labelloop_api.database_url import quoted_database_url
+from labelloop_api.http_contract import BOUNDARY_RESPONSES
 
 COOKIE = "__Host-labelloop-session"
 CSRF_COOKIE = "__Host-labelloop-csrf"
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], responses=BOUNDARY_RESPONSES)
 
 
 @lru_cache(maxsize=1)
