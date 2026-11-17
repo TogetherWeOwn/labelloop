@@ -1,11 +1,9 @@
-"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
+"""Validated experiment manifests and evidence records; consumers own execution and gates."""
 
 import hashlib
 import json
-import random
 from dataclasses import asdict, dataclass
 from itertools import product
-from statistics import mean
 from typing import Literal
 
 from .evaluation import ClassMetrics, EvaluationReport, Metrics
@@ -307,6 +305,27 @@ class ArmEvidence:
     export_detections: int
 
 
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
+
+
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -364,7 +383,8 @@ def validate_report(
                         raise ValueError("nonfinite or invalid evaluation metric") from error
 
 
-def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
+def validate_training_evidence(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
+    """Validate frozen training, dataloader and export evidence, not evaluation quality."""
     if arm.manifest_sha256 != manifest.digest():
         raise ValueError("experiment manifest digest mismatch")
     expected = manifest.request(arm.cell, arm.training.request.run_id)
@@ -379,12 +399,19 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
             if (d.recipe_id, d.cohort) == (arm.cell.recipe_id, arm.cell.cohort)
         )
     )
-    if not arm.retention or {r.asset_id for r in arm.retention} != training_ids:
+    if (
+        len(arm.retention) != len(training_ids)
+        or {r.asset_id for r in arm.retention} != training_ids
+    ):
         raise ValueError("incomplete dataloader retention audit")
     for observation in arm.retention:
-        if min(
-            observation.before, observation.after, observation.before_small, observation.after_small
-        ) < 0 or (
+        counts = (
+            observation.before,
+            observation.after,
+            observation.before_small,
+            observation.after_small,
+        )
+        if any(type(count) is not int or count < 0 for count in counts) or (
             observation.before != observation.after
             or observation.before_small > observation.before
             or observation.after_small > observation.after
@@ -399,192 +426,18 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
         raise ValueError("incomplete actual tensor evidence")
     for values in shapes.values():
         for shape in values:
+            if any(type(dimension) is not int for dimension in shape):
+                raise ValueError("actual tensor dimensions must be integers")
             expected.policy.assert_shape(shape, stride=32)
     require_digest(arm.export_sha256)
     if (
         arm.export_weights_sha256 != arm.training.selected.sha256
         or arm.export_policy != expected.policy
         or arm.export_signature != (1, 3, expected.policy.imgsz, expected.policy.imgsz)
-        or arm.export_samples < 1
-        or arm.export_detections < 1
+        or any(type(dimension) is not int for dimension in arm.export_signature)
+        or any(
+            type(count) is not int or count < 1
+            for count in (arm.export_samples, arm.export_detections)
+        )
     ):
         raise ValueError("export contract or checkpoint mismatch")
-    development = {s.asset_id for s in manifest.sources if s.role == "development"}
-    validate_report(manifest, arm.training, arm.evaluation, development)
-    groups = dict(arm.group_reports)
-    if len(groups) != len(arm.group_reports) or set(groups) != set(manifest.development_groups()):
-        raise ValueError("unpaired source groups")
-    for group, report in groups.items():
-        ids = {
-            s.asset_id for s in manifest.sources if s.role == "development" and s.group_id == group
-        }
-        validate_report(manifest, arm.training, report, ids)
-        if report.overall.map50_95 is None:
-            raise ValueError("source group lacks support for the declared metric")
-    for class_id, metrics in arm.evaluation.overall.per_class.items():
-        if (
-            not metrics.supported
-            or metrics.support < manifest.minimum_class_support
-            or metrics.map50_95 is None
-        ):
-            raise ValueError(f"unsupported class: {class_id}")
-    for name in manifest.critical_slices:
-        slice_metrics = arm.evaluation.slices.get(name)
-        if (
-            slice_metrics is None
-            or slice_metrics.support < manifest.minimum_slice_support
-            or slice_metrics.map50_95 is None
-        ):
-            raise ValueError(f"unsupported critical slice: {name}")
-
-
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
-
-
-def _support(metrics: Metrics) -> tuple[object, ...]:
-    return (
-        metrics.images,
-        metrics.support,
-        tuple(sorted((key, item.support) for key, item in metrics.per_class.items())),
-    )
-
-
-def _compare(
-    manifest: ExperimentManifest,
-    baseline: Cell,
-    candidate: Cell,
-    arms: dict[Cell, ArmEvidence],
-    axis: str,
-) -> PairedComparison:
-    from dataclasses import replace
-
-    deltas: dict[str, list[float]] = {group: [] for group in manifest.development_groups()}
-    regressions: set[str] = set()
-    for seed in manifest.seeds:
-        left = arms[replace(baseline, seed=seed)]
-        right = arms[replace(candidate, seed=seed)]
-        for a, b in (
-            (left.evaluation, right.evaluation),
-            *((dict(left.group_reports)[g], dict(right.group_reports)[g]) for g in deltas),
-        ):
-            if _support(a.overall) != _support(b.overall):
-                raise ValueError("paired ground-truth support drift")
-        for group in deltas:
-            a_score = dict(left.group_reports)[group].overall.map50_95
-            b_score = dict(right.group_reports)[group].overall.map50_95
-            assert a_score is not None and b_score is not None
-            deltas[group].append(b_score - a_score)
-        for class_id, a_class in left.evaluation.overall.per_class.items():
-            b_class = right.evaluation.overall.per_class[class_id]
-            assert a_class.map50_95 is not None and b_class.map50_95 is not None
-            if b_class.map50_95 < a_class.map50_95 - manifest.regression_tolerance:
-                regressions.add(f"class:{class_id}:seed:{seed}")
-        for name in manifest.critical_slices:
-            a_slice, b_slice = left.evaluation.slices[name], right.evaluation.slices[name]
-            if _support(a_slice) != _support(b_slice):
-                raise ValueError("paired critical-slice support drift")
-            assert a_slice.map50_95 is not None and b_slice.map50_95 is not None
-            if b_slice.map50_95 < a_slice.map50_95 - manifest.regression_tolerance:
-                regressions.add(f"slice:{name}:seed:{seed}")
-        if (left.training.ultralytics_version, left.training.torch_version) != (
-            right.training.ultralytics_version,
-            right.training.torch_version,
-        ):
-            raise ValueError("paired training environment drift")
-    group_deltas = tuple((group, mean(values)) for group, values in sorted(deltas.items()))
-    values = [value for _, value in group_deltas]
-    delta = mean(values)
-    interval = None
-    if len(values) > 1:
-        rng = random.Random(manifest.uncertainty_seed)
-        samples = sorted(mean(rng.choices(values, k=len(values))) for _ in range(2000))
-        interval = (samples[49], samples[1949])
-    if regressions or delta < -manifest.regression_tolerance:
-        outcome = "regression"
-    elif interval is None:
-        outcome = "insufficient-evidence"
-    elif interval[0] > manifest.minimum_gain:
-        outcome = "observed-gain-unqualified"
-    else:
-        outcome = "plateau-or-inconclusive"
-    if manifest.fixture_only and outcome == "observed-gain-unqualified":
-        outcome = "fixture-wiring-only"
-    overall = arms[baseline].evaluation.overall
-    return PairedComparison(
-        baseline.recipe_id,
-        axis,
-        baseline,
-        candidate,
-        manifest.metric,
-        manifest.seeds,
-        len(values),
-        overall.images,
-        overall.support,
-        tuple(sorted((k, v.support) for k, v in overall.per_class.items())),
-        group_deltas,
-        delta,
-        interval,
-        tuple(sorted(regressions)),
-        outcome,
-        manifest.fixture_only,
-    )
-
-
-def compare_experiment(
-    manifest: ExperimentManifest, evidence: tuple[ArmEvidence, ...]
-) -> tuple[PairedComparison, ...]:
-    """Compare only development evidence; final assessments never select an experiment."""
-    from dataclasses import replace
-
-    arms = {arm.cell: arm for arm in evidence}
-    if len(arms) != len(evidence) or set(arms) != set(manifest.cells()):
-        raise ValueError("experiment requires every paired cell exactly once")
-    if len({arm.training.request.run_id for arm in evidence}) != len(evidence):
-        raise ValueError("training run identities must be unique")
-    for arm in evidence:
-        validate_arm(manifest, arm)
-    comparisons = []
-    for cell in manifest.cells():
-        if cell.seed != manifest.seeds[0]:
-            continue
-        if cell.initialization == "warm-start":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, initialization="base"), cell, arms, "initialization"
-                )
-            )
-        if cell.augmentation_id != BASELINE.profile_id:
-            comparisons.append(
-                _compare(
-                    manifest,
-                    replace(cell, augmentation_id=BASELINE.profile_id),
-                    cell,
-                    arms,
-                    "augmentation",
-                )
-            )
-        if cell.cohort == "expanded":
-            comparisons.append(
-                _compare(
-                    manifest, replace(cell, cohort="curated-only"), cell, arms, "training-cohort"
-                )
-            )
-    return tuple(comparisons)
