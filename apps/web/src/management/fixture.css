@@ -1,0 +1,13 @@
+@import './management.css';
+html { background: var(--two-color-bg-canvas); color: var(--two-color-text-primary); font: var(--two-font-size-body)/var(--two-line-height-body) var(--two-font-ui); }
+body { margin: 0; }
+.fixture-header, main, footer { max-width: var(--two-layout-container); margin-inline: auto; padding: var(--two-space-6) var(--two-layout-gutter-wide); box-sizing: border-box; }
+.fixture-header nav { display: flex; flex-wrap: wrap; gap: var(--two-space-3); }
+.fixture-header a { display: inline-flex; align-items: center; min-height: var(--two-size-control-md); padding-inline: var(--two-space-3); color: var(--two-color-text-secondary); }
+.fixture-header a[aria-current='page'] { background: var(--two-color-bg-raised); border-radius: var(--two-radius-pill); }
+footer { color: var(--two-color-text-tertiary); border-top: var(--two-size-box-halo) solid var(--two-color-line-hairline-strong); font-size: var(--two-font-size-small); }
+footer a { color: var(--two-color-text-link); }
+.fixture-skip { position: absolute; top: 0; left: 0; transform: translateY(-150%); padding: var(--two-space-3); background: var(--two-color-accent-default); color: var(--two-color-text-on-accent); }
+.fixture-skip:focus { transform: none; }
+:focus-visible { outline: var(--two-size-focus-width) solid var(--two-color-focus-ring); outline-offset: var(--two-size-focus-offset); }
+@media (max-width: 820px) { .fixture-header, main, footer { padding: var(--two-space-4) var(--two-layout-gutter-compact); } }

@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<defs>
+  <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b3936"/><stop offset="1" stop-color="#57534d"/></linearGradient>
+  <linearGradient id="board" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfc8bd"/><stop offset="1" stop-color="#8f877c"/></linearGradient>
+</defs>
+<rect width="1920" height="1080" fill="url(#wall)"/>
+<rect x="0" y="0" width="1920" height="190" fill="#2b2a28"/>
+<rect x="140" y="226" width="1780" height="300" fill="#4a4743"/>
+<rect x="140" y="586" width="1780" height="300" fill="#4a4743"/>
+<rect x="0" y="908" width="1920" height="172" fill="#6f6a62"/>
+<rect x="0" y="0" width="140" height="1080" fill="#2f2d2a"/>
+<g >
+  <path d="M212 274L237.2 250H326.8L352 274Z" fill="#e9e4dc"/>
+  <rect x="212" y="274" width="140" height="246" fill="#f2eee7"/>
+  <rect x="342" y="274" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="212" y="352.6" width="140" height="81" fill="#c99a52"/>
+  <text x="282" y="401.20000000000005" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">OAT</text>
+  <text x="282" y="476.79999999999995" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M372 274L397.2 250H486.8L512 274Z" fill="#e9e4dc"/>
+  <rect x="372" y="274" width="140" height="246" fill="#f2eee7"/>
+  <rect x="502" y="274" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="372" y="352.6" width="140" height="81" fill="#c99a52"/>
+  <text x="442" y="401.20000000000005" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">OAT</text>
+  <text x="442" y="476.79999999999995" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M532 274L557.2 250H646.8L672 274Z" fill="#e9e4dc"/>
+  <rect x="532" y="274" width="140" height="246" fill="#f2eee7"/>
+  <rect x="662" y="274" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="532" y="352.6" width="140" height="81" fill="#4f8a4b"/>
+  <text x="602" y="401.20000000000005" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">SOY</text>
+  <text x="602" y="476.79999999999995" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M692 274L717.2 250H806.8L832 274Z" fill="#e9e4dc"/>
+  <rect x="692" y="274" width="140" height="246" fill="#f2eee7"/>
+  <rect x="822" y="274" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="692" y="352.6" width="140" height="81" fill="#b8643a"/>
+  <text x="762" y="401.20000000000005" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="22" fill="#fff" text-anchor="middle">ALMOND</text>
+  <text x="762" y="476.79999999999995" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M852 273L877.38 248H967.62L993 273Z" fill="#e9e4dc"/>
+  <rect x="852" y="273" width="141" height="248" fill="#f2eee7"/>
+  <rect x="983" y="273" width="10" height="248" fill="#000" opacity=".08"/>
+  <rect x="852" y="351.74" width="141" height="81.89999999999999" fill="#b8643a"/>
+  <text x="922.5" y="400.88" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="22" fill="#fff" text-anchor="middle">ALMOND</text>
+  <text x="922.5" y="477.32" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g opacity=".35">
+  <path d="M1052 274L1077.2 250H1166.8L1192 274Z" fill="#e9e4dc"/>
+  <rect x="1052" y="274" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1182" y="274" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="1052" y="352.6" width="140" height="81" fill="#c99a52"/>
+  <text x="1122" y="401.20000000000005" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">OAT</text>
+  <text x="1122" y="476.79999999999995" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<rect x="140" y="520" width="1780" height="28" fill="url(#board)"/>
+<rect x="560" y="530" width="42" height="20" rx="2" fill="#fbfaf6"/><text x="581" y="545" font-family="Arial" font-size="13" font-weight="700" fill="#222" text-anchor="middle">1.89</text>
+<rect x="880" y="530" width="42" height="20" rx="2" fill="#fbfaf6"/><text x="901" y="545" font-family="Arial" font-size="13" font-weight="700" fill="#222" text-anchor="middle">1.89</text>
+<g >
+  <path d="M212 634L237.2 610H326.8L352 634Z" fill="#e9e4dc"/>
+  <rect x="212" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="342" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="212" y="712.6" width="140" height="81" fill="#b8643a"/>
+  <text x="282" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="22" fill="#fff" text-anchor="middle">ALMOND</text>
+  <text x="282" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M372 634L397.2 610H486.8L512 634Z" fill="#e9e4dc"/>
+  <rect x="372" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="502" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="372" y="712.6" width="140" height="81" fill="#b8643a"/>
+  <text x="442" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="22" fill="#fff" text-anchor="middle">ALMOND</text>
+  <text x="442" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g><rect x="560" y="790" width="272" height="90" fill="#efebe4"/><path d="M832 790l-28-22H588l-28 22z" fill="#ddd7cd"/><rect x="560" y="790" width="272" height="90" fill="#000" opacity=".06"/></g>
+<g >
+  <path d="M900 634L925.2 610H1014.8L1040 634Z" fill="#e9e4dc"/>
+  <rect x="900" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1030" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="900" y="712.6" width="140" height="81" fill="#4f8a4b"/>
+  <text x="970" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">SOY</text>
+  <text x="970" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M1060 634L1085.2 610H1174.8L1200 634Z" fill="#e9e4dc"/>
+  <rect x="1060" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1190" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="1060" y="712.6" width="140" height="81" fill="#4f8a4b"/>
+  <text x="1130" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">SOY</text>
+  <text x="1130" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M1300 634L1325.2 610H1414.8L1440 634Z" fill="#e9e4dc"/>
+  <rect x="1300" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1430" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="1300" y="712.6" width="140" height="81" fill="#c99a52"/>
+  <text x="1370" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">OAT</text>
+  <text x="1370" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<g >
+  <path d="M1440 634L1465.2 610H1554.8L1580 634Z" fill="#e9e4dc"/>
+  <rect x="1440" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1570" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="1440" y="712.6" width="140" height="81" fill="#c99a52"/>
+  <text x="1510" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">OAT</text>
+  <text x="1510" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<rect x="1296" y="640" width="288" height="200" rx="10" fill="#fff" opacity=".18"/>
+<g >
+  <path d="M1846 634L1871.2 610H1960.8L1986 634Z" fill="#e9e4dc"/>
+  <rect x="1846" y="634" width="140" height="246" fill="#f2eee7"/>
+  <rect x="1976" y="634" width="10" height="246" fill="#000" opacity=".08"/>
+  <rect x="1846" y="712.6" width="140" height="81" fill="#4f8a4b"/>
+  <text x="1916" y="761.2" font-family="Mona Sans, Arial, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">SOY</text>
+  <text x="1916" y="836.8" font-family="Mona Sans, Arial, sans-serif" font-size="15" fill="#6b6259" text-anchor="middle">1 L · plant drink</text>
+</g>
+<rect x="140" y="880" width="1780" height="28" fill="url(#board)"/>
+</svg>

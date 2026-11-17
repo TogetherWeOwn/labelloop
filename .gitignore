@@ -18,6 +18,7 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+apps/web/management-evidence/
 
 # Application data, image collections and model weights
 data/

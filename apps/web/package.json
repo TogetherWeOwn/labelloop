@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "build:management-fixture": "vite build --config vite.management.config.ts",
+    "test:management-browser": "node scripts/management-browser.mjs",
     "build:operations": "vite build --config vite.operations.config.ts",
     "test:operations": "playwright test",
     "build:platform-fixture": "vite build --config vite.platform.config.ts",
