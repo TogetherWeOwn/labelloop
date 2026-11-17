@@ -1,9 +1,12 @@
 """Cheap serialization/schema checks; real PostgreSQL transitions run in the CPU smoke."""
 
 import io
+import json
 import runpy
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -18,12 +21,15 @@ from labelloop_core.evaluation import (
     EvaluationRunner,
     GroundTruth,
 )
+from labelloop_core.evaluation_lifecycle import EvaluationSet, FinalTestState, select_candidate
 from labelloop_core.geometry import Box, full_frame_transform
+from labelloop_core.qualification_wire import dumps, loads
 from labelloop_core.registry import ModelRelease
 from labelloop_core.training import InferencePolicy
 
 
-def test_persisted_release_and_source_frame_evaluation_round_trip():
+@pytest.mark.parametrize("truth_pins", [(), (("source", "e" * 64),)])
+def test_persisted_release_and_source_frame_evaluation_round_trip(truth_pins):
     policy = InferencePolicy(320)
     transform = full_frame_transform(100, 100, 320)
     box = Box(10, 20, 30, 40)
@@ -56,10 +62,37 @@ def test_persisted_release_and_source_frame_evaluation_round_trip():
         ("eval",),
     )
     assert decode_release(json_record(release)) == release
+    report = replace(report, source_truth_sha256=truth_pins)
     restored = decode_report(json_record(report))
     assert restored == report
+    legacy = json_record(report)
+    del legacy["source_truth_sha256"]
+    assert decode_report(legacy) == replace(report, source_truth_sha256=())
     assert not restored.overall.per_class["absent"].supported
     assert restored.overall.per_class["absent"].map50_95 is None
+
+    release = replace(release, evaluation_run_ids=("eval", "development"))
+    selection = select_candidate(
+        release,
+        replace(report, run_id="development", dataset_release_id="dev"),
+        EvaluationSet("dev", "project", ("dev-group",), "development"),
+        selection_id="selection",
+    )
+    legacy["role"] = "locked_final_test"
+    final = decode_report(legacy)
+    state = FinalTestState(
+        EvaluationSet("data", "project", ("final-group",), "locked_final_test")
+    ).expose(release, selection, final, expected_revision=0)
+    payload = json.loads(dumps(state))
+    historical_json = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+    payload["payload"]["assessments"][0]["report_json"] = historical_json
+    historical = loads(json.dumps(payload), FinalTestState)
+    historical.require_independent(release, final)
+    assert historical.assessments[0].report_json == historical_json
+    with pytest.raises(ValueError, match="missing recorded final-test exposure"):
+        historical.require_independent(
+            release, replace(final, source_truth_sha256=(("source", "f" * 64),))
+        )
 
 
 def test_training_tables_do_not_change_the_initial_canonical_migration():

@@ -92,6 +92,47 @@ def test_duplicate_json_keys_nonfinite_numbers_and_oversized_records_are_rejecte
         loads(" " * (MAX_RECORD_BYTES + 1), QualificationContext)
 
 
+@pytest.mark.parametrize("side", [320, 640])
+@pytest.mark.parametrize("stored_pins", [None, [], [["source", "e" * 64]]])
+def test_historical_final_assessment_preserves_independence_and_qualification(
+    side: int, stored_pins: list[list[str]] | None
+) -> None:
+    release = model(side)
+    final = report(release)
+    if stored_pins:
+        final = replace(final, source_truth_sha256=tuple((row[0], row[1]) for row in stored_pins))
+    context = qualification_context(release, final, PromotionPolicy(1, 0.9))
+    payload = json.loads(dumps(context))
+    historical_report = json.loads(context.current_final_test.assessments[0].report_json)
+    if stored_pins is None:
+        del historical_report["source_truth_sha256"]
+    historical_json = json.dumps(historical_report, sort_keys=True, separators=(",", ":"))
+    for state in (
+        payload["payload"]["evidence"]["final_test"],
+        payload["payload"]["current_final_test"],
+    ):
+        state["assessments"][0]["report_json"] = historical_json
+    restored = loads(json.dumps(payload), QualificationContext)
+    state = restored.current_final_test
+    state.require_independent(release, final)
+    restored.require_qualified(release, final)
+    assert state.assessments[0].report_json == historical_json
+    assert json.loads(dumps(restored)) == payload
+    with pytest.raises(ValueError, match="already exposed"):
+        state.expose(release, state.assessments[0].selection, final, expected_revision=1)
+    for changed in (
+        replace(final, source_truth_sha256=(("source", "f" * 64),)),
+        replace(final, overall=replace(final.overall, precision=0.5)),
+        replace(final, slices={}),
+        replace(final, coverage=()),
+        *([replace(final, source_truth_sha256=())] if stored_pins else []),
+    ):
+        with pytest.raises(ValueError, match="missing recorded final-test exposure"):
+            state.require_independent(release, changed)
+        with pytest.raises(ValueError, match="missing recorded final-test exposure"):
+            restored.require_qualified(release, changed)
+
+
 def test_decoding_does_not_turn_stale_or_adapted_evidence_into_authority() -> None:
     release = model(320)
     final = report(release)
