@@ -41,6 +41,19 @@ def test_training_evidence_accepts_frozen_recipes_and_negative_samples(side: int
     )
 
 
+def test_training_evidence_preserves_repeated_multi_epoch_observations() -> None:
+    frozen, arm = arm_case()
+    frozen = replace(frozen, epochs=2)
+    request = frozen.request(arm.cell, arm.training.request.run_id)
+    training = replace(arm.training, request=request, resolved_arguments=request.arguments())
+    validate_training_evidence(
+        frozen,
+        replace(
+            arm, manifest_sha256=frozen.digest(), training=training, retention=arm.retention * 2
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -67,7 +80,7 @@ def test_training_evidence_rejects_manifest_and_export_drift(changes: dict[str, 
     [
         (),
         (RetentionObservation("other", 1, 1, 0, 0),),
-        (RetentionObservation("train", 1, 1, 0, 0),) * 2,
+        (RetentionObservation("train", 1, 1, 0, 0), RetentionObservation("train", 1, 0, 0, 0)),
         (RetentionObservation("train", 1, 0, 0, 0),),
         (RetentionObservation("train", 1, 1, 2, 0),),
         (RetentionObservation("train", 1, 1, 0, 2),),
