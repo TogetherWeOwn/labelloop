@@ -84,6 +84,303 @@ def test_compiled_file_verifier_normalizes_root(
         verify_dataset_files(root, manifest)
 
 
+@pytest.mark.parametrize("side", (320, 640))
+@pytest.mark.parametrize(
+    "change",
+    (
+        *("none", "manifest", "bytes", "recipe", "train", "val"),
+        *("source", "truth", "group", "role", "evaluation", "classes"),
+        "loader-train",
+        "loader-val",
+        "loader-extra",
+        "loader-location",
+        "loader-extra-class",
+        "loader-sparse-classes",
+        "loader-nc",
+        "loader-nc-bool",
+        "loader-list-names",
+        "negative",
+        *(
+            f"{kind}-{split}"
+            for kind in (
+                "label-missing",
+                "label-mismatch",
+                "label-extra",
+                "duplicate-source",
+                "duplicate-record",
+                "shared-image",
+                "pair-swap",
+                "image-extension",
+                "image-digest",
+                "label-digest",
+            )
+            for split in ("train", "val")
+        ),
+    ),
+)
+def test_experiment_inputs_bind_compiler_and_canonical_truth(
+    tmp_path: Path, side: int, change: str
+) -> None:
+    import hashlib
+
+    from labelloop_compiler.compiler import compile_dataset
+    from labelloop_core.evaluation import EvaluationImage, GroundTruth
+    from labelloop_core.experiments import (
+        BASELINE,
+        DatasetPin,
+        ExperimentManifest,
+        RecipePin,
+        SourcePin,
+    )
+    from labelloop_core.training import AugmentationProfile, InferencePolicy
+    from labelloop_worker_ml.experiments import validate_inputs
+    from labelloop_worker_ml.training import LocalUltralyticsBackend, file_digest
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "fixtures"))
+    from load_canonical import FixtureDomain
+
+    fixture = FixtureDomain("cc0-interface")
+    if change == "negative":
+        fixture.release = replace(
+            fixture.release,
+            samples=tuple(
+                replace(s, revision=replace(s.revision, objects=())) if s.split == "train" else s
+                for s in fixture.release.samples
+            ),
+        )
+    variants = {
+        n: compile_dataset(
+            fixture.release, f"full-letterbox-{n}-v1", tmp_path / f"compiled-{n}", fixture.images
+        )
+        for n in (320, 640)
+    }
+    dataset = tmp_path / f"compiled-{side}"
+    recipe_id = f"full-letterbox-{side}-v1"
+    compiled = variants[side]
+    truth = tuple(
+        EvaluationImage(
+            s.asset.asset_id,
+            s.asset.width,
+            s.asset.height,
+            tuple(
+                GroundTruth(o.object_id, o.class_id, o.box, o.occluded, o.truncated_at_image_edge)
+                for o in s.revision.objects
+            ),
+            revision=s.revision.revision,
+            source_sha256=s.asset.sha256,
+        )
+        for s in fixture.release.samples
+    )
+    truths = {image.asset_id: image for image in truth}
+    images = tuple(truths[s.asset.asset_id] for s in fixture.release.samples if s.split == "val")
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(value.encode()).hexdigest()
+
+    sources = tuple(
+        SourcePin(
+            s.asset.asset_id,
+            s.group_id,
+            s.asset.sha256,
+            truths[s.asset.asset_id].truth_digest(),
+            {"train": "curated", "val": "development", "test": "locked_final_test"}[s.split],
+        )
+        for s in fixture.release.samples
+    )
+    recipes = tuple(
+        RecipePin(
+            f"full-letterbox-{n}-v1",
+            digest(json.dumps(value["recipe"], sort_keys=True, separators=(",", ":"))),
+            InferencePolicy(n),
+            digest("warm"),
+            digest("base"),
+            tuple(sorted({s.group_id for s in sources if s.role == "curated"})),
+        )
+        for n, value in variants.items()
+    )
+    manifest = ExperimentManifest(
+        "input-controls",
+        fixture.release.project_id,
+        file_digest(dataset / "class-map.json"),
+        tuple((c.stable_id, False) for c in fixture.release.ontology.classes),
+        fixture.release.assignment.assignment_version,
+        digest("base"),
+        sources,
+        recipes,
+        tuple(
+            DatasetPin(
+                recipe.recipe_id,
+                "curated-only",
+                fixture.release.release_id,
+                file_digest(tmp_path / f"compiled-{recipe.policy.imgsz}" / "manifest.json"),
+                tuple(s.asset_id for s in sources if s.role == "curated"),
+            )
+            for recipe in recipes
+        ),
+        (BASELINE, AugmentationProfile("color-v1", hsv_v=0.2)),
+        (0,),
+        fixture_only=True,
+    )
+    backend = LocalUltralyticsBackend(
+        dataset=dataset,
+        initialization=tmp_path / "absent.pt",
+        output=tmp_path / "unused-output",
+        validation_images=images,
+    )
+    cell = next(cell for cell in manifest.cells() if cell.recipe_id == recipe_id)
+    assert validate_inputs(manifest, cell, backend) == compiled
+    assert not backend.output.exists()
+    if change == "negative":
+        negatives = [s for s in compiled["samples"] if s["split"] == "train"]
+        assert negatives and all(s["verified_negative"] for s in negatives)
+        assert all((dataset / s["label_path"]).read_bytes() == b"" for s in negatives)
+        assert all(s["label_path"] in compiled["file_hashes"] for s in negatives)
+    if change in {"none", "negative"}:
+        return
+    errors = {
+        "manifest": "manifest digest",
+        "bytes": "file digest",
+        "recipe": "recipe configuration",
+        "train": "compiled membership",
+        "val": "compiled membership",
+        "source": "source lineage",
+        "truth": "source lineage",
+        "group": "source lineage",
+        "role": "final-test role",
+        "evaluation": "evaluation truth",
+        "classes": "class map",
+    }
+    if change == "manifest":
+        (dataset / "manifest.json").write_text(json.dumps(compiled) + " ")
+    elif change == "bytes":
+        image = dataset / compiled["samples"][0]["image_path"]
+        image.write_bytes(image.read_bytes() + b"changed")
+    elif change == "evaluation":
+        backend.validation_images = (
+            replace(images[0], revision=images[0].revision + 1),
+            *images[1:],
+        )
+    elif change == "classes":
+        manifest = replace(manifest, class_map_sha256=digest("other classes"))
+    else:
+        if change.startswith(("label-", "duplicate-", "shared-", "pair-", "image-")):
+            kind, split = change.rsplit("-", 1)
+            sample = next(s for s in compiled["samples"] if s["split"] == split)
+            if kind == "pair-swap":
+                other = next(
+                    s for s in compiled["samples"] if s["split"] == split and s is not sample
+                )
+                for key in ("image_path", "label_path"):
+                    sample[key], other[key] = other[key], sample[key]
+            elif kind == "image-extension":
+                old = sample["image_path"]
+                sample["image_path"] = str(Path(old).with_suffix(".bin"))
+                (dataset / old).rename(dataset / sample["image_path"])
+                compiled["file_hashes"][sample["image_path"]] = compiled["file_hashes"].pop(old)
+            elif kind in {"image-digest", "label-digest"}:
+                sample[kind.replace("-digest", "_sha256")] = digest("wrong derived digest")
+            elif kind == "label-missing":
+                label = dataset / sample["label_path"]
+                assert label.read_bytes()
+                label.unlink()
+                del compiled["file_hashes"][sample["label_path"]]
+            elif kind == "label-mismatch":
+                sample["label_path"] = "labels/other.txt"
+            elif kind == "label-extra":
+                extra = f"labels/{split}/extra.txt"
+                (dataset / extra).write_text("")
+                compiled["file_hashes"][extra] = file_digest(dataset / extra)
+            elif kind == "duplicate-source":
+                duplicate = dict(sample)
+                for key, folder, suffix in (
+                    ("image_path", "images", ".jpg"),
+                    ("label_path", "labels", ".txt"),
+                ):
+                    relative = f"{folder}/{split}/duplicate{suffix}"
+                    (dataset / relative).write_bytes((dataset / sample[key]).read_bytes())
+                    compiled["file_hashes"][relative] = file_digest(dataset / relative)
+                    duplicate[key] = relative
+                compiled["samples"].append(duplicate)
+            elif kind == "duplicate-record":
+                compiled["samples"].append(dict(sample))
+            else:
+                other = next(
+                    s for s in compiled["samples"] if s["split"] == split and s is not sample
+                )
+                old = other["image_path"]
+                (dataset / old).unlink()
+                del compiled["file_hashes"][old]
+                other["image_path"] = sample["image_path"]
+            errors[change] = "compiled membership" if kind.startswith("duplicate-") else "loader"
+        elif change in {
+            "loader-train",
+            "loader-val",
+            "loader-extra-class",
+            "loader-sparse-classes",
+            "loader-nc",
+            "loader-nc-bool",
+            "loader-list-names",
+        }:
+            from ultralytics.utils import YAML
+
+            data = YAML.load(dataset / "data.yaml")
+            count = len(data["names"])
+            if change in {"loader-train", "loader-val"}:
+                data[change.removeprefix("loader-")] = (
+                    "images/val" if change == "loader-train" else "images/train"
+                )
+            elif change == "loader-extra-class":
+                data["names"][count] = "extra display name"
+            elif change == "loader-sparse-classes":
+                data["names"][count] = data["names"].pop(0)
+            elif change in {"loader-nc", "loader-nc-bool"}:
+                data["nc"] = count + 1 if change == "loader-nc" else True
+            else:
+                data["names"], data["nc"] = [f"display {n}" for n in range(count)], count
+            YAML.save(dataset / "data.yaml", data)
+            compiled["file_hashes"]["data.yaml"] = file_digest(dataset / "data.yaml")
+        elif change == "loader-extra":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            extra = dataset / "images/train/unlisted.png"
+            extra.write_bytes((dataset / sample["image_path"]).read_bytes())
+            compiled["file_hashes"]["images/train/unlisted.png"] = file_digest(extra)
+        elif change == "loader-location":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            sample["image_path"] = next(
+                s["image_path"] for s in compiled["samples"] if s["split"] == "val"
+            )
+        elif change == "recipe":
+            compiled["recipe"]["min_target_px"] = 99
+        elif change in {"train", "val"}:
+            compiled["samples"] = [s for s in compiled["samples"] if s["split"] != change]
+        elif change == "role":
+            sample = next(s for s in compiled["samples"] if s["split"] == "train")
+            compiled["samples"].append({**sample, "split": "test"})
+        else:
+            key = {"source": "source_sha256", "truth": "source_truth_sha256", "group": "group_id"}[
+                change
+            ]
+            compiled["samples"][0][key] = digest("different")
+        (dataset / "manifest.json").write_text(json.dumps(compiled))
+        manifest = replace(
+            manifest,
+            datasets=tuple(
+                replace(pin, manifest_sha256=file_digest(dataset / "manifest.json"))
+                if pin.recipe_id == recipe_id
+                else pin
+                for pin in manifest.datasets
+            ),
+        )
+    if change == "loader-list-names":
+        assert validate_inputs(manifest, cell, backend) == compiled
+    else:
+        with pytest.raises(
+            ValueError, match="loader" if change.startswith("loader-") else errors[change]
+        ):
+            validate_inputs(manifest, cell, backend)
+    assert not backend.output.exists()
+
+
 def test_ml_runtime_uses_paired_cpu_dependency_pins() -> None:
     import onnx
     import onnxruntime
