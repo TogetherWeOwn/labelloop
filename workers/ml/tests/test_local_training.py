@@ -27,6 +27,10 @@ pytestmark = pytest.mark.skipif(
         "retention",
         "shape",
         "observed-shape",
+        "original-inference-shape",
+        "original-inference-empty",
+        "original-inference-missing",
+        "observed-empty",
         "export-bytes",
         "export-policy",
         "existing-snapshot",
@@ -108,6 +112,9 @@ def test_experiment_collection_binds_delivered_records(
             or ()
         )
     )
+    if change == "observed-empty":
+        predict.side_effect = None
+        predict.return_value = ()
     evaluate = Mock(return_value=report)
     export = Mock(return_value=exported)
     train = Mock(return_value=training)
@@ -141,6 +148,17 @@ def test_experiment_collection_binds_delivered_records(
         error = "shape"
     elif change == "observed-shape":
         error = "shape"
+    elif change == "original-inference-shape":
+        shapes["inference"] = [[1, 3, 640 if side == 320 else 320, side]]
+        error = "shape"
+    elif change in ("original-inference-empty", "original-inference-missing", "observed-empty"):
+        if change == "original-inference-empty":
+            shapes["inference"] = []
+        elif change == "original-inference-missing":
+            del shapes["inference"]
+        error = "inference tensor evidence"
+    elif change == "reuse-export":
+        error = "unbound export evidence"
     elif change == "export-bytes":
         weights.with_suffix(".onnx").write_bytes(b"changed export bytes")
         error = "export artifact digest"
@@ -170,13 +188,14 @@ def test_experiment_collection_binds_delivered_records(
             collect()
         assert not (backend.output / "experiment-arm.json").exists()
         train.assert_not_called()
-        if change in ("request", "inputs", "execute-inputs", "weights"):
+        if change in ("request", "inputs", "execute-inputs", "weights", "reuse-export"):
             assert not (backend.output / "experiment-inputs").exists()
             predict.assert_not_called()
         return
     arm = collect()
     assert arm.evaluation == report and arm.group_reports == (("dev", report),)
     assert arm.retention == reference.retention
+    assert dict(arm.tensor_shapes)["inference"] == ((1, 3, side, side),) * 2
     assert arm.export_sha256 == exported.export_sha256
     assert (
         json.loads((backend.output / "experiment-arm.json").read_text())["manifest_sha256"]

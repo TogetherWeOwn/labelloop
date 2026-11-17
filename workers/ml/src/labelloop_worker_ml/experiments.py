@@ -120,6 +120,8 @@ def collect_arm(
     exported: ExportResult | None = None,
 ) -> ArmEvidence:
     """Also accepts already-delivered records; never retrains a completed cell."""
+    if exported is not None:
+        raise ValueError("unbound export evidence cannot be reused for experiment inputs")
     expected = manifest.request(cell, result.request.run_id)
     if result.request != expected:
         raise ValueError("training request differs from frozen experiment")
@@ -144,7 +146,9 @@ def collect_arm(
     observed: list[tuple[int, ...]] = []
     classes = tuple(sorted(dataset["class_map"], key=dataset["class_map"].__getitem__))
     derived = predict_samples(weights, snapshot, samples, classes, expected.policy, observed)
-    shapes["inference"] = observed
+    if not shapes.get("inference") or not observed:
+        raise ValueError("incomplete actual inference tensor evidence")
+    shapes["inference"].extend(observed)
     runner = EvaluationRunner(classes, expected.policy)
     arguments = {
         "dataset_release_id": expected.dataset_release_id,
