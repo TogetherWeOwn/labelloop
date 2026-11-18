@@ -1,4 +1,4 @@
-"""Validated experiment manifests and evidence records; consumers own execution and gates."""
+"""Frozen experiment inputs and read-only paired comparisons, not a scheduler or gate."""
 
 import hashlib
 import json
@@ -308,27 +308,6 @@ class ArmEvidence:
     export_detections: int
 
 
-@dataclass(frozen=True, slots=True)
-class PairedComparison:
-    recipe_id: str
-    axis: str
-    baseline: Cell
-    candidate: Cell
-    metric: str
-    seeds: tuple[int, ...]
-    source_groups: int
-    images: int
-    support: int
-    per_class_support: tuple[tuple[str, int], ...]
-    group_deltas: tuple[tuple[str, float], ...]
-    mean_delta: float
-    bootstrap_95_interval: tuple[float, float] | None
-    regression_reasons: tuple[str, ...]
-    outcome: str
-    fixture_only: bool
-    m6_exit_established: bool = False
-
-
 def validate_report(
     manifest: ExperimentManifest,
     training: TrainingResult,
@@ -395,6 +374,11 @@ def validate_training_evidence(manifest: ExperimentManifest, arm: ArmEvidence) -
         raise ValueError("training request differs from frozen experiment")
     if argument_diff(expected.arguments(), arm.training.resolved_arguments):
         raise ValueError("args_mismatch")
+    epochs = tuple(checkpoint.epoch for checkpoint in arm.training.checkpoints)
+    if any(type(epoch) is not int for epoch in epochs) or tuple(sorted(epochs)) != tuple(
+        range(expected.epochs)
+    ):
+        raise ValueError("checkpoint epoch domain differs from frozen experiment")
     training_ids = set(
         next(
             d.training_asset_ids
@@ -450,6 +434,11 @@ def validate_arm(manifest: ExperimentManifest, arm: ArmEvidence) -> None:
     validate_training_evidence(manifest, arm)
     development = {s.asset_id for s in manifest.sources if s.role == "development"}
     validate_report(manifest, arm.training, arm.evaluation, development)
+    if (
+        arm.evaluation.run_id != arm.training.selected.evaluation_run_id
+        or arm.evaluation.overall.map50_95 != arm.training.selected.validation_map
+    ):
+        raise ValueError("selected checkpoint evaluation drift")
     groups = dict(arm.group_reports)
     if len(groups) != len(arm.group_reports) or set(groups) != set(manifest.development_groups()):
         raise ValueError("unpaired source groups")
@@ -520,6 +509,27 @@ def _validate_metric_support(metrics: Metrics) -> None:
         or (metrics.map50_95 is None) != (metrics.support == 0)
     ):
         raise ValueError("evaluation support drift or inconsistent metric support")
+
+
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    recipe_id: str
+    axis: str
+    baseline: Cell
+    candidate: Cell
+    metric: str
+    seeds: tuple[int, ...]
+    source_groups: int
+    images: int
+    support: int
+    per_class_support: tuple[tuple[str, int], ...]
+    group_deltas: tuple[tuple[str, float], ...]
+    mean_delta: float
+    bootstrap_95_interval: tuple[float, float] | None
+    regression_reasons: tuple[str, ...]
+    outcome: str
+    fixture_only: bool
+    m6_exit_established: bool = False
 
 
 def _support(metrics: Metrics) -> tuple[object, ...]:
